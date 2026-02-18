@@ -1,11 +1,11 @@
-# sim-backend
+# backend
 
 Rust simulation backend for Breve Creatures.
 
 ## Run
 
 ```powershell
-cd sim-backend
+cd backend
 cargo run
 ```
 
@@ -29,3 +29,13 @@ Server binds to `127.0.0.1:8787`.
     - `seeds` (array)
     - optional: `durationSeconds`, `dt`
   - Returns per-genome aggregate fitness/descriptor summaries.
+- `GET /api/eval/ws` (WebSocket)
+  - First client message must be a JSON generation eval request:
+    - `genomes` (array)
+    - `seeds` (array)
+    - optional: `durationSeconds`, `dt`
+  - Streams:
+    - `generation_started`
+    - `attempt_trial_started`
+    - `attempt_complete`
+    - `generation_complete`

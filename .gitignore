@@ -14,7 +14,7 @@ wheels/
 .uv-python/
 
 # Rust build artifacts
-sim-backend/target/
+backend/target/
 
 # Local process-manager runtime data
 tools/simple-rust-process-manager.exe
