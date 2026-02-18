@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# uv local data
+.uv-cache/
+.uv-python/
+
+# Rust build artifacts
+sim-backend/target/
+
+# Local process-manager runtime data
+tools/simple-rust-process-manager.exe
+tools/simple-rust-process-manager.exe.WebView2/
+tools/processes.json
+
+# Local/debug artifacts
+*.log
+*.tmp
+*.7z
+error.png
+
+# Editor/OS files
+.DS_Store
+Thumbs.db
+.vscode/

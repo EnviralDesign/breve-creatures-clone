@@ -1,0 +1,2737 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Breve Creatures Clone</title>
+  <style>
+    :root {
+      --hud: rgba(10, 15, 11, 0.72);
+      --hud-border: rgba(183, 208, 112, 0.35);
+      --hud-text: #d2f09f;
+      --hud-subtle: #9fbc7e;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1f2622;
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      color: var(--hud-text);
+    }
+
+    #app {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #hud {
+      position: fixed;
+      left: 14px;
+      top: 14px;
+      min-width: 245px;
+      padding: 11px 13px 10px;
+      background: var(--hud);
+      border: 1px solid var(--hud-border);
+      border-radius: 10px;
+      backdrop-filter: blur(3px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+      line-height: 1.33;
+      letter-spacing: 0.3px;
+      user-select: none;
+    }
+
+    #hud .label {
+      color: var(--hud-subtle);
+      margin-right: 5px;
+    }
+
+    #hud .hint {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #b5cf95;
+      opacity: 0.86;
+    }
+
+    #hud .ctrl {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+      font-size: 12px;
+      color: #c6dfa7;
+    }
+
+    #hud input[type="range"] {
+      width: 120px;
+    }
+
+    #hud select {
+      background: rgba(0, 0, 0, 0.32);
+      color: var(--hud-text);
+      border: 1px solid rgba(183, 208, 112, 0.35);
+      border-radius: 6px;
+      padding: 2px 5px;
+    }
+
+    #hud button {
+      background: rgba(17, 28, 18, 0.92);
+      color: #d4efaa;
+      border: 1px solid rgba(176, 206, 110, 0.4);
+      border-radius: 6px;
+      padding: 3px 7px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    #hud button:hover {
+      background: rgba(30, 46, 31, 0.95);
+    }
+
+    #hud button:active {
+      transform: translateY(1px);
+    }
+
+    #genomePanel {
+      position: fixed;
+      right: 14px;
+      top: 14px;
+      width: 360px;
+      padding: 10px;
+      background: rgba(10, 15, 11, 0.72);
+      border: 1px solid rgba(183, 208, 112, 0.35);
+      border-radius: 10px;
+      backdrop-filter: blur(3px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+      user-select: none;
+    }
+
+    #genomeTitle {
+      font-size: 12px;
+      letter-spacing: 0.45px;
+      text-transform: uppercase;
+      color: #c7e6a4;
+      margin-bottom: 6px;
+    }
+
+    #genomeCanvas {
+      width: 100%;
+      height: 220px;
+      display: block;
+      border: 1px solid rgba(180, 201, 115, 0.22);
+      border-radius: 8px;
+      background: radial-gradient(circle at 30% 20%, rgba(94, 134, 90, 0.08), rgba(0, 0, 0, 0.16));
+    }
+
+    #genomeMeta {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #b9d698;
+      line-height: 1.2;
+      letter-spacing: 0.22px;
+    }
+
+    @media (max-width: 980px) {
+      #genomePanel {
+        width: 300px;
+      }
+      #genomeCanvas {
+        height: 180px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="app"></canvas>
+  <div id="hud">
+    <div><span class="label">Generation:</span><span id="gen">1</span> (<span id="champIndex">1</span>/<span id="pop">16</span>)</div>
+    <div><span class="label">Best score:</span><span id="bestEver">0.00</span></div>
+    <div><span class="label">Current score:</span><span id="bestNow">0.00</span></div>
+    <div><span class="label">Trial:</span><span id="trialInfo">1/1</span></div>
+    <div><span class="label">Time left:</span><span id="timeLeft">0.0</span>s</div>
+    <div><span class="label">Sim rate:</span><span id="simRate">1.00x</span></div>
+    <div><span class="label">Queued batch:</span><span id="queuedPop">none</span></div>
+    <div><span class="label">Fast skip:</span><span id="fastSkipStatus">off</span></div>
+    <label class="ctrl">
+      Batch size
+      <input id="populationSlider" type="range" min="1" max="28" step="1" value="16">
+      <span id="populationSliderValue">16</span>
+    </label>
+    <label class="ctrl">
+      Speed
+      <select id="speedSelect">
+        <option value="1" selected>1x</option>
+        <option value="1.5">1.5x</option>
+        <option value="2">2x</option>
+        <option value="3">3x</option>
+        <option value="4">4x</option>
+        <option value="6">6x</option>
+        <option value="8">8x</option>
+      </select>
+    </label>
+    <label class="ctrl">
+      Torque
+      <input id="torqueSlider" type="range" min="0.35" max="1.5" step="0.05" value="1.0">
+      <span id="torqueSliderValue">1.00x</span>
+    </label>
+    <label class="ctrl">
+      <input id="frameAllToggle" type="checkbox" checked>
+      Frame all creatures
+    </label>
+    <label class="ctrl">
+      Genome viz
+      <select id="genomeVizMode">
+        <option value="hide">Hide</option>
+        <option value="current" selected>Show current</option>
+        <option value="best">Show best</option>
+      </select>
+    </label>
+    <div class="ctrl">
+      Fast-forward gens
+      <button id="skip1Btn" type="button">+1</button>
+      <button id="skip10Btn" type="button">+10</button>
+      <button id="skip100Btn" type="button">+100</button>
+      <button id="skipStopBtn" type="button">Stop</button>
+    </div>
+    <div class="hint">Space: pause | R: reseed (confirmation) | Drag: temporary manual camera</div>
+  </div>
+  <div id="genomePanel">
+    <div id="genomeTitle">Champion Genome Network</div>
+    <canvas id="genomeCanvas"></canvas>
+    <div id="genomeMeta">No champion yet.</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.1/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.1/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+    import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+    import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+    import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js";
+
+    const DEFAULT_POPULATION_SIZE = 16;
+    const MIN_POPULATION_SIZE = 1;
+    const MAX_POPULATION_SIZE = 28;
+    const ELITE_COUNT = 2;
+    const MAX_LIMBS = 6;
+    const MAX_SEGMENTS_PER_LIMB = 3;
+    const GENERATION_SECONDS = 18;
+    const TRIALS_PER_CANDIDATE = 3;
+    const FIXED_TIME_STEP = 1 / 120;
+    const MAX_FRAME_DELTA = 0.05;
+    const MAX_PHYSICS_STEPS_PER_FRAME = 20;
+    const MAX_FAST_FORWARD_STEPS_PER_FRAME = 3200;
+    const FAST_FORWARD_TIME_BUDGET_MS = 18;
+    const MAX_SIM_SPEED = 8;
+    const BASE_BACKEND_SNAPSHOT_HZ = 30;
+    const FAST_BACKEND_SNAPSHOT_HZ = 12;
+    const BACKEND_FAST_FORWARD_DT = FIXED_TIME_STEP;
+    const FAST_FORWARD_DURATION_SECONDS = GENERATION_SECONDS;
+    const FAST_FORWARD_TRIAL_COUNT = TRIALS_PER_CANDIDATE;
+    const FAST_FORWARD_REQUEST_TIMEOUT_MS = 180000;
+    const MASS_DENSITY_MULTIPLIER = 1.4;
+    const MAX_MOTOR_SPEED = 6.8;
+    const MAX_BODY_ANGULAR_SPEED = 15.0;
+    const MAX_BODY_LINEAR_SPEED = 22.0;
+    const MOTOR_TORQUE_HIP = 85;
+    const MOTOR_TORQUE_KNEE = 68;
+    const NOVELTY_NEIGHBORS = 8;
+    const LOCAL_COMPETITION_NEIGHBORS = 6;
+    const NOVELTY_ARCHIVE_MAX = 320;
+    const NOVELTY_ARCHIVE_INSERTIONS = 3;
+    const SELECTION_QUALITY_WEIGHT = 0.62;
+    const SELECTION_NOVELTY_WEIGHT = 0.28;
+    const SELECTION_LOCAL_COMPETITION_WEIGHT = 0.1;
+    const FITNESS_UPRIGHT_BONUS = 1.35;
+    const FITNESS_STRAIGHTNESS_BONUS = 0.8;
+    const FITNESS_HEIGHT_BONUS = 0.6;
+    const FITNESS_ENERGY_PENALTY = 3.6;
+    const FITNESS_INSTABILITY_PENALTY = 1.25;
+    const FITNESS_NET_PROGRESS_WEIGHT = 0.8;
+    const FALLEN_PENALTY_STRENGTH = 0.6;
+    const UPRIGHT_FULL_SCORE_THRESHOLD = 0.5;
+    const UPRIGHT_PENALTY_FLOOR = 0.4;
+    const FALLEN_HEIGHT_THRESHOLD = 0.55;
+    const SETTLE_SECONDS = 2.25;
+    const USE_RUST_BACKEND = true;
+    const BACKEND_HTTP_URL = "http://127.0.0.1:8787";
+    const BACKEND_WS_URL = "ws://127.0.0.1:8787/api/trial/ws";
+    const BACKEND_EVAL_WS_URL = "ws://127.0.0.1:8787/api/eval/ws";
+
+    const GROUND_GROUP = 1;
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x76817b, 55, 430);
+
+    const renderer = new THREE.WebGLRenderer({
+      canvas: document.getElementById("app"),
+      antialias: true,
+      powerPreference: "high-performance",
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+
+    const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 700);
+    camera.position.set(18, 11, 22);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.075;
+    controls.maxPolarAngle = Math.PI * 0.47;
+    controls.minDistance = 9;
+    controls.maxDistance = 130;
+    controls.enablePan = false;
+
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+    composer.addPass(new OutputPass());
+
+    const world = new CANNON.World();
+    world.gravity.set(0, -15.5, 0);
+    world.broadphase = new CANNON.SAPBroadphase(world);
+    world.allowSleep = true;
+    world.solver.iterations = 30;
+    world.solver.tolerance = 1e-4;
+    world.defaultContactMaterial.friction = 0.92;
+    world.defaultContactMaterial.restitution = 0.03;
+    world.defaultContactMaterial.contactEquationStiffness = 1e8;
+    world.defaultContactMaterial.contactEquationRelaxation = 3;
+    world.defaultContactMaterial.frictionEquationStiffness = 1e8;
+    world.defaultContactMaterial.frictionEquationRelaxation = 3;
+
+    const groundMaterial = new CANNON.Material("ground");
+    const creatureMaterial = new CANNON.Material("creature");
+    world.addContactMaterial(
+      new CANNON.ContactMaterial(groundMaterial, creatureMaterial, {
+        friction: 1.08,
+        restitution: 0.015,
+        contactEquationStiffness: 1e9,
+        contactEquationRelaxation: 2.5,
+        frictionEquationStiffness: 1e8,
+        frictionEquationRelaxation: 2.2,
+      })
+    );
+
+    const populationLabel = document.getElementById("pop");
+    const generationLabel = document.getElementById("gen");
+    const championLabel = document.getElementById("champIndex");
+    const bestEverLabel = document.getElementById("bestEver");
+    const bestNowLabel = document.getElementById("bestNow");
+    const trialInfoLabel = document.getElementById("trialInfo");
+    const timeLeftLabel = document.getElementById("timeLeft");
+    const simRateLabel = document.getElementById("simRate");
+    const queuedPopLabel = document.getElementById("queuedPop");
+    const fastSkipStatusLabel = document.getElementById("fastSkipStatus");
+    const populationSlider = document.getElementById("populationSlider");
+    const populationSliderValue = document.getElementById("populationSliderValue");
+    const speedSelect = document.getElementById("speedSelect");
+    const torqueSlider = document.getElementById("torqueSlider");
+    const torqueSliderValue = document.getElementById("torqueSliderValue");
+    const frameAllToggle = document.getElementById("frameAllToggle");
+    const genomeVizModeSelect = document.getElementById("genomeVizMode");
+    const genomePanel = document.getElementById("genomePanel");
+    const genomeCanvas = document.getElementById("genomeCanvas");
+    const genomeMeta = document.getElementById("genomeMeta");
+    const genomeTitle = document.getElementById("genomeTitle");
+    const genomeCtx = genomeCanvas.getContext("2d");
+    const skip1Btn = document.getElementById("skip1Btn");
+    const skip10Btn = document.getElementById("skip10Btn");
+    const skip100Btn = document.getElementById("skip100Btn");
+    const skipStopBtn = document.getElementById("skipStopBtn");
+
+    populationSlider.min = String(MIN_POPULATION_SIZE);
+    populationSlider.max = String(MAX_POPULATION_SIZE);
+    populationSlider.value = String(DEFAULT_POPULATION_SIZE);
+    populationSliderValue.textContent = String(DEFAULT_POPULATION_SIZE);
+    speedSelect.value = "1";
+    torqueSlider.value = "1.0";
+    torqueSliderValue.textContent = "1.00x";
+    genomeVizModeSelect.value = "current";
+    populationLabel.textContent = String(DEFAULT_POPULATION_SIZE);
+    queuedPopLabel.textContent = "none";
+    fastSkipStatusLabel.textContent = "off";
+    trialInfoLabel.textContent = `1/${TRIALS_PER_CANDIDATE}`;
+
+    let population = [];
+    let batchGenomes = [];
+    let batchResults = [];
+    let attemptTrialMetrics = [];
+    let trialSeeds = [];
+    let currentAttemptIndex = 0;
+    let currentTrialIndex = 0;
+    let populationSize = DEFAULT_POPULATION_SIZE;
+    let pendingPopulationSize = DEFAULT_POPULATION_SIZE;
+    let generation = 1;
+    let generationClock = 0;
+    let simClock = 0;
+    let bestEverScore = 0;
+    let noveltyArchive = [];
+    let fastForwardGenerationsRemaining = 0;
+    let backendEnabled = USE_RUST_BACKEND;
+    let backendOfflineReason = "";
+    let backendSocket = null;
+    let backendFastForwardBusy = false;
+    let backendFastForwardAbort = null;
+    let backendTrialToken = 0;
+    let simSpeed = 1;
+    let effectiveSimSpeed = 1;
+    let motorPowerScale = 1.0;
+    let frameAllEnabled = true;
+    let genomeVizMode = "best";
+    let paused = false;
+    let cameraManualUntil = 0;
+    let sunLight = null;
+    const sunOffset = new THREE.Vector3(56, 74, 34);
+    const sunTargetPos = new THREE.Vector3();
+    const sunDesiredPos = new THREE.Vector3();
+    const smoothedHeading = new THREE.Vector3(1, 0, 0);
+
+    createSky();
+    createTerrain();
+    createOriginMarker();
+    createLighting();
+    setGenomeVizVisibility(genomeVizMode !== "hide");
+
+    window.addEventListener("resize", onResize);
+    renderer.domElement.addEventListener("pointerdown", markManualCamera, { passive: true });
+    renderer.domElement.addEventListener("wheel", markManualCamera, { passive: true });
+    populationSlider.addEventListener("input", () => {
+      populationSliderValue.textContent = populationSlider.value;
+    });
+    populationSlider.addEventListener("change", () => {
+      pendingPopulationSize = clamp(parseInt(populationSlider.value, 10), MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
+      populationSliderValue.textContent = String(pendingPopulationSize);
+    });
+    speedSelect.addEventListener("change", () => {
+      simSpeed = clamp(parseFloat(speedSelect.value), 0.5, MAX_SIM_SPEED);
+      if (backendEnabled && backendSocket && !backendFastForwardBusy && fastForwardGenerationsRemaining <= 0) {
+        backendTrialToken += 1;
+        startAttempt(currentAttemptIndex, currentTrialIndex);
+      }
+    });
+    torqueSlider.addEventListener("input", () => {
+      motorPowerScale = clamp(parseFloat(torqueSlider.value), 0.35, 1.5);
+      torqueSliderValue.textContent = `${motorPowerScale.toFixed(2)}x`;
+    });
+    frameAllToggle.addEventListener("change", () => {
+      frameAllEnabled = frameAllToggle.checked;
+    });
+    genomeVizModeSelect.addEventListener("change", () => {
+      genomeVizMode = genomeVizModeSelect.value;
+      setGenomeVizVisibility(genomeVizMode !== "hide");
+    });
+    skip1Btn.addEventListener("click", () => queueFastForward(1));
+    skip10Btn.addEventListener("click", () => queueFastForward(10));
+    skip100Btn.addEventListener("click", () => queueFastForward(100));
+    skipStopBtn.addEventListener("click", stopFastForward);
+    window.addEventListener("keydown", (event) => {
+      if (event.code === "Space") {
+        paused = !paused;
+      } else if (event.key === "r" || event.key === "R") {
+        requestResetEvolution("Keyboard reset (R)");
+      }
+    });
+
+    let previousTime = performance.now() * 0.001;
+    let accumulator = 0;
+
+    function animate(nowMs) {
+      requestAnimationFrame(animate);
+
+      const now = nowMs * 0.001;
+      const frameDelta = Math.min(MAX_FRAME_DELTA, now - previousTime);
+      previousTime = now;
+      let readyBackendResult = null;
+
+      if (!paused) {
+        if (backendEnabled) {
+          if (fastForwardGenerationsRemaining > 0) {
+            void pumpBackendFastForward();
+            effectiveSimSpeed = backendFastForwardBusy ? MAX_SIM_SPEED : Math.max(1, simSpeed);
+          } else {
+            effectiveSimSpeed = (backendSocket || hasPendingBackendPlayback()) ? simSpeed : 0;
+            for (const creature of population) {
+              creature.advancePlayback(frameDelta, effectiveSimSpeed);
+            }
+            syncBackendPlaybackClock();
+            readyBackendResult = consumeCompletedBackendPlaybackResult();
+          }
+        } else {
+          paused = true;
+          effectiveSimSpeed = 0;
+        }
+      } else {
+        effectiveSimSpeed = 0;
+      }
+
+      if (readyBackendResult) {
+        onBackendTrialComplete(readyBackendResult);
+      }
+
+      const champion = getChampion();
+      const currentCandidate = getCurrentCandidate();
+      for (const creature of population) {
+        creature.syncVisuals();
+      }
+      updateCamera(frameDelta, champion);
+      updateSunShadowRig(frameDelta);
+      updateHud(champion);
+      renderGenomeViz(champion, currentCandidate);
+      composer.render();
+    }
+
+    requestAnimationFrame(animate);
+
+    function stepSimulation(dt) {
+      generationClock += dt;
+      simClock += dt;
+
+      for (const creature of population) {
+        creature.drive(simClock, dt);
+      }
+
+      world.step(FIXED_TIME_STEP, dt, 3);
+
+      for (const creature of population) {
+        creature.measureFitness(dt);
+      }
+
+      if (generationClock >= GENERATION_SECONDS) {
+        evolvePopulation();
+      }
+    }
+
+    function shouldWarnReset() {
+      return generation > 1 || currentAttemptIndex > 0 || batchResults.length > 0 || generationClock > 0.75 || bestEverScore > 0.05;
+    }
+
+    function requestResetEvolution(trigger) {
+      if (!shouldWarnReset()) {
+        resetEvolution();
+        return;
+      }
+      const accepted = window.confirm(`${trigger} will reset current evolution progress. Continue?`);
+      if (accepted) {
+        resetEvolution();
+      }
+    }
+
+    function resetEvolution() {
+      populationSize = pendingPopulationSize;
+      generation = 1;
+      bestEverScore = 0;
+      generationClock = 0;
+      simClock = 0;
+      accumulator = 0;
+      noveltyArchive.length = 0;
+      fastForwardGenerationsRemaining = 0;
+      if (backendFastForwardAbort) {
+        backendFastForwardAbort.abort();
+        backendFastForwardAbort = null;
+      }
+      if (backendEnabled) {
+        backendTrialToken += 1;
+        if (backendSocket) {
+          backendSocket.close();
+          backendSocket = null;
+        }
+      }
+      seedPopulation();
+    }
+
+    function queueFastForward(generations) {
+      if (!backendEnabled) {
+        fastForwardGenerationsRemaining = 0;
+        return;
+      }
+      fastForwardGenerationsRemaining += Math.max(0, generations | 0);
+      paused = false;
+      if (backendEnabled) {
+        backendTrialToken += 1;
+        if (backendSocket) {
+          backendSocket.close();
+          backendSocket = null;
+        }
+      }
+      if (!backendFastForwardBusy) {
+        void pumpBackendFastForward();
+      }
+    }
+
+    function stopFastForward() {
+      fastForwardGenerationsRemaining = 0;
+      if (backendFastForwardAbort) {
+        backendFastForwardAbort.abort();
+        backendFastForwardAbort = null;
+      }
+    }
+
+    function seedPopulation() {
+      batchGenomes = Array.from({ length: populationSize }, () => randomGenome());
+      batchResults = [];
+      attemptTrialMetrics = Array.from({ length: populationSize }, () => []);
+      trialSeeds = buildTrialSeedSet(generation, TRIALS_PER_CANDIDATE);
+      currentAttemptIndex = 0;
+      currentTrialIndex = 0;
+      startAttempt(currentAttemptIndex, currentTrialIndex);
+      populationLabel.textContent = String(populationSize);
+    }
+
+    function startAttempt(attemptIndex, trialIndex = 0) {
+      clearPopulation();
+      const spawn = new CANNON.Vec3(0, 0.05, 0);
+      generationClock = 0;
+      simClock = 0;
+      if (backendEnabled) {
+        startBackendAttempt(attemptIndex, trialIndex, spawn);
+        return;
+      }
+    }
+
+    function evolvePopulation() {
+      if (population.length === 0) return;
+      const creature = population[0];
+      if (!attemptTrialMetrics[currentAttemptIndex]) {
+        attemptTrialMetrics[currentAttemptIndex] = [];
+      }
+      attemptTrialMetrics[currentAttemptIndex].push(creature.getTrialSummary(GENERATION_SECONDS));
+
+      if (currentTrialIndex + 1 < TRIALS_PER_CANDIDATE) {
+        currentTrialIndex += 1;
+        startAttempt(currentAttemptIndex, currentTrialIndex);
+        return;
+      }
+
+      const summary = summarizeAttempt(batchGenomes[currentAttemptIndex], attemptTrialMetrics[currentAttemptIndex]);
+      pushAttemptSummary(currentAttemptIndex, summary);
+
+      if (currentAttemptIndex + 1 < batchGenomes.length) {
+        currentAttemptIndex += 1;
+        currentTrialIndex = 0;
+        startAttempt(currentAttemptIndex, currentTrialIndex);
+        return;
+      }
+
+      finalizeGenerationFromBatchResults(true);
+    }
+
+    function pushAttemptSummary(attemptIndex, summary) {
+      batchResults.push({
+        genome: cloneGenome(batchGenomes[attemptIndex]),
+        fitness: summary.fitness,
+        selectionScore: summary.fitness,
+        descriptor: summary.descriptor,
+        novelty: 0,
+        noveltyNorm: 0,
+        qualityNorm: 0,
+        localCompetition: 0,
+        attempt: attemptIndex,
+        metrics: summary.metrics,
+      });
+    }
+
+    function finalizeGenerationFromBatchResults(startNextAttempt = true) {
+      if (batchResults.length === 0) return;
+      applyDiversityScores(batchResults, noveltyArchive);
+      updateNoveltyArchive(batchResults);
+
+      const rankedByFitness = [...batchResults].sort((a, b) => b.fitness - a.fitness);
+      const rankedForBreeding = [...batchResults].sort((a, b) => b.selectionScore - a.selectionScore);
+      if (rankedByFitness.length === 0) return;
+      const targetPopulationSize = pendingPopulationSize;
+      bestEverScore = Math.max(bestEverScore, rankedByFitness[0].fitness);
+
+      const nextGenomes = [];
+      const eliteCount = Math.min(ELITE_COUNT, rankedByFitness.length, targetPopulationSize);
+      if (eliteCount > 0) {
+        nextGenomes.push(cloneGenome(rankedByFitness[0].genome));
+      }
+      if (eliteCount > 1) {
+        const diversityElite = rankedForBreeding[0];
+        if (diversityElite && diversityElite.attempt !== rankedByFitness[0].attempt) {
+          nextGenomes.push(cloneGenome(diversityElite.genome));
+        } else if (rankedByFitness[1]) {
+          nextGenomes.push(cloneGenome(rankedByFitness[1].genome));
+        }
+      }
+      if (targetPopulationSize === 1 && rankedByFitness.length > 0) {
+        nextGenomes[0] = mutateGenome(cloneGenome(rankedByFitness[0].genome), 0.7);
+      }
+      const meanNoveltyNorm = rankedForBreeding.length > 0
+        ? rankedForBreeding.reduce((sum, result) => sum + result.noveltyNorm, 0) / rankedForBreeding.length
+        : 0;
+      while (nextGenomes.length < targetPopulationSize) {
+        const tournamentSize = Math.min(4, rankedForBreeding.length);
+        const parentA = tournamentSelect(rankedForBreeding, tournamentSize, "selectionScore").genome;
+        const parentB = rankedForBreeding.length > 1
+          ? tournamentSelect(rankedForBreeding, tournamentSize, "selectionScore").genome
+          : parentA;
+        let child = crossoverGenome(parentA, parentB);
+        const baseMutationRate = rankedForBreeding.length === 1 ? 0.65 : 0.24;
+        const mutationRate = clamp(baseMutationRate + (1 - meanNoveltyNorm) * 0.08, 0.18, 0.72);
+        child = mutateGenome(child, mutationRate);
+        const randomInjectChance = rankedForBreeding.length > 1
+          ? 0.04 + (1 - meanNoveltyNorm) * 0.04
+          : 0;
+        if (rankedForBreeding.length > 1 && Math.random() < randomInjectChance) {
+          child = randomGenome();
+        }
+        nextGenomes.push(child);
+      }
+
+      generation += 1;
+      if (fastForwardGenerationsRemaining > 0) {
+        fastForwardGenerationsRemaining = Math.max(0, fastForwardGenerationsRemaining - 1);
+      }
+
+      populationSize = targetPopulationSize;
+      populationLabel.textContent = String(populationSize);
+      batchGenomes = nextGenomes;
+      batchResults = [];
+      attemptTrialMetrics = Array.from({ length: populationSize }, () => []);
+      trialSeeds = buildTrialSeedSet(generation, TRIALS_PER_CANDIDATE);
+      currentAttemptIndex = 0;
+      currentTrialIndex = 0;
+      if (startNextAttempt) {
+        startAttempt(currentAttemptIndex, currentTrialIndex);
+      }
+    }
+
+    function disableBackendMode(reason) {
+      if (!backendEnabled) return;
+      console.warn("Disabling Rust backend mode:", reason);
+      backendEnabled = false;
+      backendOfflineReason = reason || "backend unavailable";
+      backendFastForwardBusy = false;
+      fastForwardGenerationsRemaining = 0;
+      if (backendFastForwardAbort) {
+        backendFastForwardAbort.abort();
+        backendFastForwardAbort = null;
+      }
+      paused = true;
+      effectiveSimSpeed = 0;
+      backendTrialToken += 1;
+      if (backendSocket) {
+        backendSocket.close();
+        backendSocket = null;
+      }
+      clearPopulation();
+    }
+
+    function getPrimaryBackendView() {
+      if (population.length === 0) return null;
+      const creature = population[0];
+      return creature instanceof BackendCreatureView ? creature : null;
+    }
+
+    function hasPendingBackendPlayback() {
+      const view = getPrimaryBackendView();
+      return view ? view.hasPendingPlayback() : false;
+    }
+
+    function syncBackendPlaybackClock() {
+      const view = getPrimaryBackendView();
+      if (!view) return;
+      const frame = view.currentPlaybackFrame();
+      if (!frame || !Number.isFinite(frame.time)) return;
+      simClock = frame.time;
+      generationClock = simClock;
+    }
+
+    function consumeCompletedBackendPlaybackResult() {
+      const view = getPrimaryBackendView();
+      if (!view) return null;
+      return view.consumeCompletedTrialResult();
+    }
+
+    function backendSnapshotHzForSpeed() {
+      if (fastForwardGenerationsRemaining > 0) {
+        return FAST_BACKEND_SNAPSHOT_HZ;
+      }
+      return BASE_BACKEND_SNAPSHOT_HZ;
+    }
+
+    function backendStepDtForSpeed() {
+      return FIXED_TIME_STEP;
+    }
+
+    function startBackendAttempt(attemptIndex, trialIndex, spawn) {
+      const view = new BackendCreatureView(attemptIndex, batchGenomes[attemptIndex], spawn);
+      population.push(view);
+
+      const trialSeed = trialSeeds[trialIndex] ?? hashUint32(generation, trialIndex, 0x9e3779b9);
+      const request = {
+        genome: batchGenomes[attemptIndex],
+        seed: trialSeed >>> 0,
+        durationSeconds: GENERATION_SECONDS,
+        dt: backendStepDtForSpeed(),
+        snapshotHz: backendSnapshotHzForSpeed(),
+        motorPowerScale,
+      };
+
+      const token = ++backendTrialToken;
+      const socket = new WebSocket(BACKEND_WS_URL);
+      let trialCompleted = false;
+      backendSocket = socket;
+
+      socket.addEventListener("open", () => {
+        if (token !== backendTrialToken) {
+          socket.close();
+          return;
+        }
+        socket.send(JSON.stringify(request));
+      });
+
+      socket.addEventListener("message", (event) => {
+        if (token !== backendTrialToken) return;
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch (error) {
+          console.error("backend message parse error", error);
+          return;
+        }
+
+        if (msg.type === "trial_started") {
+          const partSizes = Array.isArray(msg.partSizes)
+            ? msg.partSizes
+            : (Array.isArray(msg.part_sizes) ? msg.part_sizes : null);
+          if (partSizes) {
+            view.setPartSizes(partSizes);
+          }
+          return;
+        }
+
+        if (msg.type === "snapshot") {
+          const frame = msg.frame;
+          if (!frame) return;
+          view.bufferFrame(frame);
+          return;
+        }
+
+        if (msg.type === "trial_complete") {
+          const result = msg.result;
+          if (result) {
+            view.markTrialComplete(result);
+          } else {
+            view.markTrialComplete({
+              fitness: view.fitness,
+              metrics: view.getTrialSummary(GENERATION_SECONDS),
+            });
+          }
+          trialCompleted = true;
+          if (backendSocket === socket) {
+            backendSocket = null;
+          }
+          socket.close();
+          return;
+        }
+
+        if (msg.type === "error") {
+          console.error("backend trial error", msg.message);
+          if (backendSocket === socket) {
+            backendSocket = null;
+          }
+          socket.close();
+          return;
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (token === backendTrialToken && backendSocket === socket) {
+          backendSocket = null;
+        }
+        if (token === backendTrialToken && !trialCompleted && backendEnabled) {
+          disableBackendMode("websocket closed before trial completion");
+        }
+      });
+
+      socket.addEventListener("error", (event) => {
+        console.error("backend websocket error", event);
+        if (token === backendTrialToken && backendEnabled) {
+          disableBackendMode("websocket transport error");
+        }
+      });
+    }
+
+    function onBackendTrialComplete(result) {
+      if (!attemptTrialMetrics[currentAttemptIndex]) {
+        attemptTrialMetrics[currentAttemptIndex] = [];
+      }
+      const metrics = result && result.metrics ? result.metrics : {
+        quality: result?.fitness || 0,
+        progress: result?.fitness || 0,
+        uprightAvg: 0,
+        avgHeight: 0,
+        instabilityNorm: 0,
+        energyNorm: 0,
+        fallenRatio: 0,
+        straightness: 0,
+        netDistance: result?.fitness || 0,
+      };
+      attemptTrialMetrics[currentAttemptIndex].push(metrics);
+
+      if (currentTrialIndex + 1 < TRIALS_PER_CANDIDATE) {
+        currentTrialIndex += 1;
+        startAttempt(currentAttemptIndex, currentTrialIndex);
+        return;
+      }
+
+      const summary = summarizeAttempt(batchGenomes[currentAttemptIndex], attemptTrialMetrics[currentAttemptIndex]);
+      pushAttemptSummary(currentAttemptIndex, summary);
+
+      if (currentAttemptIndex + 1 < batchGenomes.length) {
+        currentAttemptIndex += 1;
+        currentTrialIndex = 0;
+        startAttempt(currentAttemptIndex, currentTrialIndex);
+        return;
+      }
+
+      finalizeGenerationFromBatchResults(true);
+    }
+
+    async function evaluateGenerationBackend(genomes, seeds, options = {}) {
+      const requestPayload = {
+        genomes,
+        seeds,
+        durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : GENERATION_SECONDS,
+        dt: Number.isFinite(options.dt) ? options.dt : FIXED_TIME_STEP,
+        motorPowerScale,
+      };
+      const request = {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestPayload),
+      };
+      if (options.signal) {
+        request.signal = options.signal;
+      }
+      const response = await fetch(`${BACKEND_HTTP_URL}/api/eval/generation`, request);
+      if (!response.ok) {
+        throw new Error(`backend evaluation failed (${response.status})`);
+      }
+      const responsePayload = await response.json();
+      if (!responsePayload || !Array.isArray(responsePayload.results)) {
+        throw new Error("backend evaluation returned invalid payload");
+      }
+      return responsePayload.results;
+    }
+
+    function makeAbortError() {
+      if (typeof DOMException === "function") {
+        return new DOMException("Aborted", "AbortError");
+      }
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      return error;
+    }
+
+    async function evaluateGenerationBackendStream(genomes, seeds, options = {}) {
+      const requestPayload = {
+        genomes,
+        seeds,
+        durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : GENERATION_SECONDS,
+        dt: Number.isFinite(options.dt) ? options.dt : FIXED_TIME_STEP,
+        motorPowerScale,
+      };
+      const token = Number.isInteger(options.token) ? options.token : backendTrialToken;
+      return new Promise((resolve, reject) => {
+        const socket = new WebSocket(BACKEND_EVAL_WS_URL);
+        backendSocket = socket;
+        let settled = false;
+        let generationComplete = false;
+        let trialCount = Math.max(1, seeds.length);
+        let abortHandler = null;
+
+        const cleanup = () => {
+          if (backendSocket === socket) {
+            backendSocket = null;
+          }
+          if (options.signal && abortHandler) {
+            options.signal.removeEventListener("abort", abortHandler);
+          }
+        };
+        const settleResolve = (value) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(value);
+        };
+        const settleReject = (error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        };
+
+        abortHandler = () => {
+          if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+            socket.close();
+          }
+          settleReject(makeAbortError());
+        };
+        if (options.signal) {
+          if (options.signal.aborted) {
+            abortHandler();
+            return;
+          }
+          options.signal.addEventListener("abort", abortHandler, { once: true });
+        }
+
+        socket.addEventListener("open", () => {
+          if (token !== backendTrialToken) {
+            socket.close();
+            settleReject(makeAbortError());
+            return;
+          }
+          socket.send(JSON.stringify(requestPayload));
+        });
+
+        socket.addEventListener("message", (event) => {
+          if (token !== backendTrialToken || settled) return;
+          let msg;
+          try {
+            msg = JSON.parse(event.data);
+          } catch (error) {
+            settleReject(new Error("backend eval stream parse error"));
+            return;
+          }
+          const type = msg?.type;
+          if (type === "generation_started") {
+            const nextTrialCount = msg.trialCount ?? msg.trial_count;
+            trialCount = clamp((nextTrialCount | 0) || trialCount, 1, TRIALS_PER_CANDIDATE);
+            if (options.onGenerationStarted) {
+              options.onGenerationStarted({
+                attemptCount: (msg.attemptCount ?? msg.attempt_count ?? genomes.length) | 0,
+                trialCount,
+              });
+            }
+            return;
+          }
+          if (type === "attempt_trial_started") {
+            const attemptIndex = (msg.attemptIndex ?? msg.attempt_index ?? 0) | 0;
+            const trialIndex = (msg.trialIndex ?? msg.trial_index ?? 0) | 0;
+            const eventTrialCount = (msg.trialCount ?? msg.trial_count ?? trialCount) | 0;
+            trialCount = clamp(eventTrialCount || trialCount, 1, TRIALS_PER_CANDIDATE);
+            if (options.onAttemptTrialStarted) {
+              options.onAttemptTrialStarted({
+                attemptIndex,
+                trialIndex,
+                trialCount,
+              });
+            }
+            return;
+          }
+          if (type === "attempt_complete") {
+            const attemptIndex = (msg.attemptIndex ?? msg.attempt_index ?? 0) | 0;
+            if (options.onAttemptComplete) {
+              options.onAttemptComplete({
+                attemptIndex,
+                trialCount,
+                result: msg.result || null,
+              });
+            }
+            return;
+          }
+          if (type === "generation_complete") {
+            generationComplete = true;
+            const results = msg.results;
+            if (!Array.isArray(results)) {
+              settleReject(new Error("backend eval stream returned invalid payload"));
+              return;
+            }
+            settleResolve(results);
+            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+              socket.close();
+            }
+            return;
+          }
+          if (type === "error") {
+            settleReject(new Error(msg.message || "backend eval stream failed"));
+            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+              socket.close();
+            }
+          }
+        });
+
+        socket.addEventListener("close", () => {
+          if (settled) return;
+          if (token !== backendTrialToken || options.signal?.aborted) {
+            settleReject(makeAbortError());
+            return;
+          }
+          if (!generationComplete) {
+            settleReject(new Error("backend eval websocket closed before generation completion"));
+          }
+        });
+
+        socket.addEventListener("error", () => {
+          if (settled || token !== backendTrialToken) return;
+          settleReject(new Error("backend eval websocket transport error"));
+        });
+      });
+    }
+
+    async function pumpBackendFastForward() {
+      if (!backendEnabled || backendFastForwardBusy || fastForwardGenerationsRemaining <= 0) {
+        return;
+      }
+      backendFastForwardBusy = true;
+      backendTrialToken += 1;
+      const token = backendTrialToken;
+      if (backendSocket) {
+        backendSocket.close();
+        backendSocket = null;
+      }
+      try {
+        while (fastForwardGenerationsRemaining > 0) {
+          const seeds = trialSeeds.slice(0, Math.max(1, FAST_FORWARD_TRIAL_COUNT));
+          const abortController = new AbortController();
+          const timeoutId = setTimeout(() => {
+            abortController.abort();
+          }, FAST_FORWARD_REQUEST_TIMEOUT_MS);
+          backendFastForwardAbort = abortController;
+          let results;
+          try {
+            results = await evaluateGenerationBackendStream(batchGenomes, seeds, {
+              durationSeconds: FAST_FORWARD_DURATION_SECONDS,
+              dt: BACKEND_FAST_FORWARD_DT,
+              signal: abortController.signal,
+              token,
+              onGenerationStarted: ({ trialCount }) => {
+                currentAttemptIndex = 0;
+                currentTrialIndex = clamp(0, 0, Math.max(0, trialCount - 1));
+              },
+              onAttemptTrialStarted: ({ attemptIndex, trialIndex, trialCount }) => {
+                currentAttemptIndex = clamp(attemptIndex | 0, 0, Math.max(0, batchGenomes.length - 1));
+                currentTrialIndex = clamp(trialIndex | 0, 0, Math.max(0, Math.min(TRIALS_PER_CANDIDATE, trialCount | 0) - 1));
+              },
+              onAttemptComplete: ({ attemptIndex, trialCount }) => {
+                currentAttemptIndex = clamp(attemptIndex | 0, 0, Math.max(0, batchGenomes.length - 1));
+                currentTrialIndex = clamp((trialCount | 0) - 1, 0, Math.max(0, TRIALS_PER_CANDIDATE - 1));
+              },
+            });
+          } finally {
+            clearTimeout(timeoutId);
+          }
+          if (!Array.isArray(results) || results.length !== batchGenomes.length) {
+            throw new Error("backend evaluation returned unexpected result count");
+          }
+          if (backendFastForwardAbort === abortController) {
+            backendFastForwardAbort = null;
+          }
+          batchResults = results.map((result, attempt) => ({
+            genome: cloneGenome(batchGenomes[attempt]),
+            fitness: result.fitness || 0,
+            selectionScore: result.fitness || 0,
+            descriptor: Array.isArray(result.descriptor) ? result.descriptor.slice(0, 5) : [0, 0, 0, 0, 0],
+            novelty: 0,
+            noveltyNorm: 0,
+            qualityNorm: 0,
+            localCompetition: 0,
+            attempt,
+            metrics: {
+              trialCount: result.trialCount || TRIALS_PER_CANDIDATE,
+              medianProgress: result.medianProgress || 0,
+              medianUpright: result.medianUpright || 0,
+              medianStraightness: result.medianStraightness || 0,
+              robustQuality: result.fitness || 0,
+            },
+          }));
+          finalizeGenerationFromBatchResults(false);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          if (fastForwardGenerationsRemaining > 0) {
+            console.warn("backend fast-forward request timed out; stopping fast-forward");
+          }
+        } else {
+          console.error("backend fast-forward failed", error);
+        }
+        fastForwardGenerationsRemaining = 0;
+      } finally {
+        backendFastForwardAbort = null;
+        backendFastForwardBusy = false;
+        if (!paused && backendEnabled && fastForwardGenerationsRemaining <= 0) {
+          startAttempt(currentAttemptIndex, currentTrialIndex);
+        }
+      }
+    }
+
+    function clearPopulation() {
+      if (backendSocket) {
+        backendSocket.close();
+        backendSocket = null;
+      }
+      for (const creature of population) {
+        creature.dispose();
+      }
+      population.length = 0;
+    }
+
+    function tournamentSelect(ranked, size, scoreKey = "fitness") {
+      let best = ranked[(Math.random() * ranked.length) | 0];
+      for (let i = 1; i < size; i++) {
+        const candidate = ranked[(Math.random() * ranked.length) | 0];
+        if (candidate[scoreKey] > best[scoreKey]) best = candidate;
+      }
+      return best;
+    }
+
+    function updateHud(champion) {
+      generationLabel.textContent = String(generation);
+      bestEverLabel.textContent = bestEverScore.toFixed(2);
+      bestNowLabel.textContent = champion ? champion.fitness.toFixed(2) : "0.00";
+      championLabel.textContent = String(Math.min(currentAttemptIndex + 1, populationSize));
+      trialInfoLabel.textContent = `${Math.min(currentTrialIndex + 1, TRIALS_PER_CANDIDATE)}/${TRIALS_PER_CANDIDATE}`;
+      simRateLabel.textContent = backendEnabled
+        ? `${effectiveSimSpeed.toFixed(2)}x (backend)`
+        : "0.00x (backend offline)";
+      timeLeftLabel.textContent = Math.max(0, GENERATION_SECONDS - generationClock).toFixed(1);
+      queuedPopLabel.textContent = pendingPopulationSize === populationSize ? "none" : `${pendingPopulationSize} (next gen)`;
+      fastSkipStatusLabel.textContent = backendEnabled
+        ? (fastForwardGenerationsRemaining > 0
+          ? `${fastForwardGenerationsRemaining} gens remaining${backendFastForwardBusy ? " (processing...)" : ""}`
+          : "off")
+        : `offline${backendOfflineReason ? `: ${backendOfflineReason}` : ""}`;
+    }
+
+    function updateCamera(frameDelta, champion) {
+      if (!champion) return;
+
+      let target;
+      let desired;
+      if (frameAllEnabled || population.length === 1) {
+        const framing = getPopulationFraming();
+        target = framing.center;
+        const fov = THREE.MathUtils.degToRad(camera.fov);
+        const distance = Math.max(16, (framing.radius + 8) / Math.tan(fov * 0.5));
+        desired = target.clone().add(new THREE.Vector3(distance * 0.9, distance * 0.6, distance * 0.9));
+      } else {
+        const targetBody = population.length > 0 ? population[0].torsoBody : champion.torsoBody;
+        if (!targetBody) return;
+        target = new THREE.Vector3(targetBody.position.x, targetBody.position.y + 1.5, targetBody.position.z);
+        const velocityHeading = new THREE.Vector3(targetBody.velocity.x, 0, targetBody.velocity.z);
+        if (velocityHeading.lengthSq() > 0.35) {
+          velocityHeading.normalize();
+          smoothedHeading.lerp(velocityHeading, 1 - Math.exp(-frameDelta * 3));
+          smoothedHeading.normalize();
+        }
+        desired = target.clone().addScaledVector(smoothedHeading, -16).add(new THREE.Vector3(0, 8, 0));
+      }
+
+      if (performance.now() < cameraManualUntil) {
+        controls.target.lerp(target, 0.16);
+        controls.update();
+        return;
+      }
+
+      camera.position.lerp(desired, 1 - Math.exp(-frameDelta * 2.8));
+      controls.target.lerp(target, 1 - Math.exp(-frameDelta * 3.1));
+      camera.lookAt(controls.target);
+    }
+
+    function getChampion() {
+      let champion = null;
+      for (const result of batchResults) {
+        if (!champion || result.fitness > champion.fitness) {
+          champion = {
+            genome: result.genome,
+            fitness: result.fitness,
+            index: result.attempt,
+          };
+        }
+      }
+      if (population.length > 0) {
+        const creature = population[0];
+        if (!champion || creature.fitness > champion.fitness) {
+          champion = {
+            genome: creature.genome,
+            fitness: creature.fitness,
+            index: currentAttemptIndex,
+            torsoBody: creature.torsoBody,
+          };
+        }
+      }
+      return champion;
+    }
+
+    function getCurrentCandidate() {
+      if (population.length === 0) return null;
+      const creature = population[0];
+      return {
+        genome: creature.genome,
+        fitness: creature.fitness,
+        index: currentAttemptIndex,
+        torsoBody: creature.torsoBody,
+      };
+    }
+
+    function getPopulationFraming() {
+      if (population.length === 0) {
+        return { center: new THREE.Vector3(0, 2.2, 0), radius: 8 };
+      }
+      let minX = Infinity;
+      let minY = Infinity;
+      let minZ = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      let maxZ = -Infinity;
+      for (const creature of population) {
+        const p = creature.torsoBody.position;
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        minZ = Math.min(minZ, p.z);
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+        maxZ = Math.max(maxZ, p.z);
+      }
+      const center = new THREE.Vector3((minX + maxX) * 0.5, (minY + maxY) * 0.5 + 1.4, (minZ + maxZ) * 0.5);
+      let radius = 0;
+      for (const creature of population) {
+        const p = creature.torsoBody.position;
+        const dx = p.x - center.x;
+        const dy = p.y - center.y;
+        const dz = p.z - center.z;
+        radius = Math.max(radius, Math.hypot(dx, dy, dz));
+      }
+      return { center, radius: Math.max(6, radius) };
+    }
+
+    function updateSunShadowRig(frameDelta) {
+      if (!sunLight) return;
+      const framing = getPopulationFraming();
+      const easing = 1 - Math.exp(-frameDelta * 2.4);
+      sunTargetPos.copy(framing.center);
+      sunDesiredPos.copy(sunTargetPos).add(sunOffset);
+
+      sunLight.position.lerp(sunDesiredPos, easing);
+      sunLight.target.position.lerp(sunTargetPos, easing);
+
+      const span = Math.max(92, framing.radius * 3.3);
+      sunLight.shadow.camera.left = -span;
+      sunLight.shadow.camera.right = span;
+      sunLight.shadow.camera.top = span;
+      sunLight.shadow.camera.bottom = -span;
+      sunLight.shadow.camera.far = Math.max(260, span * 4.4);
+      sunLight.shadow.camera.updateProjectionMatrix();
+      sunLight.target.updateMatrixWorld();
+    }
+
+    function markManualCamera() {
+      cameraManualUntil = performance.now() + 7000;
+    }
+
+    function onResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      composer.setSize(window.innerWidth, window.innerHeight);
+      resizeGenomeCanvas();
+    }
+
+    function setGenomeVizVisibility(visible) {
+      genomePanel.style.display = visible ? "block" : "none";
+      if (visible) resizeGenomeCanvas();
+    }
+
+    function resizeGenomeCanvas() {
+      const width = Math.max(1, Math.floor(genomeCanvas.clientWidth));
+      const height = Math.max(1, Math.floor(genomeCanvas.clientHeight));
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      genomeCanvas.width = Math.max(1, Math.floor(width * dpr));
+      genomeCanvas.height = Math.max(1, Math.floor(height * dpr));
+      genomeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function renderGenomeViz(champion, currentCandidate) {
+      if (genomeVizMode === "hide") return;
+      const vizCreature = genomeVizMode === "current"
+        ? (currentCandidate || champion)
+        : champion;
+      const width = Math.max(1, Math.floor(genomeCanvas.clientWidth));
+      const height = Math.max(1, Math.floor(genomeCanvas.clientHeight));
+      genomeCtx.clearRect(0, 0, width, height);
+      genomeCtx.fillStyle = "rgba(6, 10, 8, 0.46)";
+      genomeCtx.fillRect(0, 0, width, height);
+
+      const grid = 28;
+      genomeCtx.strokeStyle = "rgba(170, 194, 117, 0.08)";
+      genomeCtx.lineWidth = 1;
+      for (let x = 0; x < width; x += grid) {
+        genomeCtx.beginPath();
+        genomeCtx.moveTo(x, 0);
+        genomeCtx.lineTo(x, height);
+        genomeCtx.stroke();
+      }
+      for (let y = 0; y < height; y += grid) {
+        genomeCtx.beginPath();
+        genomeCtx.moveTo(0, y);
+        genomeCtx.lineTo(width, y);
+        genomeCtx.stroke();
+      }
+
+      if (!vizCreature) {
+        genomeCtx.fillStyle = "#b8d795";
+        genomeCtx.font = "12px Trebuchet MS, Segoe UI, sans-serif";
+        genomeCtx.fillText("No champion yet.", 12, 20);
+        genomeMeta.textContent = "No champion yet.";
+        genomeTitle.textContent = "Genome Network";
+        return;
+      }
+
+      const genome = vizCreature.genome;
+      const torsoX = width * 0.15;
+      const limbX = width * 0.38;
+      const segBaseX = width * 0.58;
+      const segStepX = width * 0.12;
+      const activeLimbs = genome.limbs.reduce((count, limb) => count + (limb.enabled ? 1 : 0), 0);
+
+      const torsoNodeRadius = 8 + clamp((genome.torso.mass - 0.25) / 1.65, 0, 1) * 8;
+      drawNode(torsoX, height * 0.5, torsoNodeRadius, "rgba(217, 241, 156, 0.9)");
+
+      for (let i = 0; i < MAX_LIMBS; i++) {
+        const limb = genome.limbs[i];
+        const yLimb = ((i + 1) / (MAX_LIMBS + 1)) * height;
+        const limbActive = limb.enabled;
+        const baseAlpha = limbActive ? 0.86 : 0.25;
+        const limbColor = limbActive ? "rgba(182, 235, 150, 1)" : "rgba(128, 138, 116, 1)";
+        drawEdge(torsoX, height * 0.5, limbX, yLimb, limbColor, 1.2, baseAlpha);
+        drawNode(limbX, yLimb, limbActive ? 4.8 : 3.2, limbColor, baseAlpha);
+
+        let prevX = limbX;
+        let prevY = yLimb;
+        const segmentCount = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+
+        for (let segIndex = 0; segIndex < MAX_SEGMENTS_PER_LIMB; segIndex++) {
+          const seg = limb.segments[segIndex];
+          const control = limb.controls[segIndex];
+          const segX = segBaseX + segIndex * segStepX;
+          const segYOffset = (segIndex - (MAX_SEGMENTS_PER_LIMB - 1) * 0.5) * 18;
+          const segY = yLimb + segYOffset;
+          const segActive = limbActive && segIndex < segmentCount;
+
+          const ampNorm = clamp(control.amp / 11.5, 0, 1);
+          const freqNorm = clamp(control.freq / 5, 0, 1);
+          const pulse = 0.62 + 0.38 * Math.sin(simClock * control.freq + control.phase);
+          const alpha = segActive ? (0.35 + pulse * 0.6) : 0.16;
+          const hue = 170 - ampNorm * 135;
+          const sat = 45 + freqNorm * 35;
+          const light = segActive ? (46 + ampNorm * 26) : 34;
+          const edgeColor = `hsla(${hue.toFixed(0)}, ${sat.toFixed(0)}%, ${light.toFixed(0)}%, ${alpha.toFixed(3)})`;
+          const nodeColor = segActive ? edgeColor : "rgba(125, 134, 116, 0.35)";
+
+          drawEdge(prevX, prevY, segX, segY, edgeColor, 1.1 + ampNorm * 1.9, alpha);
+          drawNode(segX, segY, 2.8 + seg.thickness * 3.5, nodeColor, alpha);
+
+          prevX = segX;
+          prevY = segY;
+        }
+      }
+
+      genomeCtx.fillStyle = "rgba(208, 233, 156, 0.95)";
+      genomeCtx.font = "11px Trebuchet MS, Segoe UI, sans-serif";
+      genomeCtx.fillText(`#${vizCreature.index + 1}`, 12, 16);
+      genomeCtx.fillText(`Score ${vizCreature.fitness.toFixed(2)}`, 12, 32);
+      genomeTitle.textContent = genomeVizMode === "current" ? "Current Genome Network" : "Best Genome Network";
+
+      genomeMeta.textContent = `active limbs ${activeLimbs}/${MAX_LIMBS} | torso ${genome.torso.w.toFixed(2)}x${genome.torso.h.toFixed(2)}x${genome.torso.d.toFixed(2)} | density ${genome.torso.mass.toFixed(2)} | scale ${genome.massScale.toFixed(2)}`;
+    }
+
+    function drawNode(x, y, radius, fill, alpha = 1) {
+      genomeCtx.save();
+      genomeCtx.globalAlpha = alpha;
+      genomeCtx.fillStyle = fill;
+      genomeCtx.beginPath();
+      genomeCtx.arc(x, y, radius, 0, Math.PI * 2);
+      genomeCtx.fill();
+      genomeCtx.restore();
+    }
+
+    function drawEdge(x1, y1, x2, y2, color, width, alpha = 1) {
+      genomeCtx.save();
+      genomeCtx.globalAlpha = alpha;
+      genomeCtx.strokeStyle = color;
+      genomeCtx.lineWidth = width;
+      genomeCtx.beginPath();
+      const cx = (x1 + x2) * 0.5;
+      genomeCtx.moveTo(x1, y1);
+      genomeCtx.quadraticCurveTo(cx, y1, x2, y2);
+      genomeCtx.stroke();
+      genomeCtx.restore();
+    }
+
+    function createSky() {
+      const sky = new THREE.Mesh(
+        new THREE.SphereGeometry(420, 40, 20),
+        new THREE.ShaderMaterial({
+          side: THREE.BackSide,
+          uniforms: {
+            topColor: { value: new THREE.Color(0xa8b1c0) },
+            bottomColor: { value: new THREE.Color(0xe7d6bc) },
+          },
+          vertexShader: `
+            varying vec3 vWorldPosition;
+            void main() {
+              vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+              vWorldPosition = worldPosition.xyz;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            varying vec3 vWorldPosition;
+            uniform vec3 topColor;
+            uniform vec3 bottomColor;
+            void main() {
+              float h = clamp(normalize(vWorldPosition).y * 0.5 + 0.5, 0.0, 1.0);
+              float t = smoothstep(0.08, 1.0, h);
+              gl_FragColor = vec4(mix(bottomColor, topColor, t), 1.0);
+            }
+          `,
+        })
+      );
+      scene.add(sky);
+    }
+
+    function createTerrain() {
+      const texture = buildGroundTexture();
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(84, 84);
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      const floorMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(840, 840),
+        new THREE.MeshStandardMaterial({
+          color: 0x9ab06f,
+          map: texture,
+          roughness: 0.97,
+          metalness: 0.02,
+        })
+      );
+      floorMesh.rotation.x = -Math.PI * 0.5;
+      floorMesh.receiveShadow = true;
+      scene.add(floorMesh);
+
+      const floorBody = new CANNON.Body({
+        mass: 0,
+        material: groundMaterial,
+      });
+      floorBody.addShape(new CANNON.Plane());
+      floorBody.quaternion.setFromEuler(-Math.PI * 0.5, 0, 0);
+      floorBody.collisionFilterGroup = GROUND_GROUP;
+      floorBody.collisionFilterMask = -1;
+      world.addBody(floorBody);
+
+      const mountainMaterial = new THREE.MeshStandardMaterial({
+        color: 0x5a5d54,
+        roughness: 0.93,
+        metalness: 0.05,
+      });
+      // Mountains are visual-only meshes; no physics bodies are created for them.
+      for (let i = 0; i < 82; i++) {
+        const angle = (i / 82) * Math.PI * 2 + randRange(-0.05, 0.05);
+        const radius = randRange(235, 390);
+        const height = randRange(22, 74);
+        const width = randRange(12, 28);
+        const mountain = new THREE.Mesh(
+          new THREE.ConeGeometry(width, height, 4 + ((i % 5) + 1)),
+          mountainMaterial
+        );
+        mountain.position.set(Math.cos(angle) * radius, height * 0.5 - 0.2, Math.sin(angle) * radius);
+        mountain.rotation.y = randRange(0, Math.PI * 2);
+        mountain.castShadow = true;
+        mountain.receiveShadow = true;
+        scene.add(mountain);
+      }
+    }
+
+    function createOriginMarker() {
+      // Visual-only start marker (no Cannon body / no physics collision).
+      const marker = new THREE.Group();
+      marker.position.set(0, 0, 0);
+
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(1.25, 1.75, 40),
+        new THREE.MeshStandardMaterial({
+          color: 0xe7f5b8,
+          emissive: 0x2d3c1f,
+          emissiveIntensity: 0.3,
+          roughness: 0.4,
+          metalness: 0.15,
+          side: THREE.DoubleSide,
+        })
+      );
+      ring.rotation.x = -Math.PI * 0.5;
+      ring.position.y = 0.012;
+      ring.receiveShadow = true;
+      marker.add(ring);
+
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, 2.2, 12),
+        new THREE.MeshStandardMaterial({
+          color: 0x5d4a2f,
+          roughness: 0.72,
+          metalness: 0.08,
+        })
+      );
+      pole.position.set(0, 1.1, 0);
+      pole.castShadow = true;
+      marker.add(pole);
+
+      const finial = new THREE.Mesh(
+        new THREE.SphereGeometry(0.08, 12, 8),
+        new THREE.MeshStandardMaterial({
+          color: 0xf4e8be,
+          emissive: 0x554f2b,
+          emissiveIntensity: 0.18,
+          roughness: 0.42,
+          metalness: 0.12,
+        })
+      );
+      finial.position.set(0, 2.25, 0);
+      finial.castShadow = true;
+      marker.add(finial);
+
+      const flag = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.9, 0.5),
+        new THREE.MeshStandardMaterial({
+          color: 0xb8d46f,
+          emissive: 0x334422,
+          emissiveIntensity: 0.22,
+          roughness: 0.6,
+          metalness: 0.05,
+          side: THREE.DoubleSide,
+        })
+      );
+      flag.position.set(0.47, 1.95, 0);
+      flag.castShadow = true;
+      marker.add(flag);
+
+      const spriteCanvas = document.createElement("canvas");
+      spriteCanvas.width = 256;
+      spriteCanvas.height = 96;
+      const sctx = spriteCanvas.getContext("2d");
+      sctx.fillStyle = "rgba(10, 14, 11, 0.7)";
+      sctx.fillRect(0, 0, spriteCanvas.width, spriteCanvas.height);
+      sctx.strokeStyle = "rgba(202, 227, 146, 0.9)";
+      sctx.lineWidth = 4;
+      sctx.strokeRect(2, 2, spriteCanvas.width - 4, spriteCanvas.height - 4);
+      sctx.fillStyle = "#e1f6b4";
+      sctx.font = "bold 44px Trebuchet MS";
+      sctx.textAlign = "center";
+      sctx.textBaseline = "middle";
+      sctx.fillText("START", spriteCanvas.width * 0.5, spriteCanvas.height * 0.52);
+      const spriteTexture = new THREE.CanvasTexture(spriteCanvas);
+      spriteTexture.colorSpace = THREE.SRGBColorSpace;
+      const label = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: spriteTexture,
+          transparent: true,
+          depthTest: true,
+          depthWrite: false,
+        })
+      );
+      label.position.set(0, 2.85, 0);
+      label.scale.set(2.6, 0.95, 1);
+      marker.add(label);
+
+      scene.add(marker);
+    }
+
+    function createLighting() {
+      scene.add(new THREE.HemisphereLight(0xdde7f5, 0x6a6f57, 0.52));
+
+      sunLight = new THREE.DirectionalLight(0xffe7c7, 1.28);
+      sunLight.position.copy(sunOffset);
+      sunLight.castShadow = true;
+      sunLight.shadow.mapSize.set(4096, 4096);
+      sunLight.shadow.camera.near = 1;
+      sunLight.shadow.camera.far = 560;
+      sunLight.shadow.camera.left = -180;
+      sunLight.shadow.camera.right = 180;
+      sunLight.shadow.camera.top = 180;
+      sunLight.shadow.camera.bottom = -180;
+      sunLight.shadow.normalBias = 0.018;
+      sunLight.shadow.bias = -0.00012;
+      scene.add(sunLight);
+      scene.add(sunLight.target);
+    }
+
+    function buildGroundTexture() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 512;
+      canvas.height = 512;
+      const ctx = canvas.getContext("2d");
+
+      const gradient = ctx.createLinearGradient(0, 0, 512, 512);
+      gradient.addColorStop(0, "#5e7d45");
+      gradient.addColorStop(0.5, "#90aa62");
+      gradient.addColorStop(1, "#7d9958");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 512, 512);
+
+      for (let i = 0; i < 4600; i++) {
+        const x = Math.random() * 512;
+        const y = Math.random() * 512;
+        const size = 2 + Math.random() * 6;
+        const alpha = 0.02 + Math.random() * 0.08;
+        ctx.fillStyle = Math.random() > 0.5 ? `rgba(57, 82, 39, ${alpha})` : `rgba(178, 195, 132, ${alpha})`;
+        ctx.fillRect(x, y, size, size);
+      }
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    class BackendCreatureView {
+      constructor(index, genome, spawnPoint) {
+        this.index = index;
+        this.genome = cloneGenome(genome);
+        this.spawnPoint = new CANNON.Vec3(spawnPoint.x, spawnPoint.y, spawnPoint.z);
+        this.parts = [];
+        this.fitness = 0;
+        this.lastSampleTime = null;
+        this.torsoBody = {
+          position: new CANNON.Vec3(spawnPoint.x, spawnPoint.y + 5, spawnPoint.z),
+          velocity: new CANNON.Vec3(0, 0, 0),
+        };
+        this.snapshotBuffer = [];
+        this.playbackTime = 0;
+        this.playbackIndex = 0;
+        this.lastAppliedPlaybackIndex = -1;
+        this.trialComplete = false;
+        this.trialResult = null;
+        this.completionDispatched = false;
+      }
+
+      setPartSizes(partSizes) {
+        this.disposeMeshes();
+        const hue = (this.genome.hue + 1) % 1;
+        const baseColor = new THREE.Color().setHSL(hue, 0.63, 0.3);
+        const midColor = baseColor.clone().offsetHSL(0.01, -0.06, 0.04);
+        const darkColor = baseColor.clone().offsetHSL(0.02, -0.12, -0.08);
+
+        for (let i = 0; i < partSizes.length; i++) {
+          const size = partSizes[i];
+          const color = i === 0 ? baseColor : (i === 1 ? midColor : darkColor);
+          const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(size[0], size[1], size[2]),
+            new THREE.MeshStandardMaterial({
+              color,
+              roughness: 0.64,
+              metalness: 0.08,
+            })
+          );
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          scene.add(mesh);
+          this.parts.push(mesh);
+        }
+      }
+
+      applyFrame(frame) {
+        const bodies = frame.bodies || [];
+        const count = Math.min(this.parts.length, bodies.length);
+        for (let i = 0; i < count; i++) {
+          const mesh = this.parts[i];
+          const body = bodies[i];
+          mesh.position.set(body.p[0], body.p[1], body.p[2]);
+          mesh.quaternion.set(body.q[0], body.q[1], body.q[2], body.q[3]);
+        }
+        if (count > 0) {
+          const torso = bodies[0];
+          if (this.lastSampleTime !== null) {
+            const dt = Math.max(1e-4, frame.time - this.lastSampleTime);
+            this.torsoBody.velocity.set(
+              (torso.p[0] - this.torsoBody.position.x) / dt,
+              (torso.p[1] - this.torsoBody.position.y) / dt,
+              (torso.p[2] - this.torsoBody.position.z) / dt
+            );
+          }
+          this.torsoBody.position.set(torso.p[0], torso.p[1], torso.p[2]);
+          this.lastSampleTime = frame.time;
+        }
+        if (Number.isFinite(frame.score)) {
+          this.fitness = Math.max(this.fitness, frame.score);
+        }
+      }
+
+      bufferFrame(frame) {
+        this.snapshotBuffer.push(frame);
+        if (Number.isFinite(frame.score)) {
+          this.fitness = Math.max(this.fitness, frame.score);
+        }
+      }
+
+      markTrialComplete(result) {
+        this.trialComplete = true;
+        this.trialResult = result || null;
+        if (result && Number.isFinite(result.fitness)) {
+          this.fitness = Math.max(this.fitness, result.fitness);
+        }
+      }
+
+      hasPendingPlayback() {
+        if (this.snapshotBuffer.length === 0) {
+          return this.trialComplete && !this.completionDispatched;
+        }
+        return !this.trialComplete || this.playbackIndex < this.snapshotBuffer.length - 1 || !this.completionDispatched;
+      }
+
+      currentPlaybackFrame() {
+        if (this.snapshotBuffer.length === 0) return null;
+        return this.snapshotBuffer[this.playbackIndex] || null;
+      }
+
+      advancePlayback(wallDelta, speed) {
+        if (this.snapshotBuffer.length === 0) return;
+        if (Number.isFinite(speed) && speed > 0) {
+          this.playbackTime += wallDelta * speed;
+        }
+        const lastFrame = this.snapshotBuffer[this.snapshotBuffer.length - 1];
+        if (this.trialComplete && lastFrame && Number.isFinite(lastFrame.time)) {
+          this.playbackTime = Math.min(this.playbackTime, lastFrame.time);
+        }
+        while (
+          this.playbackIndex < this.snapshotBuffer.length - 1 &&
+          this.snapshotBuffer[this.playbackIndex + 1].time <= this.playbackTime
+        ) {
+          this.playbackIndex += 1;
+        }
+        if (this.lastAppliedPlaybackIndex !== this.playbackIndex) {
+          this.applyFrame(this.snapshotBuffer[this.playbackIndex]);
+          this.lastAppliedPlaybackIndex = this.playbackIndex;
+        }
+      }
+
+      consumeCompletedTrialResult() {
+        if (this.completionDispatched || !this.trialComplete) return null;
+        if (this.snapshotBuffer.length > 0 && this.playbackIndex < this.snapshotBuffer.length - 1) {
+          return null;
+        }
+        this.completionDispatched = true;
+        return this.trialResult || {
+          fitness: this.fitness,
+          metrics: this.getTrialSummary(GENERATION_SECONDS),
+        };
+      }
+
+      drive() {}
+
+      measureFitness() {}
+
+      syncVisuals() {}
+
+      getTrialSummary(durationSeconds) {
+        return {
+          quality: this.fitness,
+          progress: this.fitness,
+          uprightAvg: 0,
+          avgHeight: 0,
+          instabilityNorm: 0,
+          energyNorm: 0,
+          fallenRatio: 0,
+          straightness: 0,
+          netDistance: this.fitness,
+        };
+      }
+
+      disposeMeshes() {
+        for (const mesh of this.parts) {
+          scene.remove(mesh);
+          mesh.geometry.dispose();
+          mesh.material.dispose();
+        }
+        this.parts.length = 0;
+      }
+
+      dispose() {
+        this.disposeMeshes();
+      }
+    }
+
+    class Creature {
+      constructor(index, genome, spawnPoint, randomFn = Math.random) {
+        this.index = index;
+        this.genome = cloneGenome(genome);
+        this.spawnPoint = new CANNON.Vec3(spawnPoint.x, spawnPoint.y, spawnPoint.z);
+        this.groupBit = 1 << (index + 1);
+        this.randomFn = typeof randomFn === "function" ? randomFn : Math.random;
+
+        this.parts = [];
+        this.constraints = [];
+        this.controllers = [];
+        this.fitness = 0;
+
+        this.bestDistance = 0;
+        this.pathLength = 0;
+        this.sampledTime = 0;
+        this.uprightIntegral = 0;
+        this.heightIntegral = 0;
+        this.instabilityIntegral = 0;
+        this.energyIntegral = 0;
+        this.fallenTime = 0;
+        this.netDx = 0;
+        this.netDz = 0;
+        this.lastTorsoPos = null;
+        this.activeLimbCount = 0;
+        this.meanSegmentCount = 0;
+
+        this.build();
+      }
+
+      randomRange(min, max) {
+        return min + this.randomFn() * (max - min);
+      }
+
+      build() {
+        const hue = (this.genome.hue + 1) % 1;
+        const baseColor = new THREE.Color().setHSL(hue, 0.63, 0.3);
+        const midColor = baseColor.clone().offsetHSL(0.01, -0.06, 0.04);
+        const darkColor = baseColor.clone().offsetHSL(0.02, -0.12, -0.08);
+
+        const torsoDims = this.genome.torso;
+        const dropStart = new CANNON.Vec3(
+          this.spawnPoint.x,
+          this.spawnPoint.y + this.randomRange(5.2, 7.7),
+          this.spawnPoint.z
+        );
+
+        const torso = this.createBodyAndMesh(
+          torsoDims.w,
+          torsoDims.h,
+          torsoDims.d,
+          Math.max(
+            0.7,
+            torsoDims.w * torsoDims.h * torsoDims.d *
+            torsoDims.mass * this.genome.massScale * MASS_DENSITY_MULTIPLIER
+          ),
+          baseColor,
+          dropStart
+        );
+        this.torsoBody = torso.body;
+
+        this.torsoBody.quaternion.setFromEuler(
+          this.randomRange(-0.36, 0.36),
+          this.randomRange(0, Math.PI * 2),
+          this.randomRange(-0.28, 0.28)
+        );
+        this.torsoBody.velocity.set(
+          this.randomRange(-0.8, 0.8),
+          this.randomRange(-0.6, 0.3),
+          this.randomRange(-0.8, 0.8)
+        );
+        this.torsoBody.angularVelocity.set(
+          this.randomRange(-1.8, 1.8),
+          this.randomRange(-2.2, 2.2),
+          this.randomRange(-1.8, 1.8)
+        );
+
+        let activeLimbCount = 0;
+        let segmentTotal = 0;
+        for (let limbIndex = 0; limbIndex < MAX_LIMBS; limbIndex++) {
+          const limb = this.genome.limbs[limbIndex];
+          if (!limb.enabled) continue;
+
+          const segmentCount = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+          activeLimbCount++;
+          segmentTotal += segmentCount;
+          const axis = normalizedAxis(limb.axisY, limb.axisZ);
+          const firstDirLocal = normalizeVec3(limb.dirX ?? 0, limb.dirY ?? -1, limb.dirZ ?? 0, { x: 0, y: -1, z: 0 });
+
+          let parentBody = this.torsoBody;
+          let parentLength = torsoDims.h;
+          let pivotFromParent = new CANNON.Vec3(limb.anchorX, limb.anchorY, limb.anchorZ);
+
+          for (let segIndex = 0; segIndex < segmentCount; segIndex++) {
+            const segmentGene = limb.segments[segIndex];
+
+            const anchorWorld = new CANNON.Vec3();
+            parentBody.pointToWorldFrame(pivotFromParent, anchorWorld);
+            const localGrowth = segIndex === 0
+              ? new CANNON.Vec3(firstDirLocal.x, firstDirLocal.y, firstDirLocal.z)
+              : new CANNON.Vec3(0, -1, 0);
+            const growth = parentBody.quaternion.vmult(localGrowth);
+
+            const center = new CANNON.Vec3(
+              anchorWorld.x + growth.x * (segmentGene.length * 0.5),
+              anchorWorld.y + growth.y * (segmentGene.length * 0.5),
+              anchorWorld.z + growth.z * (segmentGene.length * 0.5)
+            );
+
+            const segmentColor = segIndex === 0 ? midColor : darkColor;
+            const segmentVolume = segmentGene.thickness * segmentGene.length * segmentGene.thickness;
+            const mass = Math.max(
+              0.08,
+              segmentVolume * segmentGene.mass * this.genome.massScale * MASS_DENSITY_MULTIPLIER
+            );
+            const segment = this.createBodyAndMesh(
+              segmentGene.thickness,
+              segmentGene.length,
+              segmentGene.thickness,
+              mass,
+              segmentColor,
+              center
+            );
+            segment.body.quaternion.copy(parentBody.quaternion);
+
+            const hinge = new CANNON.HingeConstraint(parentBody, segment.body, {
+              pivotA: pivotFromParent,
+              pivotB: new CANNON.Vec3(0, segmentGene.length * 0.5, 0),
+              axisA: new CANNON.Vec3(axis.x, axis.y, axis.z),
+              axisB: new CANNON.Vec3(axis.x, axis.y, axis.z),
+              collideConnected: false,
+            });
+            world.addConstraint(hinge);
+            hinge.enableMotor();
+
+            const torque = segIndex === 0 ? MOTOR_TORQUE_HIP : MOTOR_TORQUE_KNEE;
+            hinge.motorEquation.maxForce = torque;
+            hinge.motorEquation.minForce = -torque;
+            if (typeof hinge.setLimits === "function") {
+              const minLimit = segIndex === 0 ? -1.05 : -1.35;
+              const maxLimit = segIndex === 0 ? 1.05 : 1.35;
+              hinge.setLimits(minLimit, maxLimit, 0.9, 0.3);
+            }
+
+            this.constraints.push(hinge);
+            this.controllers.push({ constraint: hinge, gene: limb.controls[segIndex], baseTorque: torque });
+
+            parentBody = segment.body;
+            parentLength = segmentGene.length;
+            pivotFromParent = new CANNON.Vec3(0, -parentLength * 0.5, 0);
+          }
+        }
+        this.activeLimbCount = activeLimbCount;
+        this.meanSegmentCount = activeLimbCount > 0 ? segmentTotal / activeLimbCount : 0;
+      }
+
+      createBodyAndMesh(sizeX, sizeY, sizeZ, mass, color, position) {
+        const shape = new CANNON.Box(new CANNON.Vec3(sizeX * 0.5, sizeY * 0.5, sizeZ * 0.5));
+        const body = new CANNON.Body({
+          mass,
+          shape,
+          material: creatureMaterial,
+          position: new CANNON.Vec3(position.x, position.y, position.z),
+        });
+        body.linearDamping = 0.19;
+        body.angularDamping = 0.31;
+        body.sleepSpeedLimit = 0.09;
+        body.sleepTimeLimit = 0.8;
+        body.collisionFilterGroup = this.groupBit;
+        body.collisionFilterMask = GROUND_GROUP;
+        world.addBody(body);
+
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(sizeX, sizeY, sizeZ),
+          new THREE.MeshStandardMaterial({
+            color,
+            roughness: 0.64,
+            metalness: 0.08,
+          })
+        );
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+
+        this.parts.push({ body, mesh });
+        return { body, mesh };
+      }
+
+      drive(time, dt) {
+        if (time < SETTLE_SECONDS) {
+          for (const controller of this.controllers) {
+            controller.constraint.setMotorSpeed(0);
+          }
+          return;
+        }
+
+        let stepEnergy = 0;
+        for (const controller of this.controllers) {
+          const g = controller.gene;
+          const torque = controller.baseTorque * motorPowerScale;
+          controller.constraint.motorEquation.maxForce = torque;
+          controller.constraint.motorEquation.minForce = -torque;
+          const speed = clamp(g.bias + g.amp * Math.sin(g.freq * time + g.phase), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
+          controller.constraint.setMotorSpeed(speed);
+          stepEnergy += Math.abs(speed * torque);
+        }
+        this.energyIntegral += stepEnergy * dt;
+
+        for (const part of this.parts) {
+          const av = part.body.angularVelocity;
+          const avLen = Math.hypot(av.x, av.y, av.z);
+          if (avLen > MAX_BODY_ANGULAR_SPEED) {
+            const scale = MAX_BODY_ANGULAR_SPEED / avLen;
+            av.x *= scale;
+            av.y *= scale;
+            av.z *= scale;
+          }
+
+          const v = part.body.velocity;
+          const vLen = Math.hypot(v.x, v.y, v.z);
+          if (vLen > MAX_BODY_LINEAR_SPEED) {
+            const scale = MAX_BODY_LINEAR_SPEED / vLen;
+            v.x *= scale;
+            v.y *= scale;
+            v.z *= scale;
+          }
+        }
+      }
+
+      measureFitness(dt) {
+        if (this.sampledTime < SETTLE_SECONDS) {
+          this.sampledTime += dt;
+          return;
+        }
+
+        const torsoPos = this.torsoBody.position;
+        const dx = torsoPos.x - this.spawnPoint.x;
+        const dz = torsoPos.z - this.spawnPoint.z;
+        const traveled = Math.hypot(dx, dz);
+        if (Number.isFinite(traveled)) {
+          this.bestDistance = Math.max(this.bestDistance, traveled);
+        }
+        this.netDx = dx;
+        this.netDz = dz;
+
+        const up = this.torsoBody.quaternion.vmult(new CANNON.Vec3(0, 1, 0));
+        const upright = clamp((up.y + 1) * 0.5, 0, 1);
+        this.uprightIntegral += upright * dt;
+        this.heightIntegral += torsoPos.y * dt;
+
+        const av = this.torsoBody.angularVelocity;
+        this.instabilityIntegral += Math.hypot(av.x, av.y, av.z) * dt;
+
+        if (torsoPos.y < FALLEN_HEIGHT_THRESHOLD) {
+          this.fallenTime += dt;
+        }
+
+        if (this.lastTorsoPos) {
+          this.pathLength += Math.hypot(torsoPos.x - this.lastTorsoPos.x, torsoPos.z - this.lastTorsoPos.z);
+          this.lastTorsoPos.set(torsoPos.x, torsoPos.y, torsoPos.z);
+        } else {
+          this.lastTorsoPos = new CANNON.Vec3(torsoPos.x, torsoPos.y, torsoPos.z);
+        }
+
+        this.sampledTime += dt;
+        this.fitness = this.estimateLiveScore(Math.max(this.sampledTime, dt));
+      }
+
+      advancePlayback() {}
+
+      estimateLiveScore(durationSeconds) {
+        return this.computeMetrics(durationSeconds).quality;
+      }
+
+      computeMetrics(durationSeconds) {
+        const duration = Math.max(1e-6, durationSeconds);
+        const effectiveDuration = Math.max(1e-6, duration - SETTLE_SECONDS);
+        const sampleTime = Math.max(1e-6, this.sampledTime - SETTLE_SECONDS);
+        const peakDistance = this.bestDistance;
+        const uprightAvg = this.uprightIntegral / sampleTime;
+        const avgHeight = this.heightIntegral / sampleTime;
+        const instabilityNorm = clamp((this.instabilityIntegral / sampleTime) / MAX_BODY_ANGULAR_SPEED, 0, 2.5);
+        const activeSegmentEstimate = Math.max(1, this.activeLimbCount * this.meanSegmentCount);
+        const actuatorScale = activeSegmentEstimate * MOTOR_TORQUE_HIP * MAX_MOTOR_SPEED;
+        const energyNorm = clamp((this.energyIntegral / sampleTime) / actuatorScale, 0, 3);
+        const fallenRatio = clamp(this.fallenTime / effectiveDuration, 0, 1);
+        const netDistance = Math.hypot(this.netDx, this.netDz);
+        const straightness = this.pathLength > 1e-4 ? clamp(netDistance / this.pathLength, 0, 1) : 0;
+        const progress = netDistance * FITNESS_NET_PROGRESS_WEIGHT + peakDistance * (1 - FITNESS_NET_PROGRESS_WEIGHT);
+
+        let quality = progress;
+        quality += uprightAvg * FITNESS_UPRIGHT_BONUS;
+        quality += straightness * FITNESS_STRAIGHTNESS_BONUS;
+        quality += clamp(avgHeight / 3, 0, 1) * FITNESS_HEIGHT_BONUS;
+        quality -= energyNorm * FITNESS_ENERGY_PENALTY;
+        quality -= instabilityNorm * FITNESS_INSTABILITY_PENALTY;
+        quality *= 1 - Math.pow(fallenRatio, 1.5) * FALLEN_PENALTY_STRENGTH;
+        if (uprightAvg < UPRIGHT_FULL_SCORE_THRESHOLD) {
+          const uprightFactor = clamp(uprightAvg / UPRIGHT_FULL_SCORE_THRESHOLD, 0, 1);
+          quality *= UPRIGHT_PENALTY_FLOOR + (1 - UPRIGHT_PENALTY_FLOOR) * uprightFactor;
+        }
+        quality = Math.max(0, quality);
+
+        return {
+          quality,
+          progress,
+          uprightAvg,
+          avgHeight,
+          instabilityNorm,
+          energyNorm,
+          fallenRatio,
+          straightness,
+          netDistance,
+        };
+      }
+
+      getTrialSummary(durationSeconds) {
+        const metrics = this.computeMetrics(durationSeconds);
+        this.fitness = metrics.quality;
+        return metrics;
+      }
+
+      syncVisuals() {
+        for (const part of this.parts) {
+          part.mesh.position.set(part.body.position.x, part.body.position.y, part.body.position.z);
+          part.mesh.quaternion.set(part.body.quaternion.x, part.body.quaternion.y, part.body.quaternion.z, part.body.quaternion.w);
+        }
+      }
+
+      dispose() {
+        for (const constraint of this.constraints) {
+          world.removeConstraint(constraint);
+        }
+        this.constraints.length = 0;
+        this.controllers.length = 0;
+
+        for (const part of this.parts) {
+          world.removeBody(part.body);
+          scene.remove(part.mesh);
+          part.mesh.geometry.dispose();
+          part.mesh.material.dispose();
+        }
+        this.parts.length = 0;
+      }
+    }
+
+    function randomGenome() {
+      const torso = {
+        w: clamp(randRange(0.5, 2.75) * randRange(0.86, 1.18), 0.5, 3.0),
+        h: clamp(randRange(0.5, 2.75) * randRange(0.72, 1.15), 0.5, 3.0),
+        d: clamp(randRange(0.5, 2.75) * randRange(0.86, 1.18), 0.5, 3.0),
+        mass: randRange(0.26, 1.7),
+      };
+
+      const limbs = Array.from({ length: MAX_LIMBS }, (_, index) => {
+        const anchor = randomTorsoSurfaceAnchor(torso);
+        const dir = randomUnitVector3();
+
+        const segments = Array.from({ length: MAX_SEGMENTS_PER_LIMB }, (_, segIndex) => {
+          const hierarchyScale = Math.pow(randRange(0.86, 1.16), segIndex);
+          return {
+            length: clamp(randRange(0.5, 2.25) * hierarchyScale, 0.45, 2.5),
+            thickness: clamp(randRange(0.16, 0.95) * hierarchyScale, 0.14, 1.05),
+            mass: clamp(randRange(0.24, 1.75) * hierarchyScale, 0.14, 2.0),
+          };
+        });
+
+        const controls = Array.from({ length: MAX_SEGMENTS_PER_LIMB }, (_, segIndex) => ({
+          amp: randRange(segIndex === 0 ? 1.7 : 1.05, segIndex === 0 ? 10.3 : 9.1),
+          freq: randRange(0.55, 4.4),
+          phase: randRange(0, Math.PI * 2),
+          bias: randRange(-1.6, 1.6),
+        }));
+
+        return {
+          enabled: Math.random() < 0.78,
+          segmentCount: randInt(1, MAX_SEGMENTS_PER_LIMB),
+          anchorX: anchor.x,
+          anchorY: anchor.y,
+          anchorZ: anchor.z,
+          axisY: randRange(-0.35, 0.35),
+          axisZ: randRange(-0.35, 0.35),
+          dirX: dir.x,
+          dirY: dir.y,
+          dirZ: dir.z,
+          segments,
+          controls,
+        };
+      });
+
+      const genome = {
+        torso,
+        limbs,
+        hue: Math.random(),
+        massScale: randRange(0.78, 1.3),
+      };
+
+      ensureActiveBodyPlan(genome);
+      return genome;
+    }
+
+    function cloneGenome(genome) {
+      return {
+        torso: { ...genome.torso },
+        limbs: genome.limbs.map((limb) => ({
+          enabled: limb.enabled,
+          segmentCount: limb.segmentCount,
+          anchorX: limb.anchorX,
+          anchorY: limb.anchorY,
+          anchorZ: limb.anchorZ,
+          axisY: limb.axisY,
+          axisZ: limb.axisZ,
+          dirX: limb.dirX ?? 0,
+          dirY: limb.dirY ?? -1,
+          dirZ: limb.dirZ ?? 0,
+          segments: limb.segments.map((segment) => ({ ...segment })),
+          controls: limb.controls.map((control) => ({ ...control })),
+        })),
+        hue: genome.hue,
+        massScale: genome.massScale,
+      };
+    }
+
+    function crossoverGenome(a, b) {
+      const child = cloneGenome(a);
+      const torsoBlend = randRange(0.35, 0.65);
+      child.torso.w = lerp(a.torso.w, b.torso.w, torsoBlend);
+      child.torso.h = lerp(a.torso.h, b.torso.h, torsoBlend);
+      child.torso.d = lerp(a.torso.d, b.torso.d, torsoBlend);
+      child.torso.mass = lerp(a.torso.mass, b.torso.mass, torsoBlend);
+
+      for (let i = 0; i < MAX_LIMBS; i++) {
+        const la = a.limbs[i];
+        const lb = b.limbs[i];
+        const limb = child.limbs[i];
+        const blend = randRange(0.2, 0.8);
+
+        limb.enabled = Math.random() < 0.5 ? la.enabled : lb.enabled;
+        limb.segmentCount = Math.random() < 0.5 ? la.segmentCount : lb.segmentCount;
+        limb.anchorX = lerp(la.anchorX, lb.anchorX, blend);
+        limb.anchorY = lerp(la.anchorY, lb.anchorY, blend);
+        limb.anchorZ = lerp(la.anchorZ, lb.anchorZ, blend);
+        limb.axisY = lerp(la.axisY, lb.axisY, blend);
+        limb.axisZ = lerp(la.axisZ, lb.axisZ, blend);
+        limb.dirX = lerp(la.dirX ?? 0, lb.dirX ?? 0, blend);
+        limb.dirY = lerp(la.dirY ?? -1, lb.dirY ?? -1, blend);
+        limb.dirZ = lerp(la.dirZ ?? 0, lb.dirZ ?? 0, blend);
+
+        for (let j = 0; j < MAX_SEGMENTS_PER_LIMB; j++) {
+          const sa = la.segments[j];
+          const sb = lb.segments[j];
+          const sg = limb.segments[j];
+          const segBlend = Math.random();
+          sg.length = lerp(sa.length, sb.length, segBlend);
+          sg.thickness = lerp(sa.thickness, sb.thickness, segBlend);
+          sg.mass = lerp(sa.mass, sb.mass, segBlend);
+
+          const ca = la.controls[j];
+          const cb = lb.controls[j];
+          const cg = limb.controls[j];
+          const ctrlBlend = Math.random();
+          cg.amp = lerp(ca.amp, cb.amp, ctrlBlend);
+          cg.freq = lerp(ca.freq, cb.freq, ctrlBlend);
+          cg.phase = wrapPhase(lerp(ca.phase, cb.phase, ctrlBlend));
+          cg.bias = lerp(ca.bias, cb.bias, ctrlBlend);
+        }
+      }
+
+      child.hue = Math.random() < 0.5 ? a.hue : b.hue;
+      child.massScale = lerp(a.massScale, b.massScale, Math.random());
+      ensureActiveBodyPlan(child);
+      return child;
+    }
+
+    function mutateGenome(genome, chance) {
+      const g = cloneGenome(genome);
+
+      g.torso.w = mutateNumber(g.torso.w, 0.45, 3.1, chance, 0.2);
+      g.torso.h = mutateNumber(g.torso.h, 0.45, 3.1, chance, 0.2);
+      g.torso.d = mutateNumber(g.torso.d, 0.45, 3.1, chance, 0.2);
+      g.torso.mass = mutateNumber(g.torso.mass, 0.2, 1.95, chance, 0.22);
+
+      const anchorXLimit = g.torso.w * 0.56;
+      const anchorYLimit = g.torso.h * 0.56;
+      const anchorZLimit = g.torso.d * 0.56;
+      for (const limb of g.limbs) {
+        if (Math.random() < chance * 0.55) limb.enabled = !limb.enabled;
+        if (Math.random() < chance * 0.65) limb.segmentCount = clamp(limb.segmentCount + (Math.random() < 0.5 ? -1 : 1), 1, MAX_SEGMENTS_PER_LIMB);
+
+        limb.anchorX = mutateNumber(limb.anchorX, -anchorXLimit, anchorXLimit, chance, 0.17);
+        limb.anchorY = mutateNumber(limb.anchorY, -anchorYLimit, anchorYLimit, chance, 0.18);
+        limb.anchorZ = mutateNumber(limb.anchorZ, -anchorZLimit, anchorZLimit, chance, 0.17);
+        limb.axisY = mutateNumber(limb.axisY, -0.6, 0.6, chance, 0.2);
+        limb.axisZ = mutateNumber(limb.axisZ, -0.6, 0.6, chance, 0.2);
+        limb.dirX = mutateNumber(limb.dirX ?? 0, -1.2, 1.2, chance, 0.32);
+        limb.dirY = mutateNumber(limb.dirY ?? -1, -1.2, 1.2, chance, 0.32);
+        limb.dirZ = mutateNumber(limb.dirZ ?? 0, -1.2, 1.2, chance, 0.32);
+
+        for (const segment of limb.segments) {
+          segment.length = mutateNumber(segment.length, 0.4, 2.6, chance, 0.21);
+          segment.thickness = mutateNumber(segment.thickness, 0.12, 1.1, chance, 0.24);
+          segment.mass = mutateNumber(segment.mass, 0.1, 2.25, chance, 0.24);
+        }
+        for (const control of limb.controls) {
+          control.amp = mutateNumber(control.amp, 0.35, 11.6, chance, 0.18);
+          control.freq = mutateNumber(control.freq, 0.3, 4.9, chance, 0.14);
+          control.phase = wrapPhase(mutateNumber(control.phase, 0, Math.PI * 2, chance, 0.28));
+          control.bias = mutateNumber(control.bias, -2.35, 2.35, chance, 0.16);
+        }
+      }
+
+      if (Math.random() < chance) g.hue = (g.hue + randNormal() * 0.08 + 1) % 1;
+      if (Math.random() < chance) g.massScale = mutateNumber(g.massScale, 0.7, 1.36, 1, 0.18);
+
+      ensureActiveBodyPlan(g);
+      return g;
+    }
+
+    function ensureActiveBodyPlan(genome) {
+      const anchorXLimit = genome.torso.w * 0.56;
+      const anchorYLimit = genome.torso.h * 0.56;
+      const anchorZLimit = genome.torso.d * 0.56;
+      for (const limb of genome.limbs) {
+        limb.anchorX = clamp(limb.anchorX, -anchorXLimit, anchorXLimit);
+        limb.anchorY = clamp(limb.anchorY, -anchorYLimit, anchorYLimit);
+        limb.anchorZ = clamp(limb.anchorZ, -anchorZLimit, anchorZLimit);
+        const dir = normalizeVec3(
+          limb.dirX ?? 0,
+          limb.dirY ?? -1,
+          limb.dirZ ?? 0,
+          { x: 0, y: -1, z: 0 }
+        );
+        limb.dirX = dir.x;
+        limb.dirY = dir.y;
+        limb.dirZ = dir.z;
+      }
+
+      let enabledCount = 0;
+      for (const limb of genome.limbs) {
+        if (limb.enabled) enabledCount++;
+      }
+      if (enabledCount >= 2) return;
+      let attempts = 0;
+      while (enabledCount < 2 && attempts < 20) {
+        const index = randInt(0, genome.limbs.length - 1);
+        attempts++;
+        if (!genome.limbs[index].enabled) {
+          genome.limbs[index].enabled = true;
+          genome.limbs[index].segmentCount = Math.max(1, genome.limbs[index].segmentCount);
+          enabledCount++;
+        }
+      }
+    }
+
+    function buildTrialSeedSet(generationIndex, count) {
+      const seeds = [];
+      for (let i = 0; i < count; i++) {
+        seeds.push(hashUint32(generationIndex, i + 1, 0x9e3779b9));
+      }
+      return seeds;
+    }
+
+    function summarizeAttempt(genome, trials) {
+      if (!trials || trials.length === 0) {
+        return {
+          fitness: 0,
+          descriptor: [0, 0, 0, 0, 0],
+          metrics: {
+            trialCount: 0,
+            medianProgress: 0,
+            medianUpright: 0,
+            medianStraightness: 0,
+          },
+        };
+      }
+
+      const qualities = trials.map((trial) => trial.quality);
+      const progresses = trials.map((trial) => trial.progress);
+      const uprights = trials.map((trial) => trial.uprightAvg);
+      const straightnesses = trials.map((trial) => trial.straightness);
+      const energyNorms = trials.map((trial) => trial.energyNorm);
+      const instabilityNorms = trials.map((trial) => trial.instabilityNorm);
+      const fallenRatios = trials.map((trial) => trial.fallenRatio);
+
+      const robustQuality = 0.7 * quantile(qualities, 0.5) + 0.3 * quantile(qualities, 0.25);
+      const medianProgress = quantile(progresses, 0.5);
+      const medianUpright = quantile(uprights, 0.5);
+      const medianStraightness = quantile(straightnesses, 0.5);
+
+      let activeLimbs = 0;
+      let segmentTotal = 0;
+      for (const limb of genome.limbs) {
+        if (!limb.enabled) continue;
+        activeLimbs++;
+        segmentTotal += clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+      }
+      const meanSegmentCount = activeLimbs > 0 ? segmentTotal / activeLimbs : 0;
+
+      const descriptor = [
+        clamp(medianProgress / 28, 0, 1),
+        clamp(medianUpright, 0, 1),
+        clamp(medianStraightness, 0, 1),
+        clamp(activeLimbs / MAX_LIMBS, 0, 1),
+        clamp(meanSegmentCount / MAX_SEGMENTS_PER_LIMB, 0, 1),
+      ];
+
+      return {
+        fitness: Math.max(0, robustQuality),
+        descriptor,
+        metrics: {
+          trialCount: trials.length,
+          medianProgress,
+          medianUpright,
+          medianStraightness,
+          medianEnergyNorm: quantile(energyNorms, 0.5),
+          medianInstabilityNorm: quantile(instabilityNorms, 0.5),
+          medianFallenRatio: quantile(fallenRatios, 0.5),
+          robustQuality,
+        },
+      };
+    }
+
+    function applyDiversityScores(results, archive) {
+      if (!results || results.length === 0) return;
+      const archiveDescriptors = archive.map((entry) => entry.descriptor);
+
+      for (let i = 0; i < results.length; i++) {
+        const subject = results[i];
+        const noveltyDistances = [];
+        const neighborDistances = [];
+
+        for (let j = 0; j < results.length; j++) {
+          if (i === j) continue;
+          const dist = descriptorDistance(subject.descriptor, results[j].descriptor);
+          noveltyDistances.push(dist);
+          neighborDistances.push({ dist, fitness: results[j].fitness });
+        }
+
+        for (const descriptor of archiveDescriptors) {
+          noveltyDistances.push(descriptorDistance(subject.descriptor, descriptor));
+        }
+
+        noveltyDistances.sort((a, b) => a - b);
+        const noveltyK = Math.min(NOVELTY_NEIGHBORS, noveltyDistances.length);
+        subject.novelty = noveltyK > 0
+          ? noveltyDistances.slice(0, noveltyK).reduce((sum, dist) => sum + dist, 0) / noveltyK
+          : 0;
+
+        neighborDistances.sort((a, b) => a.dist - b.dist);
+        const competitionK = Math.min(LOCAL_COMPETITION_NEIGHBORS, neighborDistances.length);
+        if (competitionK === 0) {
+          subject.localCompetition = 1;
+        } else {
+          let wins = 0;
+          for (let n = 0; n < competitionK; n++) {
+            if (subject.fitness >= neighborDistances[n].fitness) wins++;
+          }
+          subject.localCompetition = wins / competitionK;
+        }
+      }
+
+      normalizeField(results, "fitness", "qualityNorm");
+      normalizeField(results, "novelty", "noveltyNorm");
+      for (const result of results) {
+        result.selectionScore =
+          SELECTION_QUALITY_WEIGHT * result.qualityNorm +
+          SELECTION_NOVELTY_WEIGHT * result.noveltyNorm +
+          SELECTION_LOCAL_COMPETITION_WEIGHT * result.localCompetition;
+      }
+    }
+
+    function updateNoveltyArchive(results) {
+      if (!results || results.length === 0) return;
+      const sortedByNovelty = [...results].sort((a, b) => b.novelty - a.novelty);
+      const inserts = Math.min(NOVELTY_ARCHIVE_INSERTIONS, sortedByNovelty.length);
+      for (let i = 0; i < inserts; i++) {
+        noveltyArchive.push({
+          descriptor: [...sortedByNovelty[i].descriptor],
+          fitness: sortedByNovelty[i].fitness,
+        });
+      }
+
+      const bestByFitness = [...results].sort((a, b) => b.fitness - a.fitness)[0];
+      if (bestByFitness) {
+        noveltyArchive.push({
+          descriptor: [...bestByFitness.descriptor],
+          fitness: bestByFitness.fitness,
+        });
+      }
+
+      if (noveltyArchive.length > NOVELTY_ARCHIVE_MAX) {
+        noveltyArchive.splice(0, noveltyArchive.length - NOVELTY_ARCHIVE_MAX);
+      }
+    }
+
+    function descriptorDistance(a, b) {
+      const len = Math.min(a.length, b.length);
+      let sum = 0;
+      for (let i = 0; i < len; i++) {
+        const d = a[i] - b[i];
+        sum += d * d;
+      }
+      return Math.sqrt(sum);
+    }
+
+    function normalizeField(items, inputKey, outputKey) {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const item of items) {
+        const value = item[inputKey];
+        if (value < min) min = value;
+        if (value > max) max = value;
+      }
+
+      if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        for (const item of items) item[outputKey] = 0;
+        return;
+      }
+
+      const span = max - min;
+      if (span < 1e-9) {
+        for (const item of items) item[outputKey] = 1;
+        return;
+      }
+
+      for (const item of items) {
+        item[outputKey] = (item[inputKey] - min) / span;
+      }
+    }
+
+    function quantile(values, q) {
+      if (!values || values.length === 0) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      if (sorted.length === 1) return sorted[0];
+      const t = clamp(q, 0, 1) * (sorted.length - 1);
+      const lower = Math.floor(t);
+      const upper = Math.ceil(t);
+      return lerp(sorted[lower], sorted[upper], t - lower);
+    }
+
+    function buildSpawnPoints(count, radius) {
+      if (count <= 1) {
+        return [new CANNON.Vec3(0, 0.05, 0)];
+      }
+      const points = [];
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2;
+        points.push(new CANNON.Vec3(Math.cos(angle) * radius, 0.05, Math.sin(angle) * radius));
+      }
+      return points;
+    }
+
+    function randRange(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    function randInt(min, max) {
+      return Math.floor(randRange(min, max + 1));
+    }
+
+    function hashUint32(a, b, c = 0) {
+      let h = 2166136261 >>> 0;
+      h ^= a >>> 0;
+      h = Math.imul(h, 16777619);
+      h ^= b >>> 0;
+      h = Math.imul(h, 16777619);
+      h ^= c >>> 0;
+      h = Math.imul(h, 16777619);
+      h += h << 13;
+      h ^= h >>> 7;
+      h += h << 3;
+      h ^= h >>> 17;
+      h += h << 5;
+      return h >>> 0;
+    }
+
+    function createSeededRandom(seed) {
+      let state = seed >>> 0;
+      return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(state ^ (state >>> 15), state | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function normalizedAxis(axisY, axisZ) {
+      const x = 1;
+      const y = axisY;
+      const z = axisZ;
+      const len = Math.hypot(x, y, z);
+      if (len < 1e-5) return new CANNON.Vec3(1, 0, 0);
+      return new CANNON.Vec3(x / len, y / len, z / len);
+    }
+
+    function normalizeVec3(x, y, z, fallback = { x: 1, y: 0, z: 0 }) {
+      const len = Math.hypot(x, y, z);
+      if (len < 1e-5) return { ...fallback };
+      return { x: x / len, y: y / len, z: z / len };
+    }
+
+    function randomUnitVector3() {
+      const u = Math.random();
+      const v = Math.random();
+      const theta = u * Math.PI * 2;
+      const y = v * 2 - 1;
+      const radial = Math.sqrt(Math.max(0, 1 - y * y));
+      return {
+        x: Math.cos(theta) * radial,
+        y,
+        z: Math.sin(theta) * radial,
+      };
+    }
+
+    function randomTorsoSurfaceAnchor(torso) {
+      const hx = torso.w * 0.5;
+      const hy = torso.h * 0.5;
+      const hz = torso.d * 0.5;
+      const inset = 0.92;
+      const r = randInt(0, 5);
+      const x = randRange(-hx * inset, hx * inset);
+      const y = randRange(-hy * inset, hy * inset);
+      const z = randRange(-hz * inset, hz * inset);
+      switch (r) {
+        case 0: return { x: hx * inset, y, z };
+        case 1: return { x: -hx * inset, y, z };
+        case 2: return { x, y: hy * inset, z };
+        case 3: return { x, y: -hy * inset, z };
+        case 4: return { x, y, z: hz * inset };
+        default: return { x, y, z: -hz * inset };
+      }
+    }
+
+    function mutateNumber(value, min, max, chance, variance) {
+      if (Math.random() > chance) return value;
+      const scale = (max - min) * variance;
+      return clamp(value + randNormal() * scale, min, max);
+    }
+
+    function randNormal() {
+      let u = 0;
+      let v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    function wrapPhase(phase) {
+      const twoPi = Math.PI * 2;
+      let p = phase % twoPi;
+      if (p < 0) p += twoPi;
+      return p;
+    }
+
+    seedPopulation();
+  </script>
+</body>
+</html>
