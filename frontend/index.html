@@ -1379,15 +1379,15 @@
       const LOWER_Y0 = SCOPE_Y0 + SCOPE_H;
       const LOWER_H = H - LOWER_Y0;
 
-      vizDrawMorphology(ctx, genome, 0, MORPH_Y0, W, MORPH_H);
+      vizDrawTopology(ctx, genome, 0, MORPH_Y0, W, MORPH_H);
 
       vizDrawSeparator(ctx, W, SCOPE_Y0);
       vizDrawSectionLabel(ctx, "MOTOR SIGNALS", 8, SCOPE_Y0 + 12);
       vizDrawOscilloscope(ctx, genome, 0, SCOPE_Y0 + 16, W, SCOPE_H - 18);
 
       vizDrawSeparator(ctx, W, LOWER_Y0);
-      vizDrawPhaseWheel(ctx, genome, W - LOWER_H + 8, LOWER_Y0 + 6, LOWER_H - 12);
-      vizDrawFitnessBreakdown(ctx, vizCreature, genome, 8, LOWER_Y0 + 6, W - LOWER_H - 4, LOWER_H - 12);
+      vizDrawGaitTiming(ctx, genome, W * 0.5 + 4, LOWER_Y0 + 6, W * 0.5 - 12, LOWER_H - 12);
+      vizDrawFitnessBreakdown(ctx, vizCreature, genome, 8, LOWER_Y0 + 6, W * 0.5 - 8, LOWER_H - 12);
 
       ctx.fillStyle = "rgba(208, 233, 156, 0.92)";
       ctx.font = "11px Trebuchet MS, Segoe UI, sans-serif";
@@ -1427,128 +1427,167 @@
       ctx.restore();
     }
 
-    function vizDrawMorphology(ctx, genome, ox, oy, W, H) {
-      vizDrawSectionLabel(ctx, "MORPHOLOGY", W - 82, oy + 14);
-      const cx = ox + W * 0.5;
-      const cy = oy + H * 0.52;
+    function vizDrawTopology(ctx, genome, ox, oy, W, H) {
+      vizDrawSectionLabel(ctx, "TOPOLOGY", W - 68, oy + 14);
       const torso = genome.torso;
+      const limbHues = [142, 85, 42, 190, 22, 260];
 
-      const limbChains = [];
+      const activeLimbs = [];
       for (let i = 0; i < MAX_LIMBS; i++) {
-        const limb = genome.limbs[i];
-        if (!limb.enabled) continue;
-        const sc = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
-        const chain = [];
-        let px = limb.anchorX;
-        let py = limb.anchorY;
-        const dir = normalizeVec3(limb.dirX ?? 0, limb.dirY ?? -1, limb.dirZ ?? 0, { x: 0, y: -1, z: 0 });
-        for (let s = 0; s < sc; s++) {
-          const seg = limb.segments[s];
-          if (!seg) break;
-          const dx = s === 0 ? dir.x : 0;
-          const dy = s === 0 ? dir.y : -1;
-          const len = seg.length;
-          const ex = px + dx * len;
-          const ey = py + dy * len;
-          chain.push({ x1: px, y1: py, x2: ex, y2: ey, thickness: seg.thickness, mass: seg.mass, control: limb.controls[s], limbIndex: i });
-          px = ex;
-          py = ey;
-        }
-        limbChains.push(chain);
+        if (genome.limbs[i].enabled) activeLimbs.push(i);
+      }
+      const limbCount = activeLimbs.length;
+      if (limbCount === 0) {
+        const tx = ox + 38;
+        const ty = oy + H * 0.5;
+        const torsoR = 7 + clamp(torso.mass / 1.5, 0, 1) * 6;
+        ctx.fillStyle = "rgba(200, 230, 155, 0.15)";
+        ctx.strokeStyle = "rgba(200, 230, 155, 0.5)";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(tx, ty, torsoR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        return;
       }
 
-      let minX = -torso.w * 0.5, maxX = torso.w * 0.5;
-      let minY = -torso.h * 0.5, maxY = torso.h * 0.5;
-      for (const chain of limbChains) {
-        for (const seg of chain) {
-          minX = Math.min(minX, seg.x1, seg.x2);
-          maxX = Math.max(maxX, seg.x1, seg.x2);
-          minY = Math.min(minY, seg.y1, seg.y2);
-          maxY = Math.max(maxY, seg.y1, seg.y2);
-        }
-      }
-      const spanX = Math.max(1, maxX - minX);
-      const spanY = Math.max(1, maxY - minY);
-      const margin = 28;
-      const scaleX = (W - margin * 2) / spanX;
-      const scaleY = (H - margin * 2) / spanY;
-      const scale = Math.min(scaleX, scaleY, 36);
-      const midX = (minX + maxX) * 0.5;
-      const midY = (minY + maxY) * 0.5;
-      const toScreenX = (x) => cx + (x - midX) * scale;
-      const toScreenY = (y) => cy + (y - midY) * scale;
+      const torsoX = ox + 34;
+      const torsoCY = oy + H * 0.5;
+      const torsoR = 7 + clamp(torso.mass / 1.5, 0, 1) * 6;
+      const limbColX = ox + 80;
+      const segStartX = ox + 124;
+      const segStepX = Math.min((W - segStartX - ox - 16) / Math.max(1, MAX_SEGMENTS_PER_LIMB - 1), 52);
 
-      const tw = torso.w * scale;
-      const th = torso.h * scale;
-      const torsoScreenX = toScreenX(0) - tw * 0.5;
-      const torsoScreenY = toScreenY(0) - th * 0.5;
+      const limbSpacing = Math.min(Math.max((H - 28) / Math.max(1, limbCount), 14), 30);
+      const limbBlockH = limbSpacing * limbCount;
+      const limbStartY = torsoCY - limbBlockH * 0.5 + limbSpacing * 0.5;
+
       ctx.save();
-      ctx.fillStyle = "rgba(200, 230, 155, 0.13)";
+      ctx.fillStyle = "rgba(200, 230, 155, 0.15)";
       ctx.strokeStyle = "rgba(200, 230, 155, 0.5)";
       ctx.lineWidth = 1.6;
-      vizRoundRect(ctx, torsoScreenX, torsoScreenY, tw, th, 3);
+      ctx.beginPath();
+      ctx.arc(torsoX, torsoCY, torsoR, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      const massDotRadius = clamp(torso.mass / 1.5, 0.15, 1) * 4 + 2;
-      ctx.fillStyle = "rgba(220, 245, 170, 0.7)";
+      const massR = clamp(torso.mass / 1.5, 0.15, 1) * 3.5 + 1.5;
+      ctx.fillStyle = "rgba(220, 245, 170, 0.65)";
       ctx.beginPath();
-      ctx.arc(toScreenX(0), toScreenY(0), massDotRadius, 0, Math.PI * 2);
+      ctx.arc(torsoX, torsoCY, massR, 0, Math.PI * 2);
       ctx.fill();
+
+      ctx.font = "7px Trebuchet MS, sans-serif";
+      ctx.fillStyle = "rgba(200, 230, 155, 0.4)";
+      ctx.textAlign = "center";
+      ctx.fillText(`${torso.w.toFixed(1)}\u00d7${torso.h.toFixed(1)}\u00d7${torso.d.toFixed(1)}`, torsoX, torsoCY + torsoR + 9);
       ctx.restore();
 
-      const limbHues = [142, 85, 42, 190, 22, 260];
-      for (let ci = 0; ci < limbChains.length; ci++) {
-        const chain = limbChains[ci];
-        const hue = limbHues[chain[0]?.limbIndex % limbHues.length] ?? 120;
-        for (let si = 0; si < chain.length; si++) {
-          const seg = chain[si];
-          const sx1 = toScreenX(seg.x1);
-          const sy1 = toScreenY(seg.y1);
-          const sx2 = toScreenX(seg.x2);
-          const sy2 = toScreenY(seg.y2);
-          const thickPx = clamp(seg.thickness * scale, 2, 14);
+      for (let li = 0; li < limbCount; li++) {
+        const limbIndex = activeLimbs[li];
+        const limb = genome.limbs[limbIndex];
+        const hue = limbHues[limbIndex % limbHues.length];
+        const sc = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+        const limbY = limbStartY + li * limbSpacing;
 
-          const pulse = seg.control ? 0.55 + 0.45 * Math.sin(simClock * (seg.control.freq || 1) + (seg.control.phase || 0)) : 0.7;
-          const alpha = 0.3 + pulse * 0.55;
+        ctx.save();
+        const branchAlpha = 0.45;
+        ctx.strokeStyle = `hsla(${hue}, 35%, 55%, ${branchAlpha})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        const cpx = (torsoX + limbColX) * 0.5;
+        ctx.moveTo(torsoX + torsoR - 2, torsoCY);
+        ctx.quadraticCurveTo(cpx, torsoCY, limbColX, limbY);
+        ctx.stroke();
+
+        ctx.fillStyle = `hsla(${hue}, 45%, 62%, 0.75)`;
+        ctx.beginPath();
+        ctx.arc(limbColX, limbY, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.font = "7px Trebuchet MS, sans-serif";
+        ctx.fillStyle = `hsla(${hue}, 35%, 58%, 0.55)`;
+        ctx.textAlign = "left";
+        ctx.fillText(`L${limbIndex + 1}`, limbColX - 14, limbY - 5);
+        ctx.restore();
+
+        let prevX = limbColX;
+        let prevY = limbY;
+        for (let s = 0; s < sc; s++) {
+          const seg = limb.segments[s];
+          const ctrl = limb.controls[s];
+          if (!seg) break;
+          const nodeX = segStartX + s * segStepX;
+          const nodeY = limbY;
+
+          const pulse = ctrl ? 0.5 + 0.5 * Math.sin(simClock * (ctrl.freq || 1) + (ctrl.phase || 0)) : 0.6;
+          const alpha = 0.35 + pulse * 0.55;
+          const thickR = 2.5 + clamp(seg.thickness / 1.0, 0, 1) * 5;
+          const lenW = clamp(seg.length / 2.5, 0.2, 1);
+          const edgeW = 1.0 + lenW * 2.4;
+
           ctx.save();
-          ctx.strokeStyle = `hsla(${hue}, 52%, 58%, ${alpha.toFixed(3)})`;
-          ctx.lineWidth = thickPx;
+          ctx.strokeStyle = `hsla(${hue}, 50%, 55%, ${(alpha * 0.85).toFixed(3)})`;
+          ctx.lineWidth = edgeW;
           ctx.lineCap = "round";
           ctx.beginPath();
-          ctx.moveTo(sx1, sy1);
-          ctx.lineTo(sx2, sy2);
+          ctx.moveTo(prevX, prevY);
+          ctx.lineTo(nodeX, nodeY);
           ctx.stroke();
 
-          ctx.fillStyle = `hsla(${hue}, 45%, 72%, ${(alpha * 0.9).toFixed(3)})`;
+          ctx.fillStyle = `hsla(${hue}, 48%, 60%, ${alpha.toFixed(3)})`;
           ctx.beginPath();
-          ctx.arc(sx1, sy1, Math.max(2.5, thickPx * 0.5), 0, Math.PI * 2);
+          ctx.arc(nodeX, nodeY, thickR, 0, Math.PI * 2);
           ctx.fill();
-          if (si === chain.length - 1) {
-            const endR = Math.max(3, thickPx * 0.6);
-            ctx.fillStyle = `hsla(${hue}, 40%, 65%, ${(alpha * 0.8).toFixed(3)})`;
+
+          if (ctrl) {
+            const ampNorm = clamp((ctrl.amp || 0) / 11.5, 0, 1);
+            const ringR = thickR + 2 + ampNorm * 3;
+            ctx.strokeStyle = `hsla(${hue}, 40%, 65%, ${(pulse * 0.35).toFixed(3)})`;
+            ctx.lineWidth = 0.8;
             ctx.beginPath();
-            ctx.arc(sx2, sy2, endR, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.arc(nodeX, nodeY, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+
+          prevX = nodeX;
+          prevY = nodeY;
+        }
+
+        for (let s = sc; s < MAX_SEGMENTS_PER_LIMB; s++) {
+          const nodeX = segStartX + s * segStepX;
+          ctx.save();
+          ctx.fillStyle = "rgba(120, 135, 110, 0.15)";
+          ctx.beginPath();
+          ctx.arc(nodeX, limbY, 2, 0, Math.PI * 2);
+          ctx.fill();
+          if (s === sc) {
+            ctx.strokeStyle = "rgba(120, 135, 110, 0.08)";
+            ctx.lineWidth = 0.6;
+            ctx.setLineDash([2, 3]);
+            ctx.beginPath();
+            ctx.moveTo(prevX, prevY);
+            ctx.lineTo(nodeX, limbY);
+            ctx.stroke();
+            ctx.setLineDash([]);
           }
           ctx.restore();
         }
       }
 
-      ctx.save();
-      ctx.strokeStyle = "rgba(200, 230, 155, 0.12)";
-      ctx.lineWidth = 0.5;
-      ctx.setLineDash([3, 4]);
-      ctx.beginPath();
-      ctx.moveTo(toScreenX(minX), toScreenY(0));
-      ctx.lineTo(toScreenX(maxX), toScreenY(0));
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(toScreenX(0), toScreenY(minY));
-      ctx.lineTo(toScreenX(0), toScreenY(maxY));
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
+      for (let i = 0; i < MAX_LIMBS; i++) {
+        if (genome.limbs[i].enabled) continue;
+        const hue = limbHues[i % limbHues.length];
+        const y = oy + H - 8;
+        const x = ox + W - 14 - (MAX_LIMBS - 1 - i) * 10;
+        ctx.save();
+        ctx.fillStyle = `hsla(${hue}, 20%, 45%, 0.2)`;
+        ctx.beginPath();
+        ctx.arc(x, y, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
     function vizDrawOscilloscope(ctx, genome, ox, oy, W, H) {
@@ -1592,20 +1631,23 @@
         ctx.restore();
 
         const period = control.freq > 0.01 ? (2 * Math.PI) / control.freq : 4;
-        const displayDuration = period * 2.5;
+        const windowDuration = period * 2.5;
         const maxVal = MAX_MOTOR_SPEED;
+        const tStart = simClock - windowDuration;
+        const dotFrac = 1.0;
 
         ctx.save();
         ctx.beginPath();
         ctx.rect(traceLeft - 1, rowY - rowH * 0.45, traceW + 2, rowH * 0.9);
         ctx.clip();
 
-        ctx.strokeStyle = `hsla(${hue}, 55%, 55%, 0.7)`;
+        const trailAlpha = 0.5;
+        ctx.strokeStyle = `hsla(${hue}, 55%, 55%, ${trailAlpha})`;
         ctx.lineWidth = 1.2;
         ctx.beginPath();
         let first = true;
         for (let px = 0; px <= traceW; px += 1.5) {
-          const t = (px / traceW) * displayDuration;
+          const t = tStart + (px / traceW) * windowDuration;
           const signal = clamp(control.bias + control.amp * Math.sin(control.freq * t + control.phase), -maxVal, maxVal);
           const ny = rowY - (signal / maxVal) * (rowH * 0.38);
           if (first) { ctx.moveTo(traceLeft + px, ny); first = false; }
@@ -1613,11 +1655,10 @@
         }
         ctx.stroke();
 
-        const tNow = simClock % displayDuration;
-        const nowX = traceLeft + (tNow / displayDuration) * traceW;
         const nowSignal = clamp(control.bias + control.amp * Math.sin(control.freq * simClock + control.phase), -maxVal, maxVal);
         const nowY = rowY - (nowSignal / maxVal) * (rowH * 0.38);
-        ctx.fillStyle = `hsla(${hue}, 70%, 75%, 0.95)`;
+        const nowX = traceLeft + dotFrac * traceW;
+        ctx.fillStyle = `hsla(${hue}, 70%, 78%, 0.95)`;
         ctx.beginPath();
         ctx.arc(nowX, nowY, 2.5, 0, Math.PI * 2);
         ctx.fill();
@@ -1626,37 +1667,10 @@
       }
     }
 
-    function vizDrawPhaseWheel(ctx, genome, ox, oy, size) {
-      vizDrawSectionLabel(ctx, "PHASE", ox + size * 0.18, oy + 10);
-      const cx = ox + size * 0.5;
-      const cy = oy + size * 0.55;
-      const r = size * 0.34;
-
-      ctx.save();
-      ctx.strokeStyle = "rgba(180, 210, 140, 0.15)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.strokeStyle = "rgba(180, 210, 140, 0.06)";
-      ctx.lineWidth = 0.5;
-      for (let a = 0; a < 4; a++) {
-        const angle = (a / 4) * Math.PI * 2;
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(angle) * r * 0.25, cy + Math.sin(angle) * r * 0.25);
-        ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
-        ctx.stroke();
-      }
-
-      ctx.strokeStyle = "rgba(180, 210, 140, 0.08)";
-      ctx.beginPath();
-      ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-
+    function vizDrawGaitTiming(ctx, genome, ox, oy, W, H) {
+      vizDrawSectionLabel(ctx, "GAIT TIMING", ox, oy + 10);
       const limbHues = [142, 85, 42, 190, 22, 260];
-      const dots = [];
+      const joints = [];
       for (let i = 0; i < MAX_LIMBS; i++) {
         const limb = genome.limbs[i];
         if (!limb.enabled) continue;
@@ -1664,31 +1678,70 @@
         for (let s = 0; s < sc; s++) {
           const ctrl = limb.controls[s];
           if (!ctrl) continue;
-          const phase = ctrl.phase || 0;
-          const amp = clamp(ctrl.amp / 11.5, 0, 1);
-          dots.push({ phase, amp, hue: limbHues[i % limbHues.length] });
+          joints.push({
+            label: `L${i + 1}.${s + 1}`,
+            phase: ((ctrl.phase || 0) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2),
+            amp: clamp((ctrl.amp || 0) / 11.5, 0, 1),
+            hue: limbHues[i % limbHues.length],
+          });
         }
       }
+      if (joints.length === 0) return;
+
+      const barLeft = ox + 4;
+      const barRight = ox + W - 4;
+      const barW = barRight - barLeft;
+      const maxRows = Math.min(joints.length, 10);
+      const rowH = Math.min(Math.floor((H - 22) / maxRows), 12);
+      const startY = oy + 16;
+      const twoPi = Math.PI * 2;
 
       ctx.save();
-      for (const dot of dots) {
-        const angle = dot.phase - Math.PI * 0.5;
-        const dist = r * (0.3 + dot.amp * 0.7);
-        const dx = cx + Math.cos(angle) * dist;
-        const dy = cy + Math.sin(angle) * dist;
-        ctx.fillStyle = `hsla(${dot.hue}, 55%, 62%, 0.85)`;
-        ctx.beginPath();
-        ctx.arc(dx, dy, 2.8 + dot.amp * 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      ctx.strokeStyle = "rgba(160, 190, 130, 0.12)";
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([2, 3]);
+      const halfX = barLeft + barW * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(halfX, startY);
+      ctx.lineTo(halfX, startY + maxRows * rowH);
+      ctx.stroke();
+      ctx.setLineDash([]);
       ctx.restore();
 
+      for (let r = 0; r < maxRows; r++) {
+        const joint = joints[r];
+        const y = startY + r * rowH;
+        const barH = Math.max(4, rowH - 3);
+
+        ctx.save();
+        ctx.fillStyle = `hsla(${joint.hue}, 25%, 40%, 0.12)`;
+        vizRoundRect(ctx, barLeft, y, barW, barH, 2);
+        ctx.fill();
+
+        const phaseX = barLeft + (joint.phase / twoPi) * barW;
+        const tickH = barH;
+        const tickW = Math.max(3, 2 + joint.amp * 8);
+        ctx.fillStyle = `hsla(${joint.hue}, 55%, 58%, ${(0.45 + joint.amp * 0.45).toFixed(2)})`;
+        vizRoundRect(ctx, phaseX - tickW * 0.5, y, tickW, tickH, 1.5);
+        ctx.fill();
+
+        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(simClock * 1.5 + joint.phase));
+        ctx.fillStyle = `hsla(${joint.hue}, 65%, 72%, ${(pulse * 0.7).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(phaseX, y + tickH * 0.5, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
       ctx.save();
-      ctx.font = "7px Trebuchet MS, sans-serif";
+      ctx.font = "6.5px Trebuchet MS, sans-serif";
       ctx.fillStyle = "rgba(180, 210, 140, 0.35)";
       ctx.textAlign = "center";
-      ctx.fillText("0", cx, cy - r - 3);
-      ctx.fillText("\u03C0", cx, cy + r + 8);
+      const labelY = startY + maxRows * rowH + 8;
+      ctx.fillText("0", barLeft, labelY);
+      ctx.fillText("\u03C0", barLeft + barW * 0.5, labelY);
+      ctx.fillText("2\u03C0", barRight, labelY);
       ctx.restore();
     }
 
