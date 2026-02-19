@@ -44,6 +44,46 @@
       user-select: none;
     }
 
+    .panelTop {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+      font-size: 11px;
+      letter-spacing: 0.38px;
+      text-transform: uppercase;
+      color: #c7e6a4;
+    }
+
+    .panelToggle {
+      background: rgba(17, 28, 18, 0.92);
+      color: #d4efaa;
+      border: 1px solid rgba(176, 206, 110, 0.4);
+      border-radius: 6px;
+      padding: 2px 7px;
+      font-size: 10px;
+      cursor: pointer;
+      text-transform: none;
+      letter-spacing: 0.2px;
+    }
+
+    .panelToggle:hover {
+      background: rgba(30, 46, 31, 0.95);
+    }
+
+    .panelToggle:active {
+      transform: translateY(1px);
+    }
+
+    #hud.collapsed {
+      padding-bottom: 8px;
+    }
+
+    #hud.collapsed #hudBody {
+      display: none;
+    }
+
     #hud .label {
       color: var(--hud-subtle);
       margin-right: 5px;
@@ -109,6 +149,15 @@
       user-select: none;
     }
 
+    #genomePanel.collapsed {
+      width: auto;
+      min-width: 245px;
+    }
+
+    #genomePanel.collapsed #genomeBody {
+      display: none;
+    }
+
     #genomeTitle {
       font-size: 12px;
       letter-spacing: 0.45px;
@@ -147,54 +196,82 @@
 <body>
   <canvas id="app"></canvas>
   <div id="hud">
-    <div><span class="label">Generation:</span><span id="gen">1</span> (<span id="champIndex">1</span>/<span id="pop">16</span>)</div>
-    <div><span class="label">Best score:</span><span id="bestEver">0.00</span></div>
-    <div><span class="label">Current score:</span><span id="bestNow">0.00</span></div>
-    <div><span class="label">Trial:</span><span id="trialInfo">1/1</span></div>
-    <div><span class="label">Time left:</span><span id="timeLeft">0.0</span>s</div>
-    <div><span class="label">Sim rate:</span><span id="simRate">1.00x</span></div>
-    <div><span class="label">Queued batch:</span><span id="queuedPop">none</span></div>
-    <div><span class="label">Fast skip:</span><span id="fastSkipStatus">off</span></div>
-    <label class="ctrl">
-      Batch size
-      <input id="populationSlider" type="range" min="1" max="64" step="1" value="40">
-      <span id="populationSliderValue">40</span>
-    </label>
-    <label class="ctrl">
-      Speed
-      <select id="speedSelect">
-        <option value="1" selected>1x</option>
-        <option value="1.5">1.5x</option>
-        <option value="2">2x</option>
-        <option value="3">3x</option>
-        <option value="4">4x</option>
-        <option value="6">6x</option>
-        <option value="8">8x</option>
-      </select>
-    </label>
-    <label class="ctrl">
-      Genome viz
-      <select id="genomeVizMode">
-        <option value="hide">Hide</option>
-        <option value="current" selected>Show current</option>
-        <option value="best">Show best</option>
-      </select>
-    </label>
-    <div class="ctrl">
-      Fast-forward gens
-      <button id="skip1Btn" type="button">+1</button>
-      <button id="skip10Btn" type="button">+10</button>
-      <button id="skip100Btn" type="button">+100</button>
-      <button id="skip200Btn" type="button">+200</button>
-      <button id="skip500Btn" type="button">+500</button>
-      <button id="skipStopBtn" type="button">Stop</button>
+    <div class="panelTop">
+      <span>Evolution Controls</span>
+      <button id="toggleHudBtn" class="panelToggle" type="button">Hide</button>
     </div>
-    <div class="hint">Space: pause | R: reseed (confirmation) | Drag: temporary manual camera</div>
+    <div id="hudBody">
+      <div><span class="label">Generation:</span><span id="gen">1</span> (<span id="champIndex">1</span>/<span id="pop">16</span>)</div>
+      <div><span class="label">Best score:</span><span id="bestEver">0.00</span></div>
+      <div><span class="label">Current score:</span><span id="bestNow">0.00</span></div>
+      <div><span class="label">Trial:</span><span id="trialInfo">1/1</span></div>
+      <div><span class="label">Time left:</span><span id="timeLeft">0.0</span>s</div>
+      <div><span class="label">Sim rate:</span><span id="simRate">1.00x</span></div>
+      <div><span class="label">Queued batch:</span><span id="queuedPop">none</span></div>
+      <div><span class="label">Fast skip:</span><span id="fastSkipStatus">off</span></div>
+      <div class="ctrl">
+        Evolution
+        <button id="pauseResumeBtn" type="button">Pause</button>
+        <button id="restartBtn" type="button">Restart</button>
+      </div>
+      <div class="ctrl">
+        Genomes
+        <button id="exportBestBtn" type="button">Export best</button>
+        <button id="exportCurrentBtn" type="button">Export current</button>
+        <button id="importGenomeBtn" type="button">Import</button>
+        <input id="importGenomeInput" type="file" accept=".json,application/json" multiple style="display:none">
+      </div>
+      <div class="ctrl">
+        Checkpoint
+        <button id="saveCheckpointBtn" type="button">Save</button>
+        <button id="loadCheckpointBtn" type="button">Load latest</button>
+      </div>
+      <label class="ctrl">
+        Batch size
+        <input id="populationSlider" type="range" min="1" max="64" step="1" value="40">
+        <span id="populationSliderValue">40</span>
+      </label>
+      <label class="ctrl">
+        Speed
+        <select id="speedSelect">
+          <option value="1" selected>1x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+          <option value="3">3x</option>
+          <option value="4">4x</option>
+          <option value="6">6x</option>
+          <option value="8">8x</option>
+        </select>
+      </label>
+      <label class="ctrl">
+        Genome viz
+        <select id="genomeVizMode">
+          <option value="hide">Hide</option>
+          <option value="current" selected>Show current</option>
+          <option value="best">Show best</option>
+        </select>
+      </label>
+      <div class="ctrl">
+        Fast-forward gens
+        <button id="skip1Btn" type="button">+1</button>
+        <button id="skip10Btn" type="button">+10</button>
+        <button id="skip100Btn" type="button">+100</button>
+        <button id="skip200Btn" type="button">+200</button>
+        <button id="skip500Btn" type="button">+500</button>
+        <button id="skipStopBtn" type="button">Stop</button>
+      </div>
+      <div class="hint">Space: pause | R: reseed (confirmation) | Drag: temporary manual camera</div>
+    </div>
   </div>
   <div id="genomePanel">
-    <div id="genomeTitle">Champion Genome Network</div>
-    <canvas id="genomeCanvas"></canvas>
-    <div id="genomeMeta">No champion yet.</div>
+    <div class="panelTop">
+      <span id="genomeTitle">Champion Genome Network</span>
+      <button id="toggleGenomeBtn" class="panelToggle" type="button">Hide</button>
+    </div>
+    <div id="genomeBody">
+      <canvas id="genomeCanvas"></canvas>
+      <div id="genomeMeta">No champion yet.</div>
+    </div>
   </div>
 
   <script type="importmap">
@@ -265,6 +342,13 @@
     const BACKEND_WS_BASE = `${BACKEND_WS_SCHEME}://${window.location.host}`;
     const BACKEND_WS_URL = `${BACKEND_WS_BASE}/api/trial/ws`;
     const BACKEND_EVAL_WS_URL = `${BACKEND_WS_BASE}/api/eval/ws`;
+    const BACKEND_EVOLUTION_WS_URL = `${BACKEND_WS_BASE}/api/evolution/ws`;
+    const BACKEND_EVOLUTION_CONTROL_URL = `${BACKEND_HTTP_URL}/api/evolution/control`;
+    const BACKEND_EVOLUTION_GENOME_CURRENT_URL = `${BACKEND_HTTP_URL}/api/evolution/genome/current`;
+    const BACKEND_EVOLUTION_GENOME_BEST_URL = `${BACKEND_HTTP_URL}/api/evolution/genome/best`;
+    const BACKEND_EVOLUTION_GENOME_IMPORT_URL = `${BACKEND_HTTP_URL}/api/evolution/genome/import`;
+    const BACKEND_EVOLUTION_CHECKPOINT_SAVE_URL = `${BACKEND_HTTP_URL}/api/evolution/checkpoint/save`;
+    const BACKEND_EVOLUTION_CHECKPOINT_LOAD_URL = `${BACKEND_HTTP_URL}/api/evolution/checkpoint/load`;
 
     const GROUND_GROUP = 1;
 
@@ -351,6 +435,17 @@
     const skip200Btn = document.getElementById("skip200Btn");
     const skip500Btn = document.getElementById("skip500Btn");
     const skipStopBtn = document.getElementById("skipStopBtn");
+    const pauseResumeBtn = document.getElementById("pauseResumeBtn");
+    const restartBtn = document.getElementById("restartBtn");
+    const exportBestBtn = document.getElementById("exportBestBtn");
+    const exportCurrentBtn = document.getElementById("exportCurrentBtn");
+    const importGenomeBtn = document.getElementById("importGenomeBtn");
+    const importGenomeInput = document.getElementById("importGenomeInput");
+    const saveCheckpointBtn = document.getElementById("saveCheckpointBtn");
+    const loadCheckpointBtn = document.getElementById("loadCheckpointBtn");
+    const toggleHudBtn = document.getElementById("toggleHudBtn");
+    const toggleGenomeBtn = document.getElementById("toggleGenomeBtn");
+    const hud = document.getElementById("hud");
 
     populationSlider.min = String(MIN_POPULATION_SIZE);
     populationSlider.max = String(MAX_POPULATION_SIZE);
@@ -384,6 +479,13 @@
     let backendFastForwardBusy = false;
     let backendFastForwardAbort = null;
     let backendTrialToken = 0;
+    let evolutionSocket = null;
+    let evolutionReconnectTimer = null;
+    let evolutionConnected = false;
+    let injectionQueueCount = 0;
+    let lastCheckpointId = "";
+    let hudCollapsed = false;
+    let genomeCollapsed = false;
     let simSpeed = 1;
     let effectiveSimSpeed = 1;
     let genomeVizMode = "best";
@@ -409,13 +511,14 @@
     populationSlider.addEventListener("change", () => {
       pendingPopulationSize = clamp(parseInt(populationSlider.value, 10), MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
       populationSliderValue.textContent = String(pendingPopulationSize);
+      void sendEvolutionControl({ action: "set_population_size", populationSize: pendingPopulationSize });
     });
     speedSelect.addEventListener("change", () => {
       simSpeed = clamp(parseFloat(speedSelect.value), 0.5, MAX_SIM_SPEED);
-      if (backendEnabled && backendSocket && !backendFastForwardBusy && fastForwardGenerationsRemaining <= 0) {
-        backendTrialToken += 1;
-        startAttempt(currentAttemptIndex, currentTrialIndex);
-      }
+      void sendEvolutionControl({
+        action: "set_run_speed",
+        runSpeed: simSpeed,
+      });
     });
     genomeVizModeSelect.addEventListener("change", () => {
       genomeVizMode = genomeVizModeSelect.value;
@@ -427,16 +530,55 @@
     skip200Btn.addEventListener("click", () => queueFastForward(200));
     skip500Btn.addEventListener("click", () => queueFastForward(500));
     skipStopBtn.addEventListener("click", stopFastForward);
+    pauseResumeBtn.addEventListener("click", () => {
+      void sendEvolutionControl({ action: paused ? "resume" : "pause" });
+    });
+    restartBtn.addEventListener("click", () => {
+      const accepted = window.confirm("Restart will reset backend evolution progress. Continue?");
+      if (accepted) {
+        void sendEvolutionControl({ action: "restart" });
+      }
+    });
+    exportBestBtn.addEventListener("click", () => {
+      void exportGenome(BACKEND_EVOLUTION_GENOME_BEST_URL, "best-genome");
+    });
+    exportCurrentBtn.addEventListener("click", () => {
+      void exportGenome(BACKEND_EVOLUTION_GENOME_CURRENT_URL, "current-genome");
+    });
+    importGenomeBtn.addEventListener("click", () => {
+      importGenomeInput.click();
+    });
+    importGenomeInput.addEventListener("change", () => {
+      void importGenomesFromFiles();
+    });
+    saveCheckpointBtn.addEventListener("click", () => {
+      void saveCheckpoint();
+    });
+    loadCheckpointBtn.addEventListener("click", () => {
+      const accepted = window.confirm("Load latest checkpoint into backend evolution?");
+      if (accepted) {
+        void loadLatestCheckpoint();
+      }
+    });
+    toggleHudBtn.addEventListener("click", () => {
+      setHudCollapsed(!hudCollapsed);
+    });
+    toggleGenomeBtn.addEventListener("click", () => {
+      setGenomeCollapsed(!genomeCollapsed);
+    });
     window.addEventListener("keydown", (event) => {
       if (event.code === "Space") {
-        paused = !paused;
+        event.preventDefault();
+        void sendEvolutionControl({ action: paused ? "resume" : "pause" });
       } else if (event.key === "r" || event.key === "R") {
-        requestResetEvolution("Keyboard reset (R)");
+        requestResetEvolution("Keyboard restart (R)");
       }
     });
 
     let previousTime = performance.now() * 0.001;
     let accumulator = 0;
+    setHudCollapsed(false);
+    setGenomeCollapsed(false);
 
     function animate(nowMs) {
       requestAnimationFrame(animate);
@@ -446,30 +588,12 @@
       previousTime = now;
       let readyBackendResult = null;
 
-      if (!paused) {
-        if (backendEnabled) {
-          if (fastForwardGenerationsRemaining > 0) {
-            void pumpBackendFastForward();
-            effectiveSimSpeed = backendFastForwardBusy ? MAX_SIM_SPEED : Math.max(1, simSpeed);
-          } else {
-            effectiveSimSpeed = (backendSocket || hasPendingBackendPlayback()) ? simSpeed : 0;
-            for (const creature of population) {
-              creature.advancePlayback(frameDelta, effectiveSimSpeed);
-            }
-            syncBackendPlaybackClock();
-            readyBackendResult = consumeCompletedBackendPlaybackResult();
-          }
-        } else {
-          paused = true;
-          effectiveSimSpeed = 0;
-        }
-      } else {
-        effectiveSimSpeed = 0;
+      effectiveSimSpeed = paused ? 0 : simSpeed;
+      for (const creature of population) {
+        creature.advancePlayback(frameDelta, effectiveSimSpeed);
       }
-
-      if (readyBackendResult) {
-        onBackendTrialComplete(readyBackendResult);
-      }
+      syncBackendPlaybackClock();
+      readyBackendResult = consumeCompletedBackendPlaybackResult();
 
       const champion = getChampion();
       const currentCandidate = getCurrentCandidate();
@@ -509,64 +633,291 @@
     }
 
     function requestResetEvolution(trigger) {
-      if (!shouldWarnReset()) {
-        resetEvolution();
-        return;
-      }
       const accepted = window.confirm(`${trigger} will reset current evolution progress. Continue?`);
       if (accepted) {
-        resetEvolution();
+        void sendEvolutionControl({ action: "restart" });
       }
     }
 
     function resetEvolution() {
-      populationSize = pendingPopulationSize;
-      generation = 1;
-      bestEverScore = 0;
-      generationClock = 0;
-      simClock = 0;
-      accumulator = 0;
-      noveltyArchive.length = 0;
-      fastForwardGenerationsRemaining = 0;
-      if (backendFastForwardAbort) {
-        backendFastForwardAbort.abort();
-        backendFastForwardAbort = null;
-      }
-      if (backendEnabled) {
-        backendTrialToken += 1;
-        if (backendSocket) {
-          backendSocket.close();
-          backendSocket = null;
-        }
-      }
-      seedPopulation();
+      void sendEvolutionControl({ action: "restart" });
     }
 
     function queueFastForward(generations) {
-      if (!backendEnabled) {
-        fastForwardGenerationsRemaining = 0;
-        return;
-      }
-      fastForwardGenerationsRemaining += Math.max(0, generations | 0);
-      paused = false;
-      if (backendEnabled) {
-        backendTrialToken += 1;
-        if (backendSocket) {
-          backendSocket.close();
-          backendSocket = null;
-        }
-      }
-      if (!backendFastForwardBusy) {
-        void pumpBackendFastForward();
-      }
+      const count = Math.max(0, generations | 0);
+      if (count <= 0) return;
+      void sendEvolutionControl({
+        action: "queue_fast_forward",
+        fastForwardGenerations: count,
+      });
     }
 
     function stopFastForward() {
-      fastForwardGenerationsRemaining = 0;
-      if (backendFastForwardAbort) {
-        backendFastForwardAbort.abort();
-        backendFastForwardAbort = null;
+      void sendEvolutionControl({ action: "stop_fast_forward" });
+    }
+
+    async function sendEvolutionControl(payload) {
+      try {
+        const response = await fetch(BACKEND_EVOLUTION_CONTROL_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          throw new Error(`control request failed (${response.status})`);
+        }
+        const status = await response.json();
+        applyEvolutionStatus(status);
+      } catch (error) {
+        console.error("evolution control failed", error);
       }
+    }
+
+    async function exportGenome(url, prefix) {
+      try {
+        const response = await fetch(url, { method: "GET" });
+        if (!response.ok) {
+          throw new Error(`export failed (${response.status})`);
+        }
+        const genome = await response.json();
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const blob = new Blob([JSON.stringify(genome, null, 2)], { type: "application/json" });
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = href;
+        a.download = `${prefix}-${stamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(href);
+      } catch (error) {
+        console.error("genome export failed", error);
+      }
+    }
+
+    function extractGenomesFromObject(value) {
+      if (!value) return [];
+      if (Array.isArray(value)) {
+        return value.filter(isGenomeShape);
+      }
+      if (Array.isArray(value.genomes)) {
+        return value.genomes.filter(isGenomeShape);
+      }
+      if (value.genome && isGenomeShape(value.genome)) {
+        return [value.genome];
+      }
+      if (isGenomeShape(value)) {
+        return [value];
+      }
+      return [];
+    }
+
+    function isGenomeShape(value) {
+      return Boolean(
+        value &&
+        typeof value === "object" &&
+        value.torso &&
+        Array.isArray(value.limbs)
+      );
+    }
+
+    async function importGenomesFromFiles() {
+      const files = Array.from(importGenomeInput.files || []);
+      importGenomeInput.value = "";
+      if (files.length === 0) return;
+      const genomes = [];
+      for (const file of files) {
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(text);
+          const extracted = extractGenomesFromObject(parsed);
+          genomes.push(...extracted);
+        } catch (error) {
+          console.error(`failed parsing import file ${file.name}`, error);
+        }
+      }
+      if (genomes.length === 0) {
+        console.warn("no valid genomes found in selected files");
+        return;
+      }
+      try {
+        const response = await fetch(BACKEND_EVOLUTION_GENOME_IMPORT_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            genomes,
+            mutationMode: "none",
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`import failed (${response.status})`);
+        }
+      } catch (error) {
+        console.error("genome import failed", error);
+      }
+    }
+
+    async function saveCheckpoint() {
+      try {
+        const suggested = `gen-${generation}`;
+        const name = window.prompt("Checkpoint name (optional):", suggested) || "";
+        const response = await fetch(BACKEND_EVOLUTION_CHECKPOINT_SAVE_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        if (!response.ok) {
+          throw new Error(`checkpoint save failed (${response.status})`);
+        }
+        const payload = await response.json();
+        lastCheckpointId = payload.id || "";
+        saveCheckpointBtn.title = lastCheckpointId ? `Last saved: ${lastCheckpointId}` : "";
+      } catch (error) {
+        console.error("checkpoint save failed", error);
+      }
+    }
+
+    async function loadLatestCheckpoint() {
+      try {
+        const response = await fetch(BACKEND_EVOLUTION_CHECKPOINT_LOAD_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!response.ok) {
+          throw new Error(`checkpoint load failed (${response.status})`);
+        }
+        const payload = await response.json();
+        lastCheckpointId = payload.id || "";
+        loadCheckpointBtn.title = lastCheckpointId ? `Last loaded: ${lastCheckpointId}` : "";
+      } catch (error) {
+        console.error("checkpoint load failed", error);
+      }
+    }
+
+    function connectEvolutionSocket() {
+      if (evolutionSocket && (evolutionSocket.readyState === WebSocket.CONNECTING || evolutionSocket.readyState === WebSocket.OPEN)) {
+        return;
+      }
+      const socket = new WebSocket(BACKEND_EVOLUTION_WS_URL);
+      evolutionSocket = socket;
+
+      socket.addEventListener("open", () => {
+        evolutionConnected = true;
+        backendOfflineReason = "";
+      });
+
+      socket.addEventListener("message", (event) => {
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch (error) {
+          console.error("evolution stream parse error", error);
+          return;
+        }
+        if (msg.type === "status") {
+          applyEvolutionStatus(msg.status || {});
+          return;
+        }
+        if (msg.type === "trial_started") {
+          const genome = msg.genome || getCurrentCandidate()?.genome || randomGenome();
+          clearPopulation();
+          const view = new BackendCreatureView(0, genome, new CANNON.Vec3(0, 0.05, 0));
+          population.push(view);
+          const partSizes = Array.isArray(msg.partSizes) ? msg.partSizes : (Array.isArray(msg.part_sizes) ? msg.part_sizes : []);
+          if (partSizes.length > 0) {
+            view.setPartSizes(partSizes);
+          }
+          return;
+        }
+        if (msg.type === "snapshot") {
+          const view = getPrimaryBackendView();
+          if (!view || !msg.frame) return;
+          view.bufferFrame(msg.frame);
+          return;
+        }
+        if (msg.type === "trial_complete") {
+          const view = getPrimaryBackendView();
+          if (!view) return;
+          view.markTrialComplete(msg.result || null);
+          return;
+        }
+        if (msg.type === "error") {
+          console.error("evolution stream error", msg.message);
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (evolutionSocket === socket) {
+          evolutionSocket = null;
+        }
+        evolutionConnected = false;
+        backendOfflineReason = "evolution stream disconnected";
+        if (evolutionReconnectTimer) {
+          clearTimeout(evolutionReconnectTimer);
+        }
+        evolutionReconnectTimer = setTimeout(() => {
+          connectEvolutionSocket();
+        }, 1200);
+      });
+
+      socket.addEventListener("error", (event) => {
+        console.error("evolution websocket error", event);
+        backendOfflineReason = "evolution stream transport error";
+      });
+    }
+
+    function applyEvolutionStatus(status) {
+      generation = Number.isFinite(status.generation) ? status.generation : generation;
+      populationSize = clamp((status.populationSize ?? status.population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
+      pendingPopulationSize = clamp((status.pendingPopulationSize ?? status.pending_population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
+      currentAttemptIndex = Math.max(0, (status.currentAttemptIndex ?? status.current_attempt_index ?? 0) | 0);
+      currentTrialIndex = Math.max(0, (status.currentTrialIndex ?? status.current_trial_index ?? 0) | 0);
+      bestEverScore = Number.isFinite(status.bestEverScore) ? status.bestEverScore : (Number.isFinite(status.best_ever_score) ? status.best_ever_score : bestEverScore);
+      paused = Boolean(status.paused);
+      const runSpeedRaw = status.runSpeed ?? status.run_speed;
+      if (Number.isFinite(runSpeedRaw)) {
+        simSpeed = clamp(Number(runSpeedRaw), 0.5, MAX_SIM_SPEED);
+        speedSelect.value = String(simSpeed);
+      }
+      const ffRemainingRaw = status.fastForwardRemaining ?? status.fast_forward_remaining;
+      const ffActiveRaw = status.fastForwardActive ?? status.fast_forward_active;
+      const queueRaw = status.injectionQueueCount ?? status.injection_queue_count;
+      fastForwardGenerationsRemaining = Number.isFinite(ffRemainingRaw) ? Math.max(0, ffRemainingRaw | 0) : fastForwardGenerationsRemaining;
+      backendFastForwardBusy = Boolean(ffActiveRaw);
+      injectionQueueCount = Number.isFinite(queueRaw) ? Math.max(0, queueRaw | 0) : injectionQueueCount;
+      if (Number.isFinite(status.currentScore ?? status.current_score)) {
+        const score = Number(status.currentScore ?? status.current_score);
+        const view = getPrimaryBackendView();
+        if (view) {
+          view.fitness = Math.max(view.fitness, score);
+        }
+      }
+      if (status.currentGenome || status.current_genome) {
+        const genome = status.currentGenome || status.current_genome;
+        if (genome) {
+          batchGenomes[currentAttemptIndex] = cloneGenome(genome);
+        }
+      }
+      if (status.bestGenome || status.best_genome) {
+        const genome = status.bestGenome || status.best_genome;
+        if (genome) {
+          batchResults = [{
+            genome: cloneGenome(genome),
+            fitness: bestEverScore,
+            selectionScore: bestEverScore,
+            descriptor: [0, 0, 0, 0, 0],
+            novelty: 0,
+            noveltyNorm: 0,
+            qualityNorm: 0,
+            localCompetition: 0,
+            attempt: currentAttemptIndex,
+            metrics: {},
+          }];
+        }
+      }
+      populationSlider.value = String(pendingPopulationSize);
+      populationSliderValue.textContent = String(pendingPopulationSize);
     }
 
     function seedPopulation() {
@@ -1189,16 +1540,19 @@
       bestNowLabel.textContent = champion ? champion.fitness.toFixed(2) : "0.00";
       championLabel.textContent = String(Math.min(currentAttemptIndex + 1, populationSize));
       trialInfoLabel.textContent = `${Math.min(currentTrialIndex + 1, TRIALS_PER_CANDIDATE)}/${TRIALS_PER_CANDIDATE}`;
-      simRateLabel.textContent = backendEnabled
-        ? `${effectiveSimSpeed.toFixed(2)}x (backend)`
-        : "0.00x (backend offline)";
+      simRateLabel.textContent = evolutionConnected
+        ? `${effectiveSimSpeed.toFixed(2)}x (viewer)`
+        : "0.00x (disconnected)";
       timeLeftLabel.textContent = Math.max(0, GENERATION_SECONDS - generationClock).toFixed(1);
-      queuedPopLabel.textContent = pendingPopulationSize === populationSize ? "none" : `${pendingPopulationSize} (next gen)`;
-      fastSkipStatusLabel.textContent = backendEnabled
+      const pendingText = pendingPopulationSize === populationSize ? "none" : `${pendingPopulationSize} (next gen)`;
+      const injectionText = injectionQueueCount > 0 ? ` | inject ${injectionQueueCount}` : "";
+      queuedPopLabel.textContent = `${pendingText}${injectionText}`;
+      fastSkipStatusLabel.textContent = evolutionConnected
         ? (fastForwardGenerationsRemaining > 0
           ? `${fastForwardGenerationsRemaining} gens remaining${backendFastForwardBusy ? " (processing...)" : ""}`
           : "off")
         : `offline${backendOfflineReason ? `: ${backendOfflineReason}` : ""}`;
+      pauseResumeBtn.textContent = paused ? "Resume" : "Pause";
     }
 
     function updateCamera(frameDelta, champion) {
@@ -1323,7 +1677,22 @@
 
     function setGenomeVizVisibility(visible) {
       genomePanel.style.display = visible ? "block" : "none";
-      if (visible) resizeGenomeCanvas();
+      if (visible && !genomeCollapsed) resizeGenomeCanvas();
+    }
+
+    function setHudCollapsed(collapsed) {
+      hudCollapsed = Boolean(collapsed);
+      hud.classList.toggle("collapsed", hudCollapsed);
+      toggleHudBtn.textContent = hudCollapsed ? "Show" : "Hide";
+    }
+
+    function setGenomeCollapsed(collapsed) {
+      genomeCollapsed = Boolean(collapsed);
+      genomePanel.classList.toggle("collapsed", genomeCollapsed);
+      toggleGenomeBtn.textContent = genomeCollapsed ? "Show" : "Hide";
+      if (!genomeCollapsed && genomePanel.style.display !== "none") {
+        resizeGenomeCanvas();
+      }
     }
 
     function resizeGenomeCanvas() {
@@ -3075,7 +3444,7 @@
       return p;
     }
 
-    seedPopulation();
+    connectEvolutionSocket();
   </script>
 </body>
 </html>

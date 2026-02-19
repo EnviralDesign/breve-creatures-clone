@@ -26,6 +26,8 @@ tools/processes.json
 *.tmp
 *.7z
 error.png
+data/checkpoints/
+data/checkpoints/**
 
 # Editor/OS files
 .DS_Store
