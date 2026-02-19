@@ -99,7 +99,7 @@
       position: fixed;
       right: 14px;
       top: 14px;
-      width: 360px;
+      width: 388px;
       padding: 10px;
       background: rgba(10, 15, 11, 0.72);
       border: 1px solid rgba(183, 208, 112, 0.35);
@@ -119,7 +119,7 @@
 
     #genomeCanvas {
       width: 100%;
-      height: 220px;
+      height: 390px;
       display: block;
       border: 1px solid rgba(180, 201, 115, 0.22);
       border-radius: 8px;
@@ -130,16 +130,16 @@
       margin-top: 6px;
       font-size: 11px;
       color: #b9d698;
-      line-height: 1.2;
+      line-height: 1.35;
       letter-spacing: 0.22px;
     }
 
     @media (max-width: 980px) {
       #genomePanel {
-        width: 300px;
+        width: 320px;
       }
       #genomeCanvas {
-        height: 180px;
+        height: 320px;
       }
     }
   </style>
@@ -157,8 +157,8 @@
     <div><span class="label">Fast skip:</span><span id="fastSkipStatus">off</span></div>
     <label class="ctrl">
       Batch size
-      <input id="populationSlider" type="range" min="1" max="28" step="1" value="16">
-      <span id="populationSliderValue">16</span>
+      <input id="populationSlider" type="range" min="1" max="64" step="1" value="40">
+      <span id="populationSliderValue">40</span>
     </label>
     <label class="ctrl">
       Speed
@@ -194,6 +194,8 @@
       <button id="skip1Btn" type="button">+1</button>
       <button id="skip10Btn" type="button">+10</button>
       <button id="skip100Btn" type="button">+100</button>
+      <button id="skip200Btn" type="button">+200</button>
+      <button id="skip500Btn" type="button">+500</button>
       <button id="skipStopBtn" type="button">Stop</button>
     </div>
     <div class="hint">Space: pause | R: reseed (confirmation) | Drag: temporary manual camera</div>
@@ -221,12 +223,12 @@
     import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
     import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js";
 
-    const DEFAULT_POPULATION_SIZE = 16;
+    const DEFAULT_POPULATION_SIZE = 40;
     const MIN_POPULATION_SIZE = 1;
-    const MAX_POPULATION_SIZE = 28;
+    const MAX_POPULATION_SIZE = 64;
     const ELITE_COUNT = 2;
     const MAX_LIMBS = 6;
-    const MAX_SEGMENTS_PER_LIMB = 3;
+    const MAX_SEGMENTS_PER_LIMB = 5;
     const GENERATION_SECONDS = 18;
     const TRIALS_PER_CANDIDATE = 3;
     const FIXED_TIME_STEP = 1 / 120;
@@ -257,7 +259,7 @@
     const FITNESS_UPRIGHT_BONUS = 1.35;
     const FITNESS_STRAIGHTNESS_BONUS = 0.8;
     const FITNESS_HEIGHT_BONUS = 0.6;
-    const FITNESS_ENERGY_PENALTY = 3.6;
+    const FITNESS_ENERGY_PENALTY = 1.2;
     const FITNESS_INSTABILITY_PENALTY = 1.25;
     const FITNESS_NET_PROGRESS_WEIGHT = 0.8;
     const FALLEN_PENALTY_STRENGTH = 0.6;
@@ -357,6 +359,8 @@
     const skip1Btn = document.getElementById("skip1Btn");
     const skip10Btn = document.getElementById("skip10Btn");
     const skip100Btn = document.getElementById("skip100Btn");
+    const skip200Btn = document.getElementById("skip200Btn");
+    const skip500Btn = document.getElementById("skip500Btn");
     const skipStopBtn = document.getElementById("skipStopBtn");
 
     populationSlider.min = String(MIN_POPULATION_SIZE);
@@ -443,6 +447,8 @@
     skip1Btn.addEventListener("click", () => queueFastForward(1));
     skip10Btn.addEventListener("click", () => queueFastForward(10));
     skip100Btn.addEventListener("click", () => queueFastForward(100));
+    skip200Btn.addEventListener("click", () => queueFastForward(200));
+    skip500Btn.addEventListener("click", () => queueFastForward(500));
     skipStopBtn.addEventListener("click", stopFastForward);
     window.addEventListener("keydown", (event) => {
       if (event.code === "Space") {
@@ -1372,116 +1378,436 @@
       const vizCreature = genomeVizMode === "current"
         ? (currentCandidate || champion)
         : champion;
-      const width = Math.max(1, Math.floor(genomeCanvas.clientWidth));
-      const height = Math.max(1, Math.floor(genomeCanvas.clientHeight));
-      genomeCtx.clearRect(0, 0, width, height);
-      genomeCtx.fillStyle = "rgba(6, 10, 8, 0.46)";
-      genomeCtx.fillRect(0, 0, width, height);
+      const W = Math.max(1, Math.floor(genomeCanvas.clientWidth));
+      const H = Math.max(1, Math.floor(genomeCanvas.clientHeight));
+      const ctx = genomeCtx;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = "rgba(6, 10, 8, 0.46)";
+      ctx.fillRect(0, 0, W, H);
 
-      const grid = 28;
-      genomeCtx.strokeStyle = "rgba(170, 194, 117, 0.08)";
-      genomeCtx.lineWidth = 1;
-      for (let x = 0; x < width; x += grid) {
-        genomeCtx.beginPath();
-        genomeCtx.moveTo(x, 0);
-        genomeCtx.lineTo(x, height);
-        genomeCtx.stroke();
-      }
-      for (let y = 0; y < height; y += grid) {
-        genomeCtx.beginPath();
-        genomeCtx.moveTo(0, y);
-        genomeCtx.lineTo(width, y);
-        genomeCtx.stroke();
-      }
+      vizDrawGrid(ctx, W, H);
 
       if (!vizCreature) {
-        genomeCtx.fillStyle = "#b8d795";
-        genomeCtx.font = "12px Trebuchet MS, Segoe UI, sans-serif";
-        genomeCtx.fillText("No champion yet.", 12, 20);
+        ctx.fillStyle = "#b8d795";
+        ctx.font = "12px Trebuchet MS, Segoe UI, sans-serif";
+        ctx.fillText("No champion yet.", 12, 20);
         genomeMeta.textContent = "No champion yet.";
-        genomeTitle.textContent = "Genome Network";
+        genomeTitle.textContent = "Genome Analysis";
         return;
       }
 
       const genome = vizCreature.genome;
-      const torsoX = width * 0.15;
-      const limbX = width * 0.38;
-      const segBaseX = width * 0.58;
-      const segStepX = width * 0.12;
-      const activeLimbs = genome.limbs.reduce((count, limb) => count + (limb.enabled ? 1 : 0), 0);
-
-      const torsoNodeRadius = 8 + clamp((genome.torso.mass - 0.25) / 1.65, 0, 1) * 8;
-      drawNode(torsoX, height * 0.5, torsoNodeRadius, "rgba(217, 241, 156, 0.9)");
-
-      for (let i = 0; i < MAX_LIMBS; i++) {
-        const limb = genome.limbs[i];
-        const yLimb = ((i + 1) / (MAX_LIMBS + 1)) * height;
-        const limbActive = limb.enabled;
-        const baseAlpha = limbActive ? 0.86 : 0.25;
-        const limbColor = limbActive ? "rgba(182, 235, 150, 1)" : "rgba(128, 138, 116, 1)";
-        drawEdge(torsoX, height * 0.5, limbX, yLimb, limbColor, 1.2, baseAlpha);
-        drawNode(limbX, yLimb, limbActive ? 4.8 : 3.2, limbColor, baseAlpha);
-
-        let prevX = limbX;
-        let prevY = yLimb;
-        const segmentCount = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
-
-        for (let segIndex = 0; segIndex < MAX_SEGMENTS_PER_LIMB; segIndex++) {
-          const seg = limb.segments[segIndex];
-          const control = limb.controls[segIndex];
-          const segX = segBaseX + segIndex * segStepX;
-          const segYOffset = (segIndex - (MAX_SEGMENTS_PER_LIMB - 1) * 0.5) * 18;
-          const segY = yLimb + segYOffset;
-          const segActive = limbActive && segIndex < segmentCount;
-
-          const ampNorm = clamp(control.amp / 11.5, 0, 1);
-          const freqNorm = clamp(control.freq / 5, 0, 1);
-          const pulse = 0.62 + 0.38 * Math.sin(simClock * control.freq + control.phase);
-          const alpha = segActive ? (0.35 + pulse * 0.6) : 0.16;
-          const hue = 170 - ampNorm * 135;
-          const sat = 45 + freqNorm * 35;
-          const light = segActive ? (46 + ampNorm * 26) : 34;
-          const edgeColor = `hsla(${hue.toFixed(0)}, ${sat.toFixed(0)}%, ${light.toFixed(0)}%, ${alpha.toFixed(3)})`;
-          const nodeColor = segActive ? edgeColor : "rgba(125, 134, 116, 0.35)";
-
-          drawEdge(prevX, prevY, segX, segY, edgeColor, 1.1 + ampNorm * 1.9, alpha);
-          drawNode(segX, segY, 2.8 + seg.thickness * 3.5, nodeColor, alpha);
-
-          prevX = segX;
-          prevY = segY;
+      const activeLimbs = genome.limbs.reduce((n, l) => n + (l.enabled ? 1 : 0), 0);
+      let totalSegments = 0;
+      let totalMass = Math.max(0.7, genome.torso.w * genome.torso.h * genome.torso.d * genome.torso.mass * genome.massScale * MASS_DENSITY_MULTIPLIER);
+      for (const limb of genome.limbs) {
+        if (!limb.enabled) continue;
+        const sc = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+        totalSegments += sc;
+        for (let s = 0; s < sc; s++) {
+          const seg = limb.segments[s];
+          if (seg) totalMass += Math.max(0.08, seg.thickness * seg.length * seg.thickness * seg.mass * genome.massScale * MASS_DENSITY_MULTIPLIER);
         }
       }
 
-      genomeCtx.fillStyle = "rgba(208, 233, 156, 0.95)";
-      genomeCtx.font = "11px Trebuchet MS, Segoe UI, sans-serif";
-      genomeCtx.fillText(`#${vizCreature.index + 1}`, 12, 16);
-      genomeCtx.fillText(`Score ${vizCreature.fitness.toFixed(2)}`, 12, 32);
-      genomeTitle.textContent = genomeVizMode === "current" ? "Current Genome Network" : "Best Genome Network";
+      const MORPH_Y0 = 0;
+      const MORPH_H = Math.floor(H * 0.41);
+      const SCOPE_Y0 = MORPH_H;
+      const SCOPE_H = Math.floor(H * 0.30);
+      const LOWER_Y0 = SCOPE_Y0 + SCOPE_H;
+      const LOWER_H = H - LOWER_Y0;
 
-      genomeMeta.textContent = `active limbs ${activeLimbs}/${MAX_LIMBS} | torso ${genome.torso.w.toFixed(2)}x${genome.torso.h.toFixed(2)}x${genome.torso.d.toFixed(2)} | density ${genome.torso.mass.toFixed(2)} | scale ${genome.massScale.toFixed(2)}`;
+      vizDrawMorphology(ctx, genome, 0, MORPH_Y0, W, MORPH_H);
+
+      vizDrawSeparator(ctx, W, SCOPE_Y0);
+      vizDrawSectionLabel(ctx, "MOTOR SIGNALS", 8, SCOPE_Y0 + 12);
+      vizDrawOscilloscope(ctx, genome, 0, SCOPE_Y0 + 16, W, SCOPE_H - 18);
+
+      vizDrawSeparator(ctx, W, LOWER_Y0);
+      vizDrawPhaseWheel(ctx, genome, W - LOWER_H + 8, LOWER_Y0 + 6, LOWER_H - 12);
+      vizDrawFitnessBreakdown(ctx, vizCreature, genome, 8, LOWER_Y0 + 6, W - LOWER_H - 4, LOWER_H - 12);
+
+      ctx.fillStyle = "rgba(208, 233, 156, 0.92)";
+      ctx.font = "11px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.fillText(`#${vizCreature.index + 1}`, 8, MORPH_Y0 + 14);
+      ctx.fillText(`Score ${vizCreature.fitness.toFixed(2)}`, 8, MORPH_Y0 + 28);
+
+      genomeTitle.textContent = genomeVizMode === "current" ? "Current Genome Analysis" : "Best Genome Analysis";
+      genomeMeta.textContent =
+        `limbs ${activeLimbs}/${MAX_LIMBS} | joints ${totalSegments} | ` +
+        `torso ${genome.torso.w.toFixed(1)}\u00d7${genome.torso.h.toFixed(1)}\u00d7${genome.torso.d.toFixed(1)} | ` +
+        `mass ${totalMass.toFixed(1)} kg | scale ${genome.massScale.toFixed(2)}`;
     }
 
-    function drawNode(x, y, radius, fill, alpha = 1) {
-      genomeCtx.save();
-      genomeCtx.globalAlpha = alpha;
-      genomeCtx.fillStyle = fill;
-      genomeCtx.beginPath();
-      genomeCtx.arc(x, y, radius, 0, Math.PI * 2);
-      genomeCtx.fill();
-      genomeCtx.restore();
+    function vizDrawGrid(ctx, W, H) {
+      const grid = 28;
+      ctx.strokeStyle = "rgba(170, 194, 117, 0.06)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < W; x += grid) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+      for (let y = 0; y < H; y += grid) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
     }
 
-    function drawEdge(x1, y1, x2, y2, color, width, alpha = 1) {
-      genomeCtx.save();
-      genomeCtx.globalAlpha = alpha;
-      genomeCtx.strokeStyle = color;
-      genomeCtx.lineWidth = width;
-      genomeCtx.beginPath();
-      const cx = (x1 + x2) * 0.5;
-      genomeCtx.moveTo(x1, y1);
-      genomeCtx.quadraticCurveTo(cx, y1, x2, y2);
-      genomeCtx.stroke();
-      genomeCtx.restore();
+    function vizDrawSeparator(ctx, W, y) {
+      ctx.strokeStyle = "rgba(170, 200, 120, 0.18)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(6, y);
+      ctx.lineTo(W - 6, y);
+      ctx.stroke();
+    }
+
+    function vizDrawSectionLabel(ctx, text, x, y) {
+      ctx.save();
+      ctx.font = "bold 8.5px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.fillStyle = "rgba(180, 210, 140, 0.45)";
+      ctx.letterSpacing = "1.2px";
+      ctx.fillText(text, x, y);
+      ctx.restore();
+    }
+
+    function vizDrawMorphology(ctx, genome, ox, oy, W, H) {
+      vizDrawSectionLabel(ctx, "MORPHOLOGY", W - 82, oy + 14);
+      const cx = ox + W * 0.5;
+      const cy = oy + H * 0.52;
+      const torso = genome.torso;
+
+      const limbChains = [];
+      for (let i = 0; i < MAX_LIMBS; i++) {
+        const limb = genome.limbs[i];
+        if (!limb.enabled) continue;
+        const sc = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+        const chain = [];
+        let px = limb.anchorX;
+        let py = limb.anchorY;
+        const dir = normalizeVec3(limb.dirX ?? 0, limb.dirY ?? -1, limb.dirZ ?? 0, { x: 0, y: -1, z: 0 });
+        for (let s = 0; s < sc; s++) {
+          const seg = limb.segments[s];
+          if (!seg) break;
+          const dx = s === 0 ? dir.x : 0;
+          const dy = s === 0 ? dir.y : -1;
+          const len = seg.length;
+          const ex = px + dx * len;
+          const ey = py + dy * len;
+          chain.push({ x1: px, y1: py, x2: ex, y2: ey, thickness: seg.thickness, mass: seg.mass, control: limb.controls[s], limbIndex: i });
+          px = ex;
+          py = ey;
+        }
+        limbChains.push(chain);
+      }
+
+      let minX = -torso.w * 0.5, maxX = torso.w * 0.5;
+      let minY = -torso.h * 0.5, maxY = torso.h * 0.5;
+      for (const chain of limbChains) {
+        for (const seg of chain) {
+          minX = Math.min(minX, seg.x1, seg.x2);
+          maxX = Math.max(maxX, seg.x1, seg.x2);
+          minY = Math.min(minY, seg.y1, seg.y2);
+          maxY = Math.max(maxY, seg.y1, seg.y2);
+        }
+      }
+      const spanX = Math.max(1, maxX - minX);
+      const spanY = Math.max(1, maxY - minY);
+      const margin = 28;
+      const scaleX = (W - margin * 2) / spanX;
+      const scaleY = (H - margin * 2) / spanY;
+      const scale = Math.min(scaleX, scaleY, 36);
+      const midX = (minX + maxX) * 0.5;
+      const midY = (minY + maxY) * 0.5;
+      const toScreenX = (x) => cx + (x - midX) * scale;
+      const toScreenY = (y) => cy + (y - midY) * scale;
+
+      const tw = torso.w * scale;
+      const th = torso.h * scale;
+      const torsoScreenX = toScreenX(0) - tw * 0.5;
+      const torsoScreenY = toScreenY(0) - th * 0.5;
+      ctx.save();
+      ctx.fillStyle = "rgba(200, 230, 155, 0.13)";
+      ctx.strokeStyle = "rgba(200, 230, 155, 0.5)";
+      ctx.lineWidth = 1.6;
+      vizRoundRect(ctx, torsoScreenX, torsoScreenY, tw, th, 3);
+      ctx.fill();
+      ctx.stroke();
+
+      const massDotRadius = clamp(torso.mass / 1.5, 0.15, 1) * 4 + 2;
+      ctx.fillStyle = "rgba(220, 245, 170, 0.7)";
+      ctx.beginPath();
+      ctx.arc(toScreenX(0), toScreenY(0), massDotRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      const limbHues = [142, 85, 42, 190, 22, 260];
+      for (let ci = 0; ci < limbChains.length; ci++) {
+        const chain = limbChains[ci];
+        const hue = limbHues[chain[0]?.limbIndex % limbHues.length] ?? 120;
+        for (let si = 0; si < chain.length; si++) {
+          const seg = chain[si];
+          const sx1 = toScreenX(seg.x1);
+          const sy1 = toScreenY(seg.y1);
+          const sx2 = toScreenX(seg.x2);
+          const sy2 = toScreenY(seg.y2);
+          const thickPx = clamp(seg.thickness * scale, 2, 14);
+
+          const pulse = seg.control ? 0.55 + 0.45 * Math.sin(simClock * (seg.control.freq || 1) + (seg.control.phase || 0)) : 0.7;
+          const alpha = 0.3 + pulse * 0.55;
+          ctx.save();
+          ctx.strokeStyle = `hsla(${hue}, 52%, 58%, ${alpha.toFixed(3)})`;
+          ctx.lineWidth = thickPx;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(sx1, sy1);
+          ctx.lineTo(sx2, sy2);
+          ctx.stroke();
+
+          ctx.fillStyle = `hsla(${hue}, 45%, 72%, ${(alpha * 0.9).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(sx1, sy1, Math.max(2.5, thickPx * 0.5), 0, Math.PI * 2);
+          ctx.fill();
+          if (si === chain.length - 1) {
+            const endR = Math.max(3, thickPx * 0.6);
+            ctx.fillStyle = `hsla(${hue}, 40%, 65%, ${(alpha * 0.8).toFixed(3)})`;
+            ctx.beginPath();
+            ctx.arc(sx2, sy2, endR, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+      }
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(200, 230, 155, 0.12)";
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(toScreenX(minX), toScreenY(0));
+      ctx.lineTo(toScreenX(maxX), toScreenY(0));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(toScreenX(0), toScreenY(minY));
+      ctx.lineTo(toScreenX(0), toScreenY(maxY));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    function vizDrawOscilloscope(ctx, genome, ox, oy, W, H) {
+      const activeControls = [];
+      for (let i = 0; i < MAX_LIMBS; i++) {
+        const limb = genome.limbs[i];
+        if (!limb.enabled) continue;
+        const sc = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+        for (let s = 0; s < sc; s++) {
+          const ctrl = limb.controls[s];
+          if (ctrl) activeControls.push({ control: ctrl, limbIndex: i, segIndex: s });
+        }
+      }
+      if (activeControls.length === 0) return;
+
+      const maxRows = Math.min(activeControls.length, 10);
+      const rowH = Math.min(Math.floor((H - 4) / maxRows), 18);
+      const traceLeft = ox + 46;
+      const traceRight = ox + W - 10;
+      const traceW = traceRight - traceLeft;
+      const limbHues = [142, 85, 42, 190, 22, 260];
+
+      for (let r = 0; r < maxRows; r++) {
+        const { control, limbIndex, segIndex } = activeControls[r];
+        const rowY = oy + r * rowH + rowH * 0.5 + 2;
+        const hue = limbHues[limbIndex % limbHues.length];
+
+        ctx.save();
+        ctx.font = "7.5px Trebuchet MS, sans-serif";
+        ctx.fillStyle = `hsla(${hue}, 40%, 62%, 0.65)`;
+        ctx.fillText(`L${limbIndex + 1}.${segIndex + 1}`, ox + 4, rowY + 2.5);
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(150, 180, 120, 0.08)";
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(traceLeft, rowY);
+        ctx.lineTo(traceRight, rowY);
+        ctx.stroke();
+        ctx.restore();
+
+        const period = control.freq > 0.01 ? (2 * Math.PI) / control.freq : 4;
+        const displayDuration = period * 2.5;
+        const maxVal = MAX_MOTOR_SPEED;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(traceLeft - 1, rowY - rowH * 0.45, traceW + 2, rowH * 0.9);
+        ctx.clip();
+
+        ctx.strokeStyle = `hsla(${hue}, 55%, 55%, 0.7)`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        let first = true;
+        for (let px = 0; px <= traceW; px += 1.5) {
+          const t = (px / traceW) * displayDuration;
+          const signal = clamp(control.bias + control.amp * Math.sin(control.freq * t + control.phase), -maxVal, maxVal);
+          const ny = rowY - (signal / maxVal) * (rowH * 0.38);
+          if (first) { ctx.moveTo(traceLeft + px, ny); first = false; }
+          else ctx.lineTo(traceLeft + px, ny);
+        }
+        ctx.stroke();
+
+        const tNow = simClock % displayDuration;
+        const nowX = traceLeft + (tNow / displayDuration) * traceW;
+        const nowSignal = clamp(control.bias + control.amp * Math.sin(control.freq * simClock + control.phase), -maxVal, maxVal);
+        const nowY = rowY - (nowSignal / maxVal) * (rowH * 0.38);
+        ctx.fillStyle = `hsla(${hue}, 70%, 75%, 0.95)`;
+        ctx.beginPath();
+        ctx.arc(nowX, nowY, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+    }
+
+    function vizDrawPhaseWheel(ctx, genome, ox, oy, size) {
+      vizDrawSectionLabel(ctx, "PHASE", ox + size * 0.18, oy + 10);
+      const cx = ox + size * 0.5;
+      const cy = oy + size * 0.55;
+      const r = size * 0.34;
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(180, 210, 140, 0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(180, 210, 140, 0.06)";
+      ctx.lineWidth = 0.5;
+      for (let a = 0; a < 4; a++) {
+        const angle = (a / 4) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * r * 0.25, cy + Math.sin(angle) * r * 0.25);
+        ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = "rgba(180, 210, 140, 0.08)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      const limbHues = [142, 85, 42, 190, 22, 260];
+      const dots = [];
+      for (let i = 0; i < MAX_LIMBS; i++) {
+        const limb = genome.limbs[i];
+        if (!limb.enabled) continue;
+        const sc = clamp(Math.round(limb.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+        for (let s = 0; s < sc; s++) {
+          const ctrl = limb.controls[s];
+          if (!ctrl) continue;
+          const phase = ctrl.phase || 0;
+          const amp = clamp(ctrl.amp / 11.5, 0, 1);
+          dots.push({ phase, amp, hue: limbHues[i % limbHues.length] });
+        }
+      }
+
+      ctx.save();
+      for (const dot of dots) {
+        const angle = dot.phase - Math.PI * 0.5;
+        const dist = r * (0.3 + dot.amp * 0.7);
+        const dx = cx + Math.cos(angle) * dist;
+        const dy = cy + Math.sin(angle) * dist;
+        ctx.fillStyle = `hsla(${dot.hue}, 55%, 62%, 0.85)`;
+        ctx.beginPath();
+        ctx.arc(dx, dy, 2.8 + dot.amp * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      ctx.save();
+      ctx.font = "7px Trebuchet MS, sans-serif";
+      ctx.fillStyle = "rgba(180, 210, 140, 0.35)";
+      ctx.textAlign = "center";
+      ctx.fillText("0", cx, cy - r - 3);
+      ctx.fillText("\u03C0", cx, cy + r + 8);
+      ctx.restore();
+    }
+
+    function vizDrawFitnessBreakdown(ctx, vizCreature, genome, ox, oy, W, H) {
+      vizDrawSectionLabel(ctx, "FITNESS BREAKDOWN", ox, oy + 10);
+
+      const fitness = vizCreature.fitness || 0;
+      const barY0 = oy + 18;
+      const barH = 7;
+      const gap = 3;
+      const labelW = 62;
+      const barLeft = ox + labelW;
+      const barMaxW = W - labelW - 4;
+
+      const activeLimbs = genome.limbs.reduce((n, l) => n + (l.enabled ? 1 : 0), 0);
+      let segCount = 0;
+      for (const l of genome.limbs) { if (l.enabled) segCount += clamp(Math.round(l.segmentCount), 1, MAX_SEGMENTS_PER_LIMB); }
+      const morphComplexity = clamp((activeLimbs * 0.12 + segCount * 0.04), 0, 1);
+      const maxAmp = genome.limbs.reduce((mx, l) => {
+        if (!l.enabled) return mx;
+        const sc = clamp(Math.round(l.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+        for (let s = 0; s < sc; s++) { mx = Math.max(mx, l.controls[s]?.amp || 0); }
+        return mx;
+      }, 0);
+      const activityLevel = clamp(maxAmp / 10, 0, 1);
+
+      const avgFreq = (() => {
+        let sum = 0, count = 0;
+        for (const l of genome.limbs) {
+          if (!l.enabled) continue;
+          const sc = clamp(Math.round(l.segmentCount), 1, MAX_SEGMENTS_PER_LIMB);
+          for (let s = 0; s < sc; s++) { sum += l.controls[s]?.freq || 0; count++; }
+        }
+        return count > 0 ? sum / count : 0;
+      })();
+      const freqLevel = clamp(avgFreq / 4.5, 0, 1);
+
+      const bars = [
+        { label: "score", value: clamp(fitness / 30, 0, 1), color: "hsla(82, 55%, 55%, 0.8)" },
+        { label: "morphology", value: morphComplexity, color: "hsla(142, 45%, 50%, 0.75)" },
+        { label: "motor amp", value: activityLevel, color: "hsla(42, 55%, 55%, 0.75)" },
+        { label: "motor freq", value: freqLevel, color: "hsla(190, 45%, 50%, 0.75)" },
+      ];
+
+      for (let i = 0; i < bars.length; i++) {
+        const y = barY0 + i * (barH + gap);
+        const bar = bars[i];
+
+        ctx.save();
+        ctx.font = "7.5px Trebuchet MS, sans-serif";
+        ctx.fillStyle = "rgba(190, 215, 150, 0.55)";
+        ctx.textAlign = "right";
+        ctx.fillText(bar.label, barLeft - 5, y + barH - 1);
+        ctx.restore();
+
+        ctx.save();
+        ctx.fillStyle = "rgba(100, 130, 80, 0.12)";
+        vizRoundRect(ctx, barLeft, y, barMaxW, barH, 2);
+        ctx.fill();
+
+        const fillW = Math.max(1, bar.value * barMaxW);
+        ctx.fillStyle = bar.color;
+        vizRoundRect(ctx, barLeft, y, fillW, barH, 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function vizRoundRect(ctx, x, y, w, h, r) {
+      r = Math.min(r, w * 0.5, h * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.arcTo(x + w, y, x + w, y + r, r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+      ctx.lineTo(x + r, y + h);
+      ctx.arcTo(x, y + h, x, y + h - r, r);
+      ctx.lineTo(x, y + r);
+      ctx.arcTo(x, y, x + r, y, r);
+      ctx.closePath();
     }
 
     function createSky() {
@@ -2011,8 +2337,8 @@
             hinge.motorEquation.maxForce = torque;
             hinge.motorEquation.minForce = -torque;
             if (typeof hinge.setLimits === "function") {
-              const minLimit = segIndex === 0 ? -1.05 : -1.35;
-              const maxLimit = segIndex === 0 ? 1.05 : 1.35;
+              const minLimit = segIndex === 0 ? -1.57 : -2.09;
+              const maxLimit = segIndex === 0 ? 1.57 : 2.09;
               hinge.setLimits(minLimit, maxLimit, 0.9, 0.3);
             }
 

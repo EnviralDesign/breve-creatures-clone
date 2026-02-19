@@ -23,7 +23,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 
 const MAX_LIMBS: usize = 6;
-const MAX_SEGMENTS_PER_LIMB: usize = 3;
+const MAX_SEGMENTS_PER_LIMB: usize = 5;
 const FIXED_SIM_DT: f32 = 1.0 / 120.0;
 const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
 const MAX_MOTOR_SPEED: f32 = 6.8;
@@ -39,7 +39,7 @@ const MAX_PLAUSIBLE_STEP_DISPLACEMENT: f32 = 1.5;
 const FITNESS_UPRIGHT_BONUS: f32 = 1.35;
 const FITNESS_STRAIGHTNESS_BONUS: f32 = 0.8;
 const FITNESS_HEIGHT_BONUS: f32 = 0.6;
-const FITNESS_ENERGY_PENALTY: f32 = 3.6;
+const FITNESS_ENERGY_PENALTY: f32 = 1.2;
 const FITNESS_INSTABILITY_PENALTY: f32 = 1.25;
 const FITNESS_NET_PROGRESS_WEIGHT: f32 = 0.8;
 const FALLEN_PENALTY_STRENGTH: f32 = 0.6;
@@ -626,9 +626,9 @@ impl TrialSimulator {
                     .local_anchor2(local_anchor2)
                     .contacts_enabled(false);
                 joint = if seg_index == 0 {
-                    joint.limits([-1.05, 1.05])
+                    joint.limits([-1.57, 1.57])
                 } else {
-                    joint.limits([-1.35, 1.35])
+                    joint.limits([-2.09, 2.09])
                 };
                 let joint_handle = impulse_joints.insert(parent, child, joint, true);
 
