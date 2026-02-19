@@ -173,15 +173,6 @@
       </select>
     </label>
     <label class="ctrl">
-      Torque
-      <input id="torqueSlider" type="range" min="0.35" max="1.5" step="0.05" value="1.0">
-      <span id="torqueSliderValue">1.00x</span>
-    </label>
-    <label class="ctrl">
-      <input id="frameAllToggle" type="checkbox" checked>
-      Frame all creatures
-    </label>
-    <label class="ctrl">
       Genome viz
       <select id="genomeVizMode">
         <option value="hide">Hide</option>
@@ -245,6 +236,7 @@
     const FAST_FORWARD_REQUEST_TIMEOUT_MS = 180000;
     const MASS_DENSITY_MULTIPLIER = 1.4;
     const MAX_MOTOR_SPEED = 6.8;
+    const MOTOR_POWER_SCALE = 1.0;
     const MAX_BODY_ANGULAR_SPEED = 15.0;
     const MAX_BODY_LINEAR_SPEED = 22.0;
     const MOTOR_TORQUE_HIP = 85;
@@ -347,9 +339,6 @@
     const populationSlider = document.getElementById("populationSlider");
     const populationSliderValue = document.getElementById("populationSliderValue");
     const speedSelect = document.getElementById("speedSelect");
-    const torqueSlider = document.getElementById("torqueSlider");
-    const torqueSliderValue = document.getElementById("torqueSliderValue");
-    const frameAllToggle = document.getElementById("frameAllToggle");
     const genomeVizModeSelect = document.getElementById("genomeVizMode");
     const genomePanel = document.getElementById("genomePanel");
     const genomeCanvas = document.getElementById("genomeCanvas");
@@ -368,8 +357,6 @@
     populationSlider.value = String(DEFAULT_POPULATION_SIZE);
     populationSliderValue.textContent = String(DEFAULT_POPULATION_SIZE);
     speedSelect.value = "1";
-    torqueSlider.value = "1.0";
-    torqueSliderValue.textContent = "1.00x";
     genomeVizModeSelect.value = "current";
     populationLabel.textContent = String(DEFAULT_POPULATION_SIZE);
     queuedPopLabel.textContent = "none";
@@ -399,8 +386,6 @@
     let backendTrialToken = 0;
     let simSpeed = 1;
     let effectiveSimSpeed = 1;
-    let motorPowerScale = 1.0;
-    let frameAllEnabled = true;
     let genomeVizMode = "best";
     let paused = false;
     let cameraManualUntil = 0;
@@ -408,7 +393,6 @@
     const sunOffset = new THREE.Vector3(56, 74, 34);
     const sunTargetPos = new THREE.Vector3();
     const sunDesiredPos = new THREE.Vector3();
-    const smoothedHeading = new THREE.Vector3(1, 0, 0);
 
     createSky();
     createTerrain();
@@ -432,13 +416,6 @@
         backendTrialToken += 1;
         startAttempt(currentAttemptIndex, currentTrialIndex);
       }
-    });
-    torqueSlider.addEventListener("input", () => {
-      motorPowerScale = clamp(parseFloat(torqueSlider.value), 0.35, 1.5);
-      torqueSliderValue.textContent = `${motorPowerScale.toFixed(2)}x`;
-    });
-    frameAllToggle.addEventListener("change", () => {
-      frameAllEnabled = frameAllToggle.checked;
     });
     genomeVizModeSelect.addEventListener("change", () => {
       genomeVizMode = genomeVizModeSelect.value;
@@ -793,7 +770,7 @@
         durationSeconds: GENERATION_SECONDS,
         dt: backendStepDtForSpeed(),
         snapshotHz: backendSnapshotHzForSpeed(),
-        motorPowerScale,
+        motorPowerScale: MOTOR_POWER_SCALE,
       };
 
       const token = ++backendTrialToken;
@@ -923,7 +900,7 @@
         seeds,
         durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : GENERATION_SECONDS,
         dt: Number.isFinite(options.dt) ? options.dt : FIXED_TIME_STEP,
-        motorPowerScale,
+        motorPowerScale: MOTOR_POWER_SCALE,
       };
       const request = {
         method: "POST",
@@ -959,7 +936,7 @@
         seeds,
         durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : GENERATION_SECONDS,
         dt: Number.isFinite(options.dt) ? options.dt : FIXED_TIME_STEP,
-        motorPowerScale,
+        motorPowerScale: MOTOR_POWER_SCALE,
       };
       const token = Number.isInteger(options.token) ? options.token : backendTrialToken;
       return new Promise((resolve, reject) => {
@@ -1227,26 +1204,11 @@
     function updateCamera(frameDelta, champion) {
       if (!champion) return;
 
-      let target;
-      let desired;
-      if (frameAllEnabled || population.length === 1) {
-        const framing = getPopulationFraming();
-        target = framing.center;
-        const fov = THREE.MathUtils.degToRad(camera.fov);
-        const distance = Math.max(16, (framing.radius + 8) / Math.tan(fov * 0.5));
-        desired = target.clone().add(new THREE.Vector3(distance * 0.9, distance * 0.6, distance * 0.9));
-      } else {
-        const targetBody = population.length > 0 ? population[0].torsoBody : champion.torsoBody;
-        if (!targetBody) return;
-        target = new THREE.Vector3(targetBody.position.x, targetBody.position.y + 1.5, targetBody.position.z);
-        const velocityHeading = new THREE.Vector3(targetBody.velocity.x, 0, targetBody.velocity.z);
-        if (velocityHeading.lengthSq() > 0.35) {
-          velocityHeading.normalize();
-          smoothedHeading.lerp(velocityHeading, 1 - Math.exp(-frameDelta * 3));
-          smoothedHeading.normalize();
-        }
-        desired = target.clone().addScaledVector(smoothedHeading, -16).add(new THREE.Vector3(0, 8, 0));
-      }
+      const framing = getPopulationFraming();
+      const target = framing.center;
+      const fov = THREE.MathUtils.degToRad(camera.fov);
+      const distance = Math.max(16, (framing.radius + 8) / Math.tan(fov * 0.5));
+      const desired = target.clone().add(new THREE.Vector3(distance * 0.9, distance * 0.6, distance * 0.9));
 
       if (performance.now() < cameraManualUntil) {
         controls.target.lerp(target, 0.16);
@@ -2397,7 +2359,7 @@
         let stepEnergy = 0;
         for (const controller of this.controllers) {
           const g = controller.gene;
-          const torque = controller.baseTorque * motorPowerScale;
+          const torque = controller.baseTorque * MOTOR_POWER_SCALE;
           controller.constraint.motorEquation.maxForce = torque;
           controller.constraint.motorEquation.minForce = -torque;
           const speed = clamp(g.bias + g.amp * Math.sin(g.freq * time + g.phase), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
