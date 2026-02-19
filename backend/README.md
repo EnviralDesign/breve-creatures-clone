@@ -1,6 +1,6 @@
 # backend
 
-Rust simulation backend for Breve Creatures.
+Rust simulation backend for Breve Creatures. This binary now serves both API endpoints and the frontend UI.
 
 ## Run
 
@@ -10,6 +10,12 @@ cargo run
 ```
 
 Server binds to `127.0.0.1:8787`.
+
+UI entrypoint: `GET /`
+
+Optional env var:
+
+- `SIM_MAX_CONCURRENT_JOBS` to cap concurrent simulation workers (defaults to `available_cores - 1`, minimum `1`).
 
 ## Endpoints
 

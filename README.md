@@ -6,36 +6,26 @@ Browser-based evolutionary creature simulation.
 
 ## Repo Layout
 
-- `frontend/` - UI + local FastAPI static server
-- `backend/` - Rust simulation and evaluation service
+- `frontend/` - browser UI assets embedded and served by backend
+- `backend/` - Rust simulation, evaluation, and web server
 - `tools/` - local helper tooling
 
 ## Quick Start
 
 Prereqs:
 
-- Python 3.12+
-- [Astral `uv`](https://docs.astral.sh/uv/)
 - Rust toolchain (`rustup`, `cargo`)
 
-1. Start backend
+1. Start app
 
 ```powershell
 cd backend
 cargo run
 ```
 
-2. Start frontend
+2. Open app
 
-```powershell
-cd frontend
-uv sync
-uv run main.py
-```
-
-3. Open app
-
-- `http://127.0.0.1:8000`
+- `http://127.0.0.1:8787`
 
 ## Docs
 

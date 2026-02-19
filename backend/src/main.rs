@@ -1,21 +1,26 @@
 use std::f32::consts::PI;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc as std_mpsc;
 
-use axum::extract::State;
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::extract::{Path, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::StreamExt;
+use include_dir::{Dir, include_dir};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rapier3d::na::{UnitQuaternion, Vector3, point, vector};
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const MAX_LIMBS: usize = 6;
 const MAX_SEGMENTS_PER_LIMB: usize = 3;
@@ -26,10 +31,11 @@ const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
 const MOTOR_TORQUE_KNEE: f32 = 68.0;
-const JOINT_MOTOR_RESPONSE: f32 = 24.0;
-const JOINT_MOTOR_FORCE_MULTIPLIER: f32 = 1.8;
+const JOINT_MOTOR_RESPONSE: f32 = 16.0;
+const JOINT_MOTOR_FORCE_MULTIPLIER: f32 = 1.0;
 const AXIS_TILT_GAIN: f32 = 1.9;
 const FALLEN_HEIGHT_THRESHOLD: f32 = 0.55;
+const MAX_PLAUSIBLE_STEP_DISPLACEMENT: f32 = 1.5;
 const FITNESS_UPRIGHT_BONUS: f32 = 1.35;
 const FITNESS_STRAIGHTNESS_BONUS: f32 = 0.8;
 const FITNESS_HEIGHT_BONUS: f32 = 0.6;
@@ -42,6 +48,10 @@ const UPRIGHT_PENALTY_FLOOR: f32 = 0.4;
 const SETTLE_SECONDS: f32 = 2.25;
 const GROUND_COLLISION_GROUP: Group = Group::GROUP_1;
 const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
+const DEFAULT_BIND_HOST: &str = "127.0.0.1";
+const DEFAULT_BIND_PORT: u16 = 8787;
+const PORT_FALLBACK_ATTEMPTS: u16 = 32;
+static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../frontend");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +114,7 @@ struct TrialRunRequest {
     genome: Genome,
     seed: u64,
     duration_seconds: Option<f32>,
-    #[serde(default)]
+    #[serde(default, rename = "dt")]
     _dt: Option<f32>,
     snapshot_hz: Option<f32>,
     motor_power_scale: Option<f32>,
@@ -116,7 +126,7 @@ struct GenerationEvalRequest {
     genomes: Vec<Genome>,
     seeds: Vec<u64>,
     duration_seconds: Option<f32>,
-    #[serde(default)]
+    #[serde(default, rename = "dt")]
     _dt: Option<f32>,
     motor_power_scale: Option<f32>,
 }
@@ -319,10 +329,27 @@ impl TrialAccumulator {
             return;
         }
 
-        self.net_dx = torso_pos.x - self.spawn.x;
-        self.net_dz = torso_pos.z - self.spawn.z;
-        let traveled = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
-        self.best_distance = self.best_distance.max(traveled);
+        let step_displacement = if let Some(last) = self.last_torso_pos {
+            (torso_pos - last).norm()
+        } else {
+            0.0
+        };
+        let plausible = step_displacement <= MAX_PLAUSIBLE_STEP_DISPLACEMENT;
+
+        if plausible {
+            self.net_dx = torso_pos.x - self.spawn.x;
+            self.net_dz = torso_pos.z - self.spawn.z;
+            let traveled = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
+            self.best_distance = self.best_distance.max(traveled);
+
+            if let Some(last) = self.last_torso_pos {
+                let dx = torso_pos.x - last.x;
+                let dz = torso_pos.z - last.z;
+                self.path_length += (dx * dx + dz * dz).sqrt();
+            }
+        }
+
+        self.last_torso_pos = Some(torso_pos);
 
         let up = torso_rot * vector![0.0, 1.0, 0.0];
         let upright = clamp((up.y + 1.0) * 0.5, 0.0, 1.0);
@@ -335,13 +362,6 @@ impl TrialAccumulator {
         if torso_pos.y < FALLEN_HEIGHT_THRESHOLD {
             self.fallen_time += dt;
         }
-
-        if let Some(last) = self.last_torso_pos {
-            let dx = torso_pos.x - last.x;
-            let dz = torso_pos.z - last.z;
-            self.path_length += (dx * dx + dz * dz).sqrt();
-        }
-        self.last_torso_pos = Some(torso_pos);
 
         self.sampled_time += dt;
         self.live_score = self.compute_metrics(duration).quality;
@@ -444,6 +464,9 @@ impl TrialSimulator {
         let mut integration_parameters = IntegrationParameters::default();
         integration_parameters.dt = config.dt;
         integration_parameters.max_ccd_substeps = 4;
+        integration_parameters.num_solver_iterations = 16;
+        integration_parameters.num_internal_pgs_iterations = 4;
+        integration_parameters.num_internal_stabilization_iterations = 4;
 
         let mut island_manager = IslandManager::new();
         let mut broad_phase = BroadPhaseBvh::new();
@@ -788,7 +811,28 @@ impl TrialSimulator {
 }
 
 #[derive(Clone)]
-struct AppState;
+struct AppState {
+    sim_slots: Arc<Semaphore>,
+    sim_worker_limit: usize,
+}
+
+impl AppState {
+    fn new() -> Self {
+        let sim_worker_limit = resolve_sim_worker_limit();
+        Self {
+            sim_slots: Arc::new(Semaphore::new(sim_worker_limit)),
+            sim_worker_limit,
+        }
+    }
+
+    async fn acquire_sim_slot(&self) -> Result<OwnedSemaphorePermit, String> {
+        self.sim_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "simulation worker queue closed".to_string())
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -798,48 +842,113 @@ async fn main() {
         .compact()
         .init();
 
+    let state = AppState::new();
+    info!(
+        "simulation worker slots: {} (override with SIM_MAX_CONCURRENT_JOBS)",
+        state.sim_worker_limit
+    );
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/trial/ws", get(ws_trial_handler))
         .route("/api/eval/ws", get(ws_eval_handler))
         .route("/api/eval/generation", post(eval_generation_handler))
+        .route("/", get(frontend_root))
+        .route("/favicon.ico", get(frontend_favicon))
+        .route("/{*path}", get(frontend_path))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
-        .with_state(AppState);
+        .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8787));
+    let bind_port = resolve_bind_port();
+    let (listener, addr) = match bind_listener(DEFAULT_BIND_HOST, bind_port).await {
+        Ok(bound) => bound,
+        Err(message) => {
+            error!("{message}");
+            return;
+        }
+    };
     info!("sim-backend listening on http://{addr}");
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("failed to bind socket");
-    axum::serve(listener, app)
-        .await
-        .expect("server exited unexpectedly");
+    info!("frontend UI available at http://{addr}/");
+    if let Err(err) = axum::serve(listener, app).await {
+        error!("server exited unexpectedly: {err}");
+    }
 }
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
+async fn frontend_root() -> Response {
+    serve_frontend_asset("")
+}
+
+async fn frontend_path(Path(path): Path<String>) -> Response {
+    serve_frontend_asset(&path)
+}
+
+async fn frontend_favicon() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+fn serve_frontend_asset(path: &str) -> Response {
+    let normalized = path.trim_start_matches('/');
+    if normalized.starts_with("api/") || normalized == "health" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let candidate = if normalized.is_empty() {
+        "index.html"
+    } else {
+        normalized
+    };
+
+    if let Some(response) = frontend_asset_response(candidate) {
+        return response;
+    }
+
+    if !candidate.contains('.')
+        && let Some(response) = frontend_asset_response("index.html")
+    {
+        return response;
+    }
+
+    StatusCode::NOT_FOUND.into_response()
+}
+
+fn frontend_asset_response(path: &str) -> Option<Response> {
+    let file = FRONTEND_ASSETS.get_file(path)?;
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    let content_type = HeaderValue::from_str(mime.as_ref()).ok()?;
+    let mut response = Response::new(Body::from(file.contents().to_vec()));
+    *response.status_mut() = StatusCode::OK;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    if path == "index.html" {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
+    Some(response)
+}
+
 async fn ws_trial_handler(
     ws: WebSocketUpgrade,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(handle_trial_socket)
+    ws.on_upgrade(move |socket| handle_trial_socket(socket, state))
 }
 
-async fn ws_eval_handler(
-    ws: WebSocketUpgrade,
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(handle_eval_socket)
+async fn ws_eval_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_eval_socket(socket, state))
 }
 
-async fn handle_trial_socket(mut socket: WebSocket) {
+async fn handle_trial_socket(mut socket: WebSocket, state: AppState) {
     let request = loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => match serde_json::from_str::<TrialRunRequest>(&text) {
@@ -865,10 +974,24 @@ async fn handle_trial_socket(mut socket: WebSocket) {
     };
 
     let config = TrialConfig::from_trial_request(&request);
+    let permit = match state.acquire_sim_slot().await {
+        Ok(permit) => permit,
+        Err(err) => {
+            let _ = send_stream_event(
+                &mut socket,
+                StreamEvent::Error {
+                    message: format!("unable to schedule trial: {err}"),
+                },
+            )
+            .await;
+            return;
+        }
+    };
     let (tx, mut rx) = mpsc::channel::<StreamEvent>(128);
     let request_for_task = request.clone();
     let config_for_task = config.clone();
     let worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         if let Err(err) = run_trial_stream(request_for_task, config_for_task, tx) {
             error!("trial stream worker failed: {err}");
         }
@@ -883,7 +1006,7 @@ async fn handle_trial_socket(mut socket: WebSocket) {
     let _ = worker.await;
 }
 
-async fn handle_eval_socket(mut socket: WebSocket) {
+async fn handle_eval_socket(mut socket: WebSocket, state: AppState) {
     let request = loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => {
@@ -911,17 +1034,40 @@ async fn handle_eval_socket(mut socket: WebSocket) {
     };
 
     let config = TrialConfig::from_generation_request(&request);
+    let permit = match state.acquire_sim_slot().await {
+        Ok(permit) => permit,
+        Err(err) => {
+            let _ = send_generation_stream_event(
+                &mut socket,
+                GenerationStreamEvent::Error {
+                    message: format!("unable to schedule generation: {err}"),
+                },
+            )
+            .await;
+            return;
+        }
+    };
     let (tx, mut rx) = mpsc::channel::<GenerationStreamEvent>(128);
     let request_for_task = request.clone();
     let config_for_task = config.clone();
+    let parallel_workers = state.sim_worker_limit;
     let worker = tokio::task::spawn_blocking(move || {
-        if let Err(err) = run_generation_stream(request_for_task, config_for_task, tx) {
+        let _permit = permit;
+        if let Err(err) = run_generation_stream(
+            request_for_task,
+            config_for_task,
+            tx,
+            parallel_workers,
+        ) {
             error!("generation stream worker failed: {err}");
         }
     });
 
     while let Some(event) = rx.recv().await {
-        if send_generation_stream_event(&mut socket, event).await.is_err() {
+        if send_generation_stream_event(&mut socket, event)
+            .await
+            .is_err()
+        {
             break;
         }
     }
@@ -1003,6 +1149,7 @@ fn run_generation_stream(
     request: GenerationEvalRequest,
     config: TrialConfig,
     tx: mpsc::Sender<GenerationStreamEvent>,
+    max_workers: usize,
 ) -> Result<(), String> {
     if request.genomes.is_empty() {
         tx.blocking_send(GenerationStreamEvent::Error {
@@ -1025,33 +1172,97 @@ fn run_generation_stream(
     })
     .map_err(|err| format!("failed sending generation start: {err}"))?;
 
-    let mut results = Vec::with_capacity(request.genomes.len());
-    for (attempt_index, genome) in request.genomes.iter().enumerate() {
-        let mut trials = Vec::with_capacity(request.seeds.len());
-        for (trial_index, &seed) in request.seeds.iter().enumerate() {
-            tx.blocking_send(GenerationStreamEvent::AttemptTrialStarted {
-                attempt_index,
-                trial_index,
-                trial_count: request.seeds.len(),
-            })
-            .map_err(|err| format!("failed sending attempt progress: {err}"))?;
+    let attempt_count = request.genomes.len();
+    let trial_count = request.seeds.len();
+    let worker_count = resolve_generation_worker_count(max_workers, attempt_count);
+    let next_attempt = AtomicUsize::new(0);
+    let cancelled = AtomicBool::new(false);
+    let (result_tx, result_rx) =
+        std_mpsc::channel::<Result<(usize, GenerationEvalResult), String>>();
 
-            let mut sim = TrialSimulator::new(genome, seed, &config)?;
-            let steps = (config.duration_seconds / config.dt).ceil() as usize;
-            for _ in 0..steps {
-                sim.step()?;
-            }
-            trials.push(sim.final_result());
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let tx_progress = tx.clone();
+            let result_tx = result_tx.clone();
+            let genomes = &request.genomes;
+            let seeds = &request.seeds;
+            let config_ref = &config;
+            let next_attempt_ref = &next_attempt;
+            let cancelled_ref = &cancelled;
+            scope.spawn(move || {
+                loop {
+                    if cancelled_ref.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let attempt_index = next_attempt_ref.fetch_add(1, Ordering::Relaxed);
+                    if attempt_index >= genomes.len() {
+                        break;
+                    }
+                    let outcome = evaluate_generation_attempt(
+                        attempt_index,
+                        &genomes[attempt_index],
+                        seeds,
+                        config_ref,
+                        |trial_index| {
+                            tx_progress
+                                .blocking_send(GenerationStreamEvent::AttemptTrialStarted {
+                                    attempt_index,
+                                    trial_index,
+                                    trial_count,
+                                })
+                                .map_err(|err| format!("failed sending attempt progress: {err}"))
+                        },
+                    )
+                    .and_then(|result| {
+                        tx_progress
+                            .blocking_send(GenerationStreamEvent::AttemptComplete {
+                                attempt_index,
+                                result: result.clone(),
+                            })
+                            .map_err(|err| format!("failed sending attempt complete: {err}"))?;
+                        Ok((attempt_index, result))
+                    });
+                    if outcome.is_err() {
+                        cancelled_ref.store(true, Ordering::Relaxed);
+                    }
+                    if result_tx.send(outcome).is_err() {
+                        break;
+                    }
+                }
+            });
         }
+    });
+    drop(result_tx);
 
-        let result = summarize_trials(genome, &trials);
-        results.push(result.clone());
-        tx.blocking_send(GenerationStreamEvent::AttemptComplete {
-            attempt_index,
-            result,
-        })
-        .map_err(|err| format!("failed sending attempt complete: {err}"))?;
+    let mut results: Vec<Option<GenerationEvalResult>> = vec![None; attempt_count];
+    let mut first_error: Option<String> = None;
+    for outcome in result_rx {
+        match outcome {
+            Ok((attempt_index, result)) => {
+                if attempt_index < results.len() {
+                    results[attempt_index] = Some(result);
+                }
+            }
+            Err(err) => {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
     }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+
+    let results: Vec<GenerationEvalResult> = results
+        .into_iter()
+        .enumerate()
+        .map(|(attempt_index, item)| {
+            item.ok_or_else(|| {
+                format!("generation attempt {attempt_index} did not produce a result")
+            })
+        })
+        .collect::<Result<_, _>>()?;
 
     tx.blocking_send(GenerationStreamEvent::GenerationComplete { results })
         .map_err(|err| format!("failed sending generation complete: {err}"))?;
@@ -1059,7 +1270,7 @@ fn run_generation_stream(
 }
 
 async fn eval_generation_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(request): Json<GenerationEvalRequest>,
 ) -> Result<Json<GenerationEvalResponse>, (StatusCode, String)> {
     if request.genomes.is_empty() {
@@ -1076,20 +1287,128 @@ async fn eval_generation_handler(
     }
 
     let config = TrialConfig::from_generation_request(&request);
-    let mut results = Vec::with_capacity(request.genomes.len());
-    for genome in &request.genomes {
-        let mut trials = Vec::with_capacity(request.seeds.len());
-        for &seed in &request.seeds {
-            let mut sim = TrialSimulator::new(genome, seed, &config).map_err(internal_err)?;
-            let steps = (config.duration_seconds / config.dt).ceil() as usize;
-            for _ in 0..steps {
-                sim.step().map_err(internal_err)?;
-            }
-            trials.push(sim.final_result());
+    let parallel_workers = state.sim_worker_limit;
+    let permit = state
+        .acquire_sim_slot()
+        .await
+        .map_err(service_unavailable_err)?;
+    let response = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        run_generation_eval(request, config, parallel_workers)
+    })
+    .await
+    .map_err(|err| internal_err(format!("generation eval worker join error: {err}")))?
+    .map_err(internal_err)?;
+    Ok(Json(response))
+}
+
+fn run_generation_eval(
+    request: GenerationEvalRequest,
+    config: TrialConfig,
+    max_workers: usize,
+) -> Result<GenerationEvalResponse, String> {
+    let attempt_count = request.genomes.len();
+    let worker_count = resolve_generation_worker_count(max_workers, attempt_count);
+    let next_attempt = AtomicUsize::new(0);
+    let cancelled = AtomicBool::new(false);
+    let (result_tx, result_rx) =
+        std_mpsc::channel::<Result<(usize, GenerationEvalResult), String>>();
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let result_tx = result_tx.clone();
+            let genomes = &request.genomes;
+            let seeds = &request.seeds;
+            let config_ref = &config;
+            let next_attempt_ref = &next_attempt;
+            let cancelled_ref = &cancelled;
+            scope.spawn(move || {
+                loop {
+                    if cancelled_ref.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let attempt_index = next_attempt_ref.fetch_add(1, Ordering::Relaxed);
+                    if attempt_index >= genomes.len() {
+                        break;
+                    }
+                    let outcome = evaluate_generation_attempt(
+                        attempt_index,
+                        &genomes[attempt_index],
+                        seeds,
+                        config_ref,
+                        |_| Ok(()),
+                    )
+                    .map(|result| (attempt_index, result));
+                    if outcome.is_err() {
+                        cancelled_ref.store(true, Ordering::Relaxed);
+                    }
+                    if result_tx.send(outcome).is_err() {
+                        break;
+                    }
+                }
+            });
         }
-        results.push(summarize_trials(genome, &trials));
+    });
+    drop(result_tx);
+
+    let mut results: Vec<Option<GenerationEvalResult>> = vec![None; attempt_count];
+    let mut first_error: Option<String> = None;
+    for outcome in result_rx {
+        match outcome {
+            Ok((attempt_index, result)) => {
+                if attempt_index < results.len() {
+                    results[attempt_index] = Some(result);
+                }
+            }
+            Err(err) => {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
     }
-    Ok(Json(GenerationEvalResponse { results }))
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+
+    let results: Vec<GenerationEvalResult> = results
+        .into_iter()
+        .enumerate()
+        .map(|(attempt_index, item)| {
+            item.ok_or_else(|| {
+                format!("generation attempt {attempt_index} did not produce a result")
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(GenerationEvalResponse { results })
+}
+
+fn resolve_generation_worker_count(max_workers: usize, attempt_count: usize) -> usize {
+    max_workers.max(1).min(attempt_count.max(1))
+}
+
+fn evaluate_generation_attempt<F>(
+    _attempt_index: usize,
+    genome: &Genome,
+    seeds: &[u64],
+    config: &TrialConfig,
+    mut on_trial_started: F,
+) -> Result<GenerationEvalResult, String>
+where
+    F: FnMut(usize) -> Result<(), String>,
+{
+    let mut trials = Vec::with_capacity(seeds.len());
+    let steps = (config.duration_seconds / config.dt).ceil() as usize;
+    for (trial_index, &seed) in seeds.iter().enumerate() {
+        on_trial_started(trial_index)?;
+        let mut sim = TrialSimulator::new(genome, seed, config)?;
+        for _ in 0..steps {
+            sim.step()?;
+        }
+        trials.push(sim.final_result());
+    }
+    Ok(summarize_trials(genome, &trials))
 }
 
 fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalResult {
@@ -1155,6 +1474,89 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
 
 fn internal_err(message: String) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, message)
+}
+
+fn service_unavailable_err(message: String) -> (StatusCode, String) {
+    (StatusCode::SERVICE_UNAVAILABLE, message)
+}
+
+fn resolve_sim_worker_limit() -> usize {
+    const ENV_VAR: &str = "SIM_MAX_CONCURRENT_JOBS";
+    if let Ok(raw_value) = std::env::var(ENV_VAR) {
+        match raw_value.parse::<usize>() {
+            Ok(parsed) if parsed > 0 => return parsed,
+            _ => warn!("{ENV_VAR} must be a positive integer; got '{raw_value}'"),
+        }
+    }
+
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get().saturating_sub(1).max(1))
+        .unwrap_or(1)
+}
+
+fn resolve_bind_port() -> u16 {
+    const ENV_VAR: &str = "SIM_PORT";
+    if let Ok(raw_value) = std::env::var(ENV_VAR) {
+        match raw_value.parse::<u16>() {
+            Ok(parsed) if parsed > 0 => return parsed,
+            _ => warn!(
+                "{ENV_VAR} must be an integer in range 1-65535; got '{raw_value}'. Using default {DEFAULT_BIND_PORT}"
+            ),
+        }
+    }
+    DEFAULT_BIND_PORT
+}
+
+async fn bind_listener(
+    host: &str,
+    desired_port: u16,
+) -> Result<(tokio::net::TcpListener, SocketAddr), String> {
+    let prefer_default_port = desired_port == DEFAULT_BIND_PORT;
+    match tokio::net::TcpListener::bind((host, desired_port)).await {
+        Ok(listener) => {
+            let addr = listener
+                .local_addr()
+                .map_err(|err| format!("bound listener but failed reading local address: {err}"))?;
+            return Ok((listener, addr));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse && prefer_default_port => {
+            for offset in 1..=PORT_FALLBACK_ATTEMPTS {
+                let Some(candidate_port) = desired_port.checked_add(offset) else {
+                    break;
+                };
+                match tokio::net::TcpListener::bind((host, candidate_port)).await {
+                    Ok(listener) => {
+                        let addr = listener.local_addr().map_err(|bind_err| {
+                            format!(
+                                "bound listener on fallback port but failed reading local address: {bind_err}"
+                            )
+                        })?;
+                        warn!(
+                            "port {desired_port} is in use, falling back to http://{addr}; set SIM_PORT to choose a fixed port"
+                        );
+                        return Ok((listener, addr));
+                    }
+                    Err(bind_err) if bind_err.kind() == std::io::ErrorKind::AddrInUse => continue,
+                    Err(bind_err) => {
+                        return Err(format!(
+                            "failed to bind fallback port {candidate_port} on {host}: {bind_err}"
+                        ));
+                    }
+                }
+            }
+            Err(format!(
+                "port {desired_port} is in use on {host}, and no free fallback port was found in range {}-{}; stop the existing process or set SIM_PORT",
+                desired_port + 1,
+                desired_port + PORT_FALLBACK_ATTEMPTS
+            ))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
+            "port {desired_port} is already in use on {host}; stop the existing process or choose another port via SIM_PORT"
+        )),
+        Err(err) => Err(format!(
+            "failed to bind socket on {host}:{desired_port}: {err}"
+        )),
+    }
 }
 
 fn insert_box_body(

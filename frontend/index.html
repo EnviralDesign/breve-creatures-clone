@@ -266,9 +266,11 @@
     const FALLEN_HEIGHT_THRESHOLD = 0.55;
     const SETTLE_SECONDS = 2.25;
     const USE_RUST_BACKEND = true;
-    const BACKEND_HTTP_URL = "http://127.0.0.1:8787";
-    const BACKEND_WS_URL = "ws://127.0.0.1:8787/api/trial/ws";
-    const BACKEND_EVAL_WS_URL = "ws://127.0.0.1:8787/api/eval/ws";
+    const BACKEND_HTTP_URL = window.location.origin;
+    const BACKEND_WS_SCHEME = window.location.protocol === "https:" ? "wss" : "ws";
+    const BACKEND_WS_BASE = `${BACKEND_WS_SCHEME}://${window.location.host}`;
+    const BACKEND_WS_URL = `${BACKEND_WS_BASE}/api/trial/ws`;
+    const BACKEND_EVAL_WS_URL = `${BACKEND_WS_BASE}/api/eval/ws`;
 
     const GROUND_GROUP = 1;
 
@@ -766,7 +768,8 @@
       if (fastForwardGenerationsRemaining > 0) {
         return FAST_BACKEND_SNAPSHOT_HZ;
       }
-      return BASE_BACKEND_SNAPSHOT_HZ;
+      const speedScale = Math.max(1, simSpeed);
+      return clamp(BASE_BACKEND_SNAPSHOT_HZ / speedScale, 6, BASE_BACKEND_SNAPSHOT_HZ);
     }
 
     function backendStepDtForSpeed() {
