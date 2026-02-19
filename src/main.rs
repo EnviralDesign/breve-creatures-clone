@@ -51,7 +51,7 @@ const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
 const DEFAULT_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_BIND_PORT: u16 = 8787;
 const PORT_FALLBACK_ATTEMPTS: u16 = 32;
-static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../frontend");
+static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -872,7 +872,7 @@ async fn main() {
             return;
         }
     };
-    info!("sim-backend listening on http://{addr}");
+    info!("breve-creatures listening on http://{addr}");
     info!("frontend UI available at http://{addr}/");
     if let Err(err) = axum::serve(listener, app).await {
         error!("server exited unexpectedly: {err}");
