@@ -85,6 +85,8 @@ struct SegmentGene {
     mass: f32,
     #[serde(default = "default_motor_strength")]
     motor_strength: f32,
+    #[serde(default = "default_joint_stiffness")]
+    joint_stiffness: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -272,6 +274,8 @@ struct SimController {
     joint: ImpulseJointHandle,
     control: ControlGene,
     torque: f32,
+    stiffness: f32,
+    limit: f32,
 }
 
 struct TrialAccumulator {
@@ -642,6 +646,7 @@ impl TrialSimulator {
                     ])
                     .local_anchor2(local_anchor2)
                     .contacts_enabled(false);
+                let limit = if seg_index == 0 { 1.57 } else { 2.09 };
                 joint = if seg_index == 0 {
                     joint.limits([-1.57, 1.57])
                 } else {
@@ -656,19 +661,23 @@ impl TrialSimulator {
                 } * segment_gene.motor_strength
                     * JOINT_MOTOR_FORCE_MULTIPLIER
                     * config.motor_power_scale;
+                let stiffness = segment_gene.joint_stiffness
+                    * segment_gene.motor_strength;
                 if let Some(joint_ref) = impulse_joints.get_mut(joint_handle, false) {
                     joint_ref
                         .data
                         .set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
                     joint_ref
                         .data
-                        .set_motor_velocity(JointAxis::AngX, 0.0, JOINT_MOTOR_RESPONSE);
+                        .set_motor_position(JointAxis::AngX, 0.0, stiffness, JOINT_MOTOR_RESPONSE);
                     joint_ref.data.set_motor_max_force(JointAxis::AngX, torque);
                 }
                 controllers.push(SimController {
                     joint: joint_handle,
                     control: control_gene,
                     torque,
+                    stiffness,
+                    limit,
                 });
 
                 parts.push(SimPart {
@@ -762,22 +771,31 @@ impl TrialSimulator {
         if sim_time >= SETTLE_SECONDS {
             let mut energy_step = 0.0;
             for controller in &self.controllers {
-                let speed = clamp(
+                let signal = clamp(
                     controller.control.bias
                         + controller.control.amp
                             * (controller.control.freq * sim_time + controller.control.phase).sin(),
                     -MAX_MOTOR_SPEED,
                     MAX_MOTOR_SPEED,
                 );
+                let target_angle = clamp(
+                    signal / MAX_MOTOR_SPEED * controller.limit,
+                    -controller.limit,
+                    controller.limit,
+                );
                 if let Some(joint) = self.impulse_joints.get_mut(controller.joint, true) {
-                    joint
-                        .data
-                        .set_motor_velocity(JointAxis::AngX, speed, JOINT_MOTOR_RESPONSE);
+                    joint.data.set_motor_position(
+                        JointAxis::AngX,
+                        target_angle,
+                        controller.stiffness,
+                        JOINT_MOTOR_RESPONSE,
+                    );
                     joint
                         .data
                         .set_motor_max_force(JointAxis::AngX, controller.torque);
                 }
-                energy_step += (speed * controller.torque).abs() * dt;
+                energy_step += (target_angle.abs() * controller.stiffness)
+                    .min(controller.torque) * dt;
             }
             self.metrics.add_energy(energy_step);
         }
@@ -3323,6 +3341,7 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
                         ),
                         mass: clamp(rng_range(rng, 0.24, 1.75) * hierarchy_scale, 0.14, 2.0),
                         motor_strength: rng_range(rng, 0.5, 5.0),
+                        joint_stiffness: rng_range(rng, 15.0, 120.0),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -3411,6 +3430,7 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             sg.thickness = lerp(sa.thickness, sb.thickness, seg_blend);
             sg.mass = lerp(sa.mass, sb.mass, seg_blend);
             sg.motor_strength = lerp(sa.motor_strength, sb.motor_strength, seg_blend);
+            sg.joint_stiffness = lerp(sa.joint_stiffness, sb.joint_stiffness, seg_blend);
 
             let ctrl_blend = rng.random::<f32>();
             cg.amp = lerp(ca.amp, cb.amp, ctrl_blend);
@@ -3479,6 +3499,7 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
             segment.thickness = mutate_number(segment.thickness, 0.12, 1.1, chance, 0.24, rng);
             segment.mass = mutate_number(segment.mass, 0.1, 2.25, chance, 0.24, rng);
             segment.motor_strength = mutate_number(segment.motor_strength, 0.5, 5.0, chance, 0.2, rng);
+            segment.joint_stiffness = mutate_number(segment.joint_stiffness, 15.0, 120.0, chance, 0.2, rng);
         }
         for control in &mut limb.controls {
             control.amp = mutate_number(control.amp, 0.35, 11.6, chance, 0.18, rng);
@@ -3745,6 +3766,10 @@ fn default_limb_dir_z() -> f32 {
 
 fn default_motor_strength() -> f32 {
     1.0
+}
+
+fn default_joint_stiffness() -> f32 {
+    40.0
 }
 
 fn default_run_speed() -> f32 {
