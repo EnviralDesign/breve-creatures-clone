@@ -45,7 +45,7 @@ const MAX_PLAUSIBLE_STEP_DISPLACEMENT: f32 = 1.5;
 const FITNESS_UPRIGHT_BONUS: f32 = 1.35;
 const FITNESS_STRAIGHTNESS_BONUS: f32 = 1.5;
 const FITNESS_HEIGHT_BONUS: f32 = 0.6;
-const FITNESS_ENERGY_PENALTY: f32 = 1.2;
+const FITNESS_ENERGY_PENALTY: f32 = 0.8;
 const FITNESS_INSTABILITY_PENALTY: f32 = 1.25;
 const FITNESS_NET_PROGRESS_WEIGHT: f32 = 0.8;
 const FALLEN_PENALTY_STRENGTH: f32 = 0.6;
@@ -3322,7 +3322,7 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
                             1.05,
                         ),
                         mass: clamp(rng_range(rng, 0.24, 1.75) * hierarchy_scale, 0.14, 2.0),
-                        motor_strength: rng_range(rng, 0.5, 3.0),
+                        motor_strength: rng_range(rng, 0.5, 5.0),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -3478,7 +3478,7 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
             segment.length = mutate_number(segment.length, 0.4, 2.6, chance, 0.21, rng);
             segment.thickness = mutate_number(segment.thickness, 0.12, 1.1, chance, 0.24, rng);
             segment.mass = mutate_number(segment.mass, 0.1, 2.25, chance, 0.24, rng);
-            segment.motor_strength = mutate_number(segment.motor_strength, 0.5, 3.0, chance, 0.2, rng);
+            segment.motor_strength = mutate_number(segment.motor_strength, 0.5, 5.0, chance, 0.2, rng);
         }
         for control in &mut limb.controls {
             control.amp = mutate_number(control.amp, 0.35, 11.6, chance, 0.18, rng);
