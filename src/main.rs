@@ -81,6 +81,9 @@ const MAX_BREEDING_MUTATION_RATE: f32 = 0.72;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
 const MAX_GENERATION_TOPOLOGY_CANDIDATES: usize = 3;
 const SUMMARY_BEST_TOPOLOGY_COUNT: usize = 5;
+const DIAG_RECENT_WINDOW: usize = 20;
+const DIAG_PLATEAU_STAGNATION_GENERATIONS: usize = 20;
+const DIAG_WATCH_STAGNATION_GENERATIONS: usize = 10;
 static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1157,6 +1160,71 @@ struct EvolutionPerformanceSummaryResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     best_ever_topology: Option<TopologyProfile>,
     best_n_topologies: Vec<TopologyProfile>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionPerformanceDiagnoseResponse {
+    generation: usize,
+    timestamp_unix_ms: u128,
+    states: EvolutionDiagnosisStates,
+    metrics: EvolutionDiagnosisMetrics,
+    topology: EvolutionDiagnosisTopology,
+    findings: Vec<EvolutionDiagnosisFinding>,
+    recommended_actions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionDiagnosisStates {
+    plateau_state: String,
+    volatility_state: String,
+    novelty_state: String,
+    trend_state: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionDiagnosisMetrics {
+    best_ever_fitness: f32,
+    recent_best_fitness: f32,
+    stagnation_generations: usize,
+    best_fitness_slope: f32,
+    median_fitness_slope: f32,
+    last_recent_best_std: f32,
+    last_recent_best_min: f32,
+    last_recent_best_max: f32,
+    last_recent_novelty_mean: f32,
+    last_recent_novelty_min: f32,
+    last_recent_novelty_max: f32,
+    current_mutation_rate: f32,
+    mutation_at_lower_clamp: bool,
+    mutation_at_upper_clamp: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionDiagnosisTopology {
+    latest_distinct_fingerprint_count: usize,
+    latest_population_size: usize,
+    distinct_fingerprint_ratio: f32,
+    top_enabled_limb_counts: Vec<TopologyLimbCountStat>,
+    representative_topologies: Vec<TopologyProfile>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TopologyLimbCountStat {
+    enabled_limb_count: usize,
+    count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionDiagnosisFinding {
+    code: String,
+    severity: String,
+    message: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2957,6 +3025,237 @@ fn build_evolution_performance_summary_response(
     }
 }
 
+fn build_evolution_performance_diagnose_response(
+    controller: &EvolutionController,
+) -> EvolutionPerformanceDiagnoseResponse {
+    let status = controller.snapshot_status();
+    let history = controller.snapshot_performance_history();
+    let recent = recent_history_window(&history, DIAG_RECENT_WINDOW);
+    let best_points = recent
+        .iter()
+        .map(|item| finite_or_zero(item.fitness.best))
+        .collect::<Vec<_>>();
+    let novelty_points = recent
+        .iter()
+        .map(|item| finite_or_zero(item.diversity.novelty_mean))
+        .collect::<Vec<_>>();
+    let recent_best_fitness = best_points
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let recent_best_fitness = finite_or_zero(recent_best_fitness);
+    let best_fitness_slope = linear_regression_slope(
+        &recent
+            .iter()
+            .map(|entry| (entry.generation as f32, entry.fitness.best))
+            .collect::<Vec<_>>(),
+    );
+    let median_fitness_slope = linear_regression_slope(
+        &recent
+            .iter()
+            .map(|entry| (entry.generation as f32, entry.fitness.p50))
+            .collect::<Vec<_>>(),
+    );
+    let stagnation = stagnation_generations(&history);
+    let novelty_mean = mean(&novelty_points);
+    let novelty_min = novelty_points.iter().copied().fold(f32::INFINITY, f32::min);
+    let novelty_max = novelty_points
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let best_min = best_points.iter().copied().fold(f32::INFINITY, f32::min);
+    let best_max = best_points
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let best_std = std_dev(&best_points);
+    let latest_mutation_rate = history
+        .last()
+        .map(|item| finite_or_zero(item.breeding.mutation_rate))
+        .unwrap_or(0.0);
+    let mutation_at_lower = history
+        .last()
+        .map(|_| latest_mutation_rate <= MIN_BREEDING_MUTATION_RATE + 1e-4)
+        .unwrap_or(false);
+    let mutation_at_upper = history
+        .last()
+        .map(|_| latest_mutation_rate >= MAX_BREEDING_MUTATION_RATE - 1e-4)
+        .unwrap_or(false);
+
+    let plateau_state = if stagnation >= DIAG_PLATEAU_STAGNATION_GENERATIONS {
+        "plateau"
+    } else if stagnation >= DIAG_WATCH_STAGNATION_GENERATIONS {
+        "watch"
+    } else {
+        "active"
+    };
+    let volatility_state = if best_std >= 3.0 {
+        "high"
+    } else if best_std >= 1.5 {
+        "medium"
+    } else {
+        "low"
+    };
+    let novelty_state = if novelty_mean < 0.22 {
+        "low"
+    } else if novelty_mean < 0.48 {
+        "medium"
+    } else {
+        "high"
+    };
+    let trend_state = if best_fitness_slope > 0.08 {
+        "improving"
+    } else if best_fitness_slope < -0.03 {
+        "declining"
+    } else {
+        "flat"
+    };
+
+    let representative_topologies = summarize_best_n_topologies(&history, 3);
+    let mut limb_count_hist: HashMap<usize, usize> = HashMap::new();
+    for profile in &representative_topologies {
+        *limb_count_hist
+            .entry(profile.enabled_limb_count)
+            .or_insert(0) += 1;
+    }
+    let mut top_enabled_limb_counts = limb_count_hist
+        .into_iter()
+        .map(|(enabled_limb_count, count)| TopologyLimbCountStat {
+            enabled_limb_count,
+            count,
+        })
+        .collect::<Vec<_>>();
+    top_enabled_limb_counts.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| b.enabled_limb_count.cmp(&a.enabled_limb_count))
+    });
+    let latest_distinct_fingerprint_count = history
+        .last()
+        .and_then(|entry| entry.topology.as_ref())
+        .map(|topology| topology.distinct_fingerprint_count)
+        .unwrap_or(0);
+    let latest_population_size = status.population_size;
+    let distinct_fingerprint_ratio = if latest_population_size > 0 {
+        latest_distinct_fingerprint_count as f32 / latest_population_size as f32
+    } else {
+        0.0
+    };
+
+    let mut findings = Vec::new();
+    if plateau_state == "plateau" && novelty_state == "low" {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "plateau_low_novelty".to_string(),
+            severity: "warn".to_string(),
+            message: "Best fitness has stalled while novelty remains low; search is likely exploiting a narrow behavior manifold.".to_string(),
+        });
+    }
+    if volatility_state == "high" {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "high_generation_variance".to_string(),
+            severity: "info".to_string(),
+            message: "Generation winners are volatile; robust quality is improving but outcomes remain noisy between generations.".to_string(),
+        });
+    }
+    if distinct_fingerprint_ratio > 0.9 && novelty_state == "low" {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "structural_diversity_behavioral_convergence".to_string(),
+            severity: "info".to_string(),
+            message: "Topology fingerprints are diverse, but behavior-level novelty is low; many structures map to similar gaits.".to_string(),
+        });
+    }
+    if mutation_at_upper {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "mutation_at_upper_clamp".to_string(),
+            severity: "warn".to_string(),
+            message: "Adaptive mutation is pinned near max clamp; this usually indicates aggressive exploration pressure.".to_string(),
+        });
+    }
+    if mutation_at_lower {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "mutation_at_lower_clamp".to_string(),
+            severity: "info".to_string(),
+            message: "Adaptive mutation is near minimum clamp; exploration may be underpowered."
+                .to_string(),
+        });
+    }
+    if findings.is_empty() {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "no_critical_alerts".to_string(),
+            severity: "info".to_string(),
+            message: "No immediate diagnostic alerts; continue monitoring stagnation and novelty windows.".to_string(),
+        });
+    }
+
+    let mut recommended_actions = Vec::new();
+    if plateau_state == "plateau" {
+        recommended_actions.push(
+            "Increase diversity pressure for 10-20 generations (higher novelty weight or temporary mutation floor bump).".to_string(),
+        );
+    }
+    if novelty_state == "low" && trend_state != "improving" {
+        recommended_actions.push(
+            "Inject topology alternates from distinct fingerprints in bestNTopologies to broaden behavior exploration.".to_string(),
+        );
+    }
+    if volatility_state == "high" {
+        recommended_actions.push(
+            "Keep selection robust to variance (median/p25 emphasis) and avoid overreacting to one-generation spikes.".to_string(),
+        );
+    }
+    if recommended_actions.is_empty() {
+        recommended_actions
+            .push("Continue current run and re-evaluate after 10-15 generations.".to_string());
+    }
+
+    EvolutionPerformanceDiagnoseResponse {
+        generation: status.generation,
+        timestamp_unix_ms: now_unix_ms(),
+        states: EvolutionDiagnosisStates {
+            plateau_state: plateau_state.to_string(),
+            volatility_state: volatility_state.to_string(),
+            novelty_state: novelty_state.to_string(),
+            trend_state: trend_state.to_string(),
+        },
+        metrics: EvolutionDiagnosisMetrics {
+            best_ever_fitness: finite_or_zero(status.best_ever_score),
+            recent_best_fitness,
+            stagnation_generations: stagnation,
+            best_fitness_slope,
+            median_fitness_slope,
+            last_recent_best_std: best_std,
+            last_recent_best_min: finite_or_zero(best_min),
+            last_recent_best_max: finite_or_zero(best_max),
+            last_recent_novelty_mean: finite_or_zero(novelty_mean),
+            last_recent_novelty_min: finite_or_zero(novelty_min),
+            last_recent_novelty_max: finite_or_zero(novelty_max),
+            current_mutation_rate: latest_mutation_rate,
+            mutation_at_lower_clamp: mutation_at_lower,
+            mutation_at_upper_clamp: mutation_at_upper,
+        },
+        topology: EvolutionDiagnosisTopology {
+            latest_distinct_fingerprint_count,
+            latest_population_size,
+            distinct_fingerprint_ratio,
+            top_enabled_limb_counts,
+            representative_topologies,
+        },
+        findings,
+        recommended_actions,
+    }
+}
+
+fn recent_history_window(
+    history: &[GenerationPerformanceSummary],
+    count: usize,
+) -> Vec<GenerationPerformanceSummary> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let start = history.len().saturating_sub(count);
+    history.iter().skip(start).cloned().collect()
+}
+
 fn summarize_best_n_topologies(
     history: &[GenerationPerformanceSummary],
     n: usize,
@@ -3425,6 +3724,10 @@ async fn main() {
             "/api/evolution/performance/summary",
             get(evolution_performance_summary_handler),
         )
+        .route(
+            "/api/evolution/performance/diagnose",
+            get(evolution_performance_diagnose_handler),
+        )
         .route("/api/evolution/control", post(evolution_control_handler))
         .route(
             "/api/evolution/genome/current",
@@ -3575,6 +3878,14 @@ async fn evolution_performance_summary_handler(
     State(state): State<AppState>,
 ) -> Json<EvolutionPerformanceSummaryResponse> {
     Json(build_evolution_performance_summary_response(
+        &state.evolution,
+    ))
+}
+
+async fn evolution_performance_diagnose_handler(
+    State(state): State<AppState>,
+) -> Json<EvolutionPerformanceDiagnoseResponse> {
+    Json(build_evolution_performance_diagnose_response(
         &state.evolution,
     ))
 }

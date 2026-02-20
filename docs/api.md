@@ -50,6 +50,15 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `bestEverTopology`
     - `bestNTopologies` (deduped by topology fingerprint)
 
+- `GET /api/evolution/performance/diagnose`
+  - Returns server-side diagnosis of run health and likely next actions.
+  - Includes:
+    - `states` (`plateauState`, `volatilityState`, `noveltyState`, `trendState`)
+    - `metrics` (recent-window best/novelty stats, slopes, mutation pressure)
+    - `topology` (distinct fingerprint ratio, enabled-limb-count mix, representative topologies)
+    - `findings` (coded diagnostics)
+    - `recommendedActions`
+
 - `POST /api/evolution/control`
   - Body:
     - `action`

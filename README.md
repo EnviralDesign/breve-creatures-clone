@@ -77,6 +77,7 @@ cargo run --release -- --satellite ws://<PRIMARY_IP>:8787
 - `GET /api/evolution/history`
 - `GET /api/evolution/performance`
 - `GET /api/evolution/performance/summary`
+- `GET /api/evolution/performance/diagnose`
 - `POST /api/evolution/control`
 - `GET /api/evolution/ws`
 - `GET /api/evolution/genome/current`

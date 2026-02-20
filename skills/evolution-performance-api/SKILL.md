@@ -10,6 +10,7 @@ description: Consume structured evolution-run analytics from the breve-creatures
 Use these HTTP routes:
 - `GET /api/evolution/performance/summary`
 - `GET /api/evolution/performance`
+- `GET /api/evolution/performance/diagnose`
 
 Call summary first, then request detailed history only when needed.
 
@@ -34,6 +35,17 @@ Compact control-loop payload:
 - `bestNTopologies`: top topology profiles, deduped by `topologyFingerprint`
 
 Use this route for frequent polling.
+
+### `GET /api/evolution/performance/diagnose`
+
+Server-side interpretation payload:
+- `states`: `plateauState`, `volatilityState`, `noveltyState`, `trendState`
+- `metrics`: recent-window best and novelty dispersion, slopes, mutation clamp state
+- `topology`: `distinctFingerprintRatio`, `topEnabledLimbCounts`, `representativeTopologies`
+- `findings`: `{ code, severity, message }`
+- `recommendedActions`: short action list
+
+Use this route when you want diagnosis directly from the backend instead of deriving it client-side.
 
 ### `GET /api/evolution/performance`
 
@@ -84,16 +96,17 @@ Current `learnedParams.name` values:
 ## Practical AI Workflow
 
 1. Read `/summary`.
-2. If `signals` is non-empty or `stagnationGenerations` is high, request `/performance` with:
+2. Read `/diagnose` for server-side interpretation.
+3. If needed, request `/performance` with:
    - `windowGenerations=120`
    - `stride=2` (or `4` for low bandwidth)
-3. Check:
+4. Check:
    - `trends.bestFitnessSlope` and `trends.medianFitnessSlope`
    - latest `generations[-1].diversity.noveltyMean`
    - latest `generations[-1].breeding.mutationRate`
    - `latestTopology` and `bestNTopologies` for structural convergence/diversity
    - narrowing/widening in `learnedParams[*].population.std`
-4. Decide control action via `/api/evolution/control` only after these checks.
+5. Decide control action via `/api/evolution/control` only after these checks.
 
 ## Data Volume Guardrails
 
