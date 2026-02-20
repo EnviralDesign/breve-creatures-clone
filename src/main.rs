@@ -1,5 +1,5 @@
 use std::f32::consts::PI;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
@@ -17,7 +17,7 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use include_dir::{Dir, include_dir};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -57,6 +57,8 @@ const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
 const DEFAULT_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_BIND_PORT: u16 = 8787;
 const PORT_FALLBACK_ATTEMPTS: u16 = 32;
+const SATELLITE_TRIAL_TIMEOUT: Duration = Duration::from_secs(30);
+const SATELLITE_RECONNECT_DELAY: Duration = Duration::from_secs(3);
 const DEFAULT_POPULATION_SIZE: usize = 80;
 const MIN_POPULATION_SIZE: usize = 1;
 const MAX_POPULATION_SIZE: usize = 128;
@@ -851,6 +853,7 @@ struct AppState {
     sim_slots: Arc<Semaphore>,
     sim_worker_limit: usize,
     evolution: Arc<EvolutionController>,
+    satellite_pool: Arc<SatellitePool>,
 }
 
 impl AppState {
@@ -860,11 +863,13 @@ impl AppState {
         if let Ok((_id, snapshot)) = load_checkpoint_snapshot(None) {
             evolution.set_pending_loaded_checkpoint(snapshot);
         }
+        let satellite_pool = Arc::new(SatellitePool::new());
         start_evolution_worker(evolution.clone(), sim_worker_limit);
         Self {
             sim_slots: Arc::new(Semaphore::new(sim_worker_limit)),
             sim_worker_limit,
             evolution,
+            satellite_pool,
         }
     }
 
@@ -2179,10 +2184,20 @@ async fn main() {
         .compact()
         .init();
 
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(satellite_url) = parse_satellite_arg(&args) {
+        run_satellite_client(satellite_url).await;
+        return;
+    }
+
     let state = AppState::new();
     info!(
         "simulation worker slots: {} (override with SIM_MAX_CONCURRENT_JOBS)",
         state.sim_worker_limit
+    );
+    info!(
+        "satellite workers connected: {} (satellites connect to /api/satellite/ws)",
+        state.satellite_pool.connected_count()
     );
 
     let app = Router::new()
@@ -2199,6 +2214,7 @@ async fn main() {
         .route("/api/evolution/checkpoint/list", get(evolution_checkpoint_list_handler))
         .route("/api/evolution/checkpoint/load", post(evolution_checkpoint_load_handler))
         .route("/api/evolution/ws", get(ws_evolution_handler))
+        .route("/api/satellite/ws", get(ws_satellite_handler))
         .route("/", get(frontend_root))
         .route("/favicon.ico", get(frontend_favicon))
         .route("/{*path}", get(frontend_path))
@@ -2210,8 +2226,13 @@ async fn main() {
         )
         .with_state(state);
 
+    let bind_host = if std::env::var("SATELLITE_BIND").map(|v| v == "1").unwrap_or(false) {
+        "0.0.0.0"
+    } else {
+        DEFAULT_BIND_HOST
+    };
     let bind_port = resolve_bind_port();
-    let (listener, addr) = match bind_listener(DEFAULT_BIND_HOST, bind_port).await {
+    let (listener, addr) = match bind_listener(bind_host, bind_port).await {
         Ok(bound) => bound,
         Err(message) => {
             error!("{message}");
@@ -2220,6 +2241,11 @@ async fn main() {
     };
     info!("breve-creatures listening on http://{addr}");
     info!("frontend UI available at http://{addr}/");
+    if bind_host == "0.0.0.0" {
+        info!("satellite mode enabled: listening on all interfaces for satellite connections");
+    } else {
+        info!("tip: set SATELLITE_BIND=1 to accept satellite connections from LAN");
+    }
     if let Err(err) = axum::serve(listener, app).await {
         error!("server exited unexpectedly: {err}");
     }
@@ -3711,6 +3737,411 @@ async fn bind_listener(
         )),
     }
 }
+
+// ─── Satellite Distributed Computing ────────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SatelliteMessage {
+    Welcome { id: String },
+    Ready,
+    RunTrial {
+        trial_id: u64,
+        genome: Genome,
+        seed: u64,
+        duration_seconds: f32,
+        dt: f32,
+        motor_power_scale: f32,
+    },
+    TrialResult {
+        trial_id: u64,
+        fitness: f32,
+        metrics: TrialMetrics,
+        descriptor: [f32; 5],
+    },
+    TrialError {
+        trial_id: u64,
+        message: String,
+    },
+    Ping,
+    Pong,
+}
+
+#[derive(Debug)]
+enum SatelliteState {
+    Idle,
+    Working { trial_id: u64, assigned_at: Instant },
+}
+
+struct SatelliteConnection {
+    id: String,
+    tx: mpsc::UnboundedSender<SatelliteMessage>,
+    state: SatelliteState,
+}
+
+struct SatellitePool {
+    inner: Mutex<HashMap<String, SatelliteConnection>>,
+    next_trial_id: AtomicUsize,
+}
+
+impl SatellitePool {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            next_trial_id: AtomicUsize::new(1),
+        }
+    }
+
+    fn connected_count(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+
+    fn register(&self, id: String, tx: mpsc::UnboundedSender<SatelliteMessage>) {
+        let mut pool = self.inner.lock().unwrap();
+        pool.insert(id.clone(), SatelliteConnection {
+            id,
+            tx,
+            state: SatelliteState::Idle,
+        });
+    }
+
+    fn unregister(&self, id: &str) {
+        let mut pool = self.inner.lock().unwrap();
+        pool.remove(id);
+    }
+
+    fn next_trial_id(&self) -> u64 {
+        self.next_trial_id.fetch_add(1, Ordering::Relaxed) as u64
+    }
+
+    /// Try to dispatch a trial to an idle satellite. Returns the trial_id if dispatched.
+    fn try_dispatch(
+        &self,
+        genome: &Genome,
+        seed: u64,
+        config: &TrialConfig,
+    ) -> Option<u64> {
+        let trial_id = self.next_trial_id();
+        let mut pool = self.inner.lock().unwrap();
+        for conn in pool.values_mut() {
+            if matches!(conn.state, SatelliteState::Idle) {
+                let msg = SatelliteMessage::RunTrial {
+                    trial_id,
+                    genome: genome.clone(),
+                    seed,
+                    duration_seconds: config.duration_seconds,
+                    dt: config.dt,
+                    motor_power_scale: config.motor_power_scale,
+                };
+                if conn.tx.send(msg).is_ok() {
+                    conn.state = SatelliteState::Working {
+                        trial_id,
+                        assigned_at: Instant::now(),
+                    };
+                    return Some(trial_id);
+                }
+            }
+        }
+        None
+    }
+
+    fn mark_idle(&self, satellite_id: &str) {
+        let mut pool = self.inner.lock().unwrap();
+        if let Some(conn) = pool.get_mut(satellite_id) {
+            conn.state = SatelliteState::Idle;
+        }
+    }
+
+    fn idle_count(&self) -> usize {
+        let pool = self.inner.lock().unwrap();
+        pool.values()
+            .filter(|c| matches!(c.state, SatelliteState::Idle))
+            .count()
+    }
+
+    fn timed_out_trial_ids(&self) -> Vec<u64> {
+        let pool = self.inner.lock().unwrap();
+        let now = Instant::now();
+        pool.values()
+            .filter_map(|c| match &c.state {
+                SatelliteState::Working { trial_id, assigned_at }
+                    if now.duration_since(*assigned_at) > SATELLITE_TRIAL_TIMEOUT =>
+                {
+                    Some(*trial_id)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+// ─── Satellite WebSocket Server Handler (Primary Side) ──────────────────
+
+async fn ws_satellite_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_satellite_socket(socket, state))
+}
+
+async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
+    let (mut ws_tx, mut ws_rx) = socket.split();
+    let satellite_id = format!("sat-{:08x}", rand::random::<u32>());
+    let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<SatelliteMessage>();
+
+    // Send welcome
+    let welcome = SatelliteMessage::Welcome { id: satellite_id.clone() };
+    if let Ok(json) = serde_json::to_string(&welcome) {
+        let _ = ws_tx.send(Message::Text(json.into())).await;
+    }
+
+    state.satellite_pool.register(satellite_id.clone(), msg_tx);
+    info!("satellite connected: id={}, total={}", satellite_id, state.satellite_pool.connected_count());
+
+    // Spawn a task to forward outgoing messages to the WebSocket
+    let sat_id_clone = satellite_id.clone();
+    let send_task = tokio::spawn(async move {
+        while let Some(msg) = msg_rx.recv().await {
+            if let Ok(json) = serde_json::to_string(&msg) {
+                if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = ws_tx.close().await;
+        sat_id_clone
+    });
+
+    // Read incoming messages from the satellite
+    let pool = state.satellite_pool.clone();
+    let sat_id_for_rx = satellite_id.clone();
+    let recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = ws_rx.next().await {
+            match msg {
+                Message::Text(text) => {
+                    if let Ok(sat_msg) = serde_json::from_str::<SatelliteMessage>(&text) {
+                        match sat_msg {
+                            SatelliteMessage::Ready => {
+                                pool.mark_idle(&sat_id_for_rx);
+                            }
+                            SatelliteMessage::TrialResult { trial_id, fitness, .. } => {
+                                info!(
+                                    "satellite {} trial {} complete: fitness={:.3}",
+                                    sat_id_for_rx, trial_id, fitness
+                                );
+                                pool.mark_idle(&sat_id_for_rx);
+                            }
+                            SatelliteMessage::TrialError { trial_id, message } => {
+                                warn!(
+                                    "satellite {} trial {} failed: {}",
+                                    sat_id_for_rx, trial_id, message
+                                );
+                                pool.mark_idle(&sat_id_for_rx);
+                            }
+                            SatelliteMessage::Pong => {}
+                            _ => {}
+                        }
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        sat_id_for_rx
+    });
+
+    // Wait for either task to finish
+    tokio::select! {
+        _ = send_task => {}
+        _ = recv_task => {}
+    }
+
+    state.satellite_pool.unregister(&satellite_id);
+    info!("satellite disconnected: id={}, total={}", satellite_id, state.satellite_pool.connected_count());
+}
+
+// ─── Satellite Client Mode ──────────────────────────────────────────────
+
+fn parse_satellite_arg(args: &[String]) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == "--satellite" {
+            if let Some(url) = args.get(i + 1) {
+                return Some(url.clone());
+            }
+        }
+    }
+    None
+}
+
+async fn run_satellite_client(primary_url: String) {
+    let worker_limit = resolve_sim_worker_limit();
+    info!(
+        "starting satellite mode: primary={}, worker_slots={}",
+        primary_url, worker_limit
+    );
+
+    let ws_url = if primary_url.contains("/api/satellite/ws") {
+        primary_url.clone()
+    } else {
+        let base = primary_url.trim_end_matches('/');
+        format!("{}/api/satellite/ws", base)
+    };
+
+    loop {
+        info!("connecting to primary: {}", ws_url);
+        match tokio_tungstenite::connect_async(&ws_url).await {
+            Ok((ws_stream, _response)) => {
+                info!("connected to primary");
+                run_satellite_session(ws_stream, worker_limit).await;
+                warn!("disconnected from primary, reconnecting in {:?}", SATELLITE_RECONNECT_DELAY);
+            }
+            Err(err) => {
+                warn!("failed to connect to primary: {}, retrying in {:?}", err, SATELLITE_RECONNECT_DELAY);
+            }
+        }
+        tokio::time::sleep(SATELLITE_RECONNECT_DELAY).await;
+    }
+}
+
+async fn run_satellite_session(
+    ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    worker_limit: usize,
+) {
+    use tokio_tungstenite::tungstenite::Message as TMessage;
+
+    let (mut ws_tx, mut ws_rx) = ws_stream.split();
+    let (result_tx, mut result_rx) = mpsc::channel::<SatelliteMessage>(64);
+    let active_jobs = Arc::new(AtomicUsize::new(0));
+    let satellite_id = Arc::new(Mutex::new(String::new()));
+
+    // Send initial ready signal
+    let ready = serde_json::to_string(&SatelliteMessage::Ready).unwrap();
+    if ws_tx.send(TMessage::Text(ready.into())).await.is_err() {
+        return;
+    }
+
+    loop {
+        tokio::select! {
+            msg_opt = ws_rx.next() => {
+                match msg_opt {
+                    Some(Ok(TMessage::Text(text))) => {
+                        match serde_json::from_str::<SatelliteMessage>(&text.to_string()) {
+                            Ok(SatelliteMessage::Welcome { id }) => {
+                                info!("registered with primary as satellite: {}", id);
+                                *satellite_id.lock().unwrap() = id;
+                            }
+                            Ok(SatelliteMessage::RunTrial {
+                                trial_id,
+                                genome,
+                                seed,
+                                duration_seconds,
+                                dt,
+                                motor_power_scale,
+                            }) => {
+                                let jobs = active_jobs.load(Ordering::Relaxed);
+                                if jobs >= worker_limit {
+                                    warn!("satellite: at capacity ({}/{}), rejecting trial {}",
+                                        jobs, worker_limit, trial_id);
+                                    let err = SatelliteMessage::TrialError {
+                                        trial_id,
+                                        message: "satellite at capacity".to_string(),
+                                    };
+                                    let _ = result_tx.send(err).await;
+                                    continue;
+                                }
+                                active_jobs.fetch_add(1, Ordering::Relaxed);
+                                let result_tx = result_tx.clone();
+                                let active_jobs = active_jobs.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    let config = TrialConfig {
+                                        duration_seconds: duration_seconds.clamp(1.0, 120.0),
+                                        dt,
+                                        snapshot_hz: 0.0, // no snapshots needed
+                                        motor_power_scale: motor_power_scale.clamp(0.35, 1.5),
+                                    };
+                                    let result = run_satellite_trial(trial_id, &genome, seed, &config);
+                                    let _ = result_tx.blocking_send(result);
+                                    active_jobs.fetch_sub(1, Ordering::Relaxed);
+                                });
+                            }
+                            Ok(SatelliteMessage::Ping) => {
+                                let pong = serde_json::to_string(&SatelliteMessage::Pong).unwrap();
+                                let _ = ws_tx.send(TMessage::Text(pong.into())).await;
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                warn!("satellite: failed to parse message: {}", err);
+                            }
+                        }
+                    }
+                    Some(Ok(TMessage::Close(_))) | None => {
+                        info!("satellite: connection closed by primary");
+                        break;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => {
+                        warn!("satellite: websocket error: {}", err);
+                        break;
+                    }
+                }
+            }
+            Some(result_msg) = result_rx.recv() => {
+                if let Ok(json) = serde_json::to_string(&result_msg) {
+                    if ws_tx.send(TMessage::Text(json.into())).await.is_err() {
+                        break;
+                    }
+                }
+                // Send ready after completing a trial
+                if matches!(result_msg, SatelliteMessage::TrialResult { .. }) {
+                    let ready = serde_json::to_string(&SatelliteMessage::Ready).unwrap();
+                    if ws_tx.send(TMessage::Text(ready.into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn run_satellite_trial(
+    trial_id: u64,
+    genome: &Genome,
+    seed: u64,
+    config: &TrialConfig,
+) -> SatelliteMessage {
+    let start = Instant::now();
+    match TrialSimulator::new(genome, seed, config) {
+        Ok(mut sim) => {
+            let steps = (config.duration_seconds / config.dt).ceil() as usize;
+            for _ in 0..steps {
+                if let Err(err) = sim.step() {
+                    return SatelliteMessage::TrialError {
+                        trial_id,
+                        message: format!("sim step failed: {err}"),
+                    };
+                }
+            }
+            let result = sim.final_result();
+            let elapsed = start.elapsed();
+            info!(
+                "satellite trial {} complete: fitness={:.3}, elapsed={:.2}s",
+                trial_id, result.fitness, elapsed.as_secs_f32()
+            );
+            SatelliteMessage::TrialResult {
+                trial_id,
+                fitness: result.fitness,
+                metrics: result.metrics,
+                descriptor: result.descriptor,
+            }
+        }
+        Err(err) => SatelliteMessage::TrialError {
+            trial_id,
+            message: format!("sim init failed: {err}"),
+        },
+    }
+}
+
+// ─── End Satellite ──────────────────────────────────────────────────────
 
 fn insert_box_body(
     bodies: &mut RigidBodySet,

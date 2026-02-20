@@ -47,6 +47,27 @@ cargo run --release
 - Autosave runs every 5 completed generations.
 - The server attempts to load `data/checkpoints/latest.json` on startup if present.
 
+## Distributed Computing (Satellite Mode)
+
+The simulation supports distributed computing across your local area network (LAN) or localhost. You can run one main "Primary" node that coordinates evolution, and multiple headless "Satellite" nodes that only run physics simulations, sending results back to the primary.
+
+1. **Start the Primary Node:**
+By default, the primary binds only to `127.0.0.1`. To allow satellites on your LAN to connect, set the `SATELLITE_BIND` environment variable to `1`.
+```powershell
+$env:SATELLITE_BIND="1"
+cargo run --release
+```
+
+2. **Start Satellite Node(s):**
+On another machine (or the same machine), start the app with the `--satellite` flag pointing to the primary node's URL. Satellites run in headless mode without the UI.
+```powershell
+cargo run --release -- --satellite ws://<PRIMARY_IP>:8787
+```
+
+- Satellites automatically discover your core count and maximize throughput.
+- You can add or remove satellites at any time during a simulation without breaking progress.
+- Disconnected satellites automatically retry connecting to the primary node.
+
 ## Endpoints
 
 - `GET /`
