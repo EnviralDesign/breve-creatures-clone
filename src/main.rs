@@ -54,7 +54,7 @@ const UPRIGHT_PENALTY_FLOOR: f32 = 0.4;
 const SETTLE_SECONDS: f32 = 2.25;
 const GROUND_COLLISION_GROUP: Group = Group::GROUP_1;
 const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
-const DEFAULT_BIND_HOST: &str = "127.0.0.1";
+const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 const DEFAULT_BIND_PORT: u16 = 8787;
 const PORT_FALLBACK_ATTEMPTS: u16 = 32;
 const SATELLITE_TRIAL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -864,7 +864,7 @@ impl AppState {
             evolution.set_pending_loaded_checkpoint(snapshot);
         }
         let satellite_pool = Arc::new(SatellitePool::new());
-        start_evolution_worker(evolution.clone(), sim_worker_limit);
+        start_evolution_worker(evolution.clone(), satellite_pool.clone(), sim_worker_limit);
         Self {
             sim_slots: Arc::new(Semaphore::new(sim_worker_limit)),
             sim_worker_limit,
@@ -1389,7 +1389,7 @@ struct NoveltyEntry {
     fitness: f32,
 }
 
-fn start_evolution_worker(controller: Arc<EvolutionController>, sim_worker_limit: usize) {
+fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: Arc<SatellitePool>, sim_worker_limit: usize) {
     std::thread::spawn(move || {
         let mut rng = SmallRng::seed_from_u64(rand::random::<u64>());
         let config = TrialConfig {
@@ -1679,12 +1679,14 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, sim_worker_limit
                 let (tx_progress, mut rx_progress) = mpsc::channel::<GenerationStreamEvent>(256);
                 let request_for_stream = request.clone();
                 let config_for_stream = config.clone();
+                let sat_pool_for_stream = satellite_pool.clone();
                 let progress_worker = std::thread::spawn(move || {
                     run_generation_stream(
                         request_for_stream,
                         config_for_stream,
                         tx_progress,
                         sim_worker_limit,
+                        sat_pool_for_stream,
                     )
                 });
                 let mut streamed_results: Option<Vec<GenerationEvalResult>> = None;
@@ -2225,12 +2227,7 @@ async fn main() {
                 .allow_headers(Any),
         )
         .with_state(state);
-
-    let bind_host = if std::env::var("SATELLITE_BIND").map(|v| v == "1").unwrap_or(false) {
-        "0.0.0.0"
-    } else {
-        DEFAULT_BIND_HOST
-    };
+    let bind_host = DEFAULT_BIND_HOST;
     let bind_port = resolve_bind_port();
     let (listener, addr) = match bind_listener(bind_host, bind_port).await {
         Ok(bound) => bound,
@@ -2240,12 +2237,7 @@ async fn main() {
         }
     };
     info!("breve-creatures listening on http://{addr}");
-    info!("frontend UI available at http://{addr}/");
-    if bind_host == "0.0.0.0" {
-        info!("satellite mode enabled: listening on all interfaces for satellite connections");
-    } else {
-        info!("tip: set SATELLITE_BIND=1 to accept satellite connections from LAN");
-    }
+    info!("frontend UI and satellite connections available on your LAN ip address at port {bind_port}");
     if let Err(err) = axum::serve(listener, app).await {
         error!("server exited unexpectedly: {err}");
     }
@@ -2590,6 +2582,7 @@ async fn handle_eval_socket(mut socket: WebSocket, state: AppState) {
             config_for_task,
             tx,
             parallel_workers,
+            state.satellite_pool.clone(),
         ) {
             error!("generation stream worker failed: {err}");
         }
@@ -2709,6 +2702,7 @@ fn run_generation_stream(
     config: TrialConfig,
     tx: mpsc::Sender<GenerationStreamEvent>,
     max_workers: usize,
+    satellite_pool: Arc<SatellitePool>,
 ) -> Result<(), String> {
     if request.genomes.is_empty() {
         tx.blocking_send(GenerationStreamEvent::Error {
@@ -2734,98 +2728,155 @@ fn run_generation_stream(
     let attempt_count = request.genomes.len();
     let trial_count = request.seeds.len();
     let worker_count = resolve_generation_worker_count(max_workers, attempt_count);
-    let next_attempt = AtomicUsize::new(0);
-    let cancelled = AtomicBool::new(false);
+    let pending_jobs = Arc::new(Mutex::new(Vec::new()));
+    for a in (0..attempt_count).rev() {
+        for t in (0..trial_count).rev() {
+            pending_jobs.lock().unwrap().push((a, t));
+        }
+    }
+
     let (result_tx, result_rx) =
-        std_mpsc::channel::<Result<(usize, GenerationEvalResult), String>>();
+        std_mpsc::channel::<Result<(usize, usize, TrialResult), String>>();
+    let done = Arc::new(AtomicBool::new(false));
 
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
-            let tx_progress = tx.clone();
-            let result_tx = result_tx.clone();
+            let pending = pending_jobs.clone();
+            let res_tx = result_tx.clone();
             let genomes = &request.genomes;
             let seeds = &request.seeds;
             let config_ref = &config;
-            let next_attempt_ref = &next_attempt;
-            let cancelled_ref = &cancelled;
+            let done_ref = &done;
             scope.spawn(move || {
                 loop {
-                    if cancelled_ref.load(Ordering::Relaxed) {
+                    if done_ref.load(Ordering::Relaxed) {
                         break;
                     }
-                    let attempt_index = next_attempt_ref.fetch_add(1, Ordering::Relaxed);
-                    if attempt_index >= genomes.len() {
-                        break;
-                    }
-                    let outcome = evaluate_generation_attempt(
-                        attempt_index,
-                        &genomes[attempt_index],
-                        seeds,
-                        config_ref,
-                        |trial_index| {
-                            tx_progress
-                                .blocking_send(GenerationStreamEvent::AttemptTrialStarted {
-                                    attempt_index,
-                                    trial_index,
-                                    trial_count,
-                                })
-                                .map_err(|err| format!("failed sending attempt progress: {err}"))
-                        },
-                    )
-                    .and_then(|result| {
-                        tx_progress
-                            .blocking_send(GenerationStreamEvent::AttemptComplete {
-                                attempt_index,
-                                result: result.clone(),
-                            })
-                            .map_err(|err| format!("failed sending attempt complete: {err}"))?;
-                        Ok((attempt_index, result))
-                    });
-                    if outcome.is_err() {
-                        cancelled_ref.store(true, Ordering::Relaxed);
-                    }
-                    if result_tx.send(outcome).is_err() {
-                        break;
+                    let job = pending.lock().unwrap().pop();
+                    if let Some((a, t)) = job {
+                        let outcome = TrialSimulator::new(&genomes[a], seeds[t], config_ref)
+                            .and_then(|mut sim| {
+                                let steps = (config_ref.duration_seconds / config_ref.dt).ceil() as usize;
+                                for _ in 0..steps {
+                                    sim.step()?;
+                                }
+                                Ok(sim.final_result())
+                            });
+                        match outcome {
+                            Ok(res) => { if res_tx.send(Ok((a, t, res))).is_err() { break; } },
+                            Err(e) => { if res_tx.send(Err(e)).is_err() { break; } }
+                        }
+                    } else {
+                        std::thread::sleep(Duration::from_millis(5));
                     }
                 }
             });
         }
-    });
-    drop(result_tx);
 
-    let mut results: Vec<Option<GenerationEvalResult>> = vec![None; attempt_count];
-    let mut first_error: Option<String> = None;
-    for outcome in result_rx {
-        match outcome {
-            Ok((attempt_index, result)) => {
-                if attempt_index < results.len() {
-                    results[attempt_index] = Some(result);
+        let mut working_satellites: HashMap<u64, (usize, usize)> = HashMap::new();
+        let mut completed_trials = vec![vec![None; trial_count]; attempt_count];
+        let mut finished_trials = 0;
+        let total_trials = attempt_count * trial_count;
+        let mut first_error: Option<String> = None;
+        let mut pending_report = vec![false; attempt_count];
+
+        loop {
+            while let Ok(outcome) = result_rx.try_recv() {
+                match outcome {
+                    Ok((a, t, res)) => {
+                        completed_trials[a][t] = Some(res);
+                        finished_trials += 1;
+                        if !pending_report[a] {
+                            let _ = tx.blocking_send(GenerationStreamEvent::AttemptTrialStarted {
+                                attempt_index: a,
+                                trial_index: t,
+                                trial_count,
+                            });
+                            pending_report[a] = true;
+                        }
+                    },
+                    Err(e) => {
+                        if first_error.is_none() { first_error = Some(e); }
+                    }
                 }
             }
-            Err(err) => {
-                if first_error.is_none() {
-                    first_error = Some(err);
+
+            if first_error.is_some() {
+                break;
+            }
+
+            let active_trial_ids: Vec<u64> = working_satellites.keys().copied().collect();
+            for tid in active_trial_ids {
+                if let Some(res) = satellite_pool.take_result(tid) {
+                    if let Some((a, t)) = working_satellites.remove(&tid) {
+                        completed_trials[a][t] = Some(res);
+                        finished_trials += 1;
+                        if !pending_report[a] {
+                            let _ = tx.blocking_send(GenerationStreamEvent::AttemptTrialStarted {
+                                attempt_index: a,
+                                trial_index: t,
+                                trial_count,
+                            });
+                            pending_report[a] = true;
+                        }
+                    }
                 }
             }
+
+            let timeouts = satellite_pool.reap_timeouts();
+            if !timeouts.is_empty() {
+                let mut p = pending_jobs.lock().unwrap();
+                for tid in timeouts {
+                    if let Some((a, t)) = working_satellites.remove(&tid) {
+                        p.push((a, t));
+                    }
+                }
+            }
+
+            while satellite_pool.idle_count() > 0 {
+                let mut p = pending_jobs.lock().unwrap();
+                if let Some((a, t)) = p.pop() {
+                    let genome = &request.genomes[a];
+                    let seed = request.seeds[t];
+                    if let Some(tid) = satellite_pool.try_dispatch(genome, seed, &config) {
+                        working_satellites.insert(tid, (a, t));
+                    } else {
+                        p.push((a, t));
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            if finished_trials == total_trials {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(5));
         }
-    }
-    if let Some(err) = first_error {
-        return Err(err);
-    }
 
-    let results: Vec<GenerationEvalResult> = results
-        .into_iter()
-        .enumerate()
-        .map(|(attempt_index, item)| {
-            item.ok_or_else(|| {
-                format!("generation attempt {attempt_index} did not produce a result")
-            })
-        })
-        .collect::<Result<_, _>>()?;
+        done.store(true, Ordering::Relaxed);
 
-    tx.blocking_send(GenerationStreamEvent::GenerationComplete { results })
-        .map_err(|err| format!("failed sending generation complete: {err}"))?;
-    Ok(())
+        if let Some(err) = first_error {
+            let _ = tx.blocking_send(GenerationStreamEvent::Error { message: err.clone() });
+            return Err(err);
+        }
+
+        let mut results = Vec::with_capacity(attempt_count);
+        for (a, block) in completed_trials.into_iter().enumerate() {
+            let attempt_t = block.into_iter().map(|o| o.unwrap()).collect::<Vec<_>>();
+            let res = summarize_trials(&request.genomes[a], &attempt_t);
+            let _ = tx.blocking_send(GenerationStreamEvent::AttemptComplete {
+                attempt_index: a,
+                result: res.clone(),
+            });
+            results.push(res);
+        }
+
+        let _ = tx.blocking_send(GenerationStreamEvent::GenerationComplete { results });
+        Ok(())
+    })
 }
 
 async fn eval_generation_handler(
@@ -3774,40 +3825,56 @@ enum SatelliteState {
 }
 
 struct SatelliteConnection {
-    id: String,
     tx: mpsc::UnboundedSender<SatelliteMessage>,
     state: SatelliteState,
 }
 
 struct SatellitePool {
-    inner: Mutex<HashMap<String, SatelliteConnection>>,
+    inner: Mutex<SatellitePoolInner>,
     next_trial_id: AtomicUsize,
+}
+
+struct SatellitePoolInner {
+    connections: HashMap<String, SatelliteConnection>,
+    completed: HashMap<u64, TrialResult>,
 }
 
 impl SatellitePool {
     fn new() -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Mutex::new(SatellitePoolInner {
+                connections: HashMap::new(),
+                completed: HashMap::new(),
+            }),
             next_trial_id: AtomicUsize::new(1),
         }
     }
 
     fn connected_count(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        self.inner.lock().unwrap().connections.len()
+    }
+
+    fn push_result(&self, trial_id: u64, result: TrialResult) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.completed.insert(trial_id, result);
+    }
+
+    fn take_result(&self, trial_id: u64) -> Option<TrialResult> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.completed.remove(&trial_id)
     }
 
     fn register(&self, id: String, tx: mpsc::UnboundedSender<SatelliteMessage>) {
-        let mut pool = self.inner.lock().unwrap();
-        pool.insert(id.clone(), SatelliteConnection {
-            id,
+        let mut inner = self.inner.lock().unwrap();
+        inner.connections.insert(id, SatelliteConnection {
             tx,
             state: SatelliteState::Idle,
         });
     }
 
     fn unregister(&self, id: &str) {
-        let mut pool = self.inner.lock().unwrap();
-        pool.remove(id);
+        let mut inner = self.inner.lock().unwrap();
+        inner.connections.remove(id);
     }
 
     fn next_trial_id(&self) -> u64 {
@@ -3822,8 +3889,8 @@ impl SatellitePool {
         config: &TrialConfig,
     ) -> Option<u64> {
         let trial_id = self.next_trial_id();
-        let mut pool = self.inner.lock().unwrap();
-        for conn in pool.values_mut() {
+        let mut inner = self.inner.lock().unwrap();
+        for conn in inner.connections.values_mut() {
             if matches!(conn.state, SatelliteState::Idle) {
                 let msg = SatelliteMessage::RunTrial {
                     trial_id,
@@ -3846,32 +3913,32 @@ impl SatellitePool {
     }
 
     fn mark_idle(&self, satellite_id: &str) {
-        let mut pool = self.inner.lock().unwrap();
-        if let Some(conn) = pool.get_mut(satellite_id) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(conn) = inner.connections.get_mut(satellite_id) {
             conn.state = SatelliteState::Idle;
         }
     }
 
     fn idle_count(&self) -> usize {
-        let pool = self.inner.lock().unwrap();
-        pool.values()
+        let inner = self.inner.lock().unwrap();
+        inner.connections.values()
             .filter(|c| matches!(c.state, SatelliteState::Idle))
             .count()
     }
 
-    fn timed_out_trial_ids(&self) -> Vec<u64> {
-        let pool = self.inner.lock().unwrap();
+    fn reap_timeouts(&self) -> Vec<u64> {
+        let mut inner = self.inner.lock().unwrap();
         let now = Instant::now();
-        pool.values()
-            .filter_map(|c| match &c.state {
-                SatelliteState::Working { trial_id, assigned_at }
-                    if now.duration_since(*assigned_at) > SATELLITE_TRIAL_TIMEOUT =>
-                {
-                    Some(*trial_id)
+        let mut dead = Vec::new();
+        for conn in inner.connections.values_mut() {
+            if let SatelliteState::Working { trial_id, assigned_at } = &conn.state {
+                if now.duration_since(*assigned_at) > SATELLITE_TRIAL_TIMEOUT {
+                    dead.push(*trial_id);
+                    conn.state = SatelliteState::Idle;
                 }
-                _ => None,
-            })
-            .collect()
+            }
+        }
+        dead
     }
 }
 
@@ -3924,12 +3991,17 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
                             SatelliteMessage::Ready => {
                                 pool.mark_idle(&sat_id_for_rx);
                             }
-                            SatelliteMessage::TrialResult { trial_id, fitness, .. } => {
+                            SatelliteMessage::TrialResult { trial_id, fitness, metrics, descriptor } => {
                                 info!(
                                     "satellite {} trial {} complete: fitness={:.3}",
                                     sat_id_for_rx, trial_id, fitness
                                 );
                                 pool.mark_idle(&sat_id_for_rx);
+                                pool.push_result(trial_id, TrialResult {
+                                    fitness,
+                                    metrics,
+                                    descriptor,
+                                });
                             }
                             SatelliteMessage::TrialError { trial_id, message } => {
                                 warn!(

@@ -52,9 +52,8 @@ cargo run --release
 The simulation supports distributed computing across your local area network (LAN) or localhost. You can run one main "Primary" node that coordinates evolution, and multiple headless "Satellite" nodes that only run physics simulations, sending results back to the primary.
 
 1. **Start the Primary Node:**
-By default, the primary binds only to `127.0.0.1`. To allow satellites on your LAN to connect, set the `SATELLITE_BIND` environment variable to `1`.
+The primary automatically binds to `0.0.0.0` making it ready to accept satellite connections immediately.
 ```powershell
-$env:SATELLITE_BIND="1"
 cargo run --release
 ```
 
