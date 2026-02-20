@@ -47,10 +47,16 @@ const FITNESS_STRAIGHTNESS_BONUS: f32 = 1.5;
 const FITNESS_HEIGHT_BONUS: f32 = 0.6;
 const FITNESS_ENERGY_PENALTY: f32 = 0.8;
 const FITNESS_INSTABILITY_PENALTY: f32 = 1.25;
-const FITNESS_NET_PROGRESS_WEIGHT: f32 = 0.8;
+const FITNESS_NET_PROGRESS_WEIGHT: f32 = 0.95;
 const FALLEN_PENALTY_STRENGTH: f32 = 0.6;
 const UPRIGHT_FULL_SCORE_THRESHOLD: f32 = 0.5;
 const UPRIGHT_PENALTY_FLOOR: f32 = 0.4;
+const FITNESS_PROGRESS_UPRIGHT_GATE_EXPONENT: f32 = 2.0;
+const FITNESS_PROGRESS_STRAIGHTNESS_GATE_EXPONENT: f32 = 2.0;
+const FITNESS_PROGRESS_FALLEN_GATE_EXPONENT: f32 = 1.3;
+const FITNESS_THRASH_ENERGY_RATIO_PENALTY: f32 = 0.55;
+const FITNESS_THRASH_INSTABILITY_RATIO_PENALTY: f32 = 0.65;
+const FITNESS_THRASH_PROGRESS_EPS: f32 = 0.45;
 const SETTLE_SECONDS: f32 = 2.25;
 const GROUND_COLLISION_GROUP: Group = Group::GROUP_1;
 const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
@@ -446,8 +452,14 @@ impl TrialAccumulator {
         } else {
             0.0
         };
-        let progress = net_distance * FITNESS_NET_PROGRESS_WEIGHT
+        let raw_progress = net_distance * FITNESS_NET_PROGRESS_WEIGHT
             + peak_distance * (1.0 - FITNESS_NET_PROGRESS_WEIGHT);
+        let upright_gate =
+            clamp(upright_avg, 0.0, 1.0).powf(FITNESS_PROGRESS_UPRIGHT_GATE_EXPONENT);
+        let straight_gate =
+            clamp(straightness, 0.0, 1.0).powf(FITNESS_PROGRESS_STRAIGHTNESS_GATE_EXPONENT);
+        let fallen_gate = (1.0 - fallen_ratio).powf(FITNESS_PROGRESS_FALLEN_GATE_EXPONENT);
+        let progress = raw_progress * upright_gate * straight_gate * fallen_gate;
 
         let mut quality = progress;
         quality += upright_avg * FITNESS_UPRIGHT_BONUS;
@@ -455,6 +467,11 @@ impl TrialAccumulator {
         quality += clamp(avg_height / 3.0, 0.0, 1.0) * FITNESS_HEIGHT_BONUS;
         quality -= energy_norm * FITNESS_ENERGY_PENALTY;
         quality -= instability_norm * FITNESS_INSTABILITY_PENALTY;
+        let progress_for_ratio = progress.max(FITNESS_THRASH_PROGRESS_EPS);
+        let energy_per_progress = energy_norm / progress_for_ratio;
+        let instability_per_progress = instability_norm / progress_for_ratio;
+        quality -= energy_per_progress * FITNESS_THRASH_ENERGY_RATIO_PENALTY;
+        quality -= instability_per_progress * FITNESS_THRASH_INSTABILITY_RATIO_PENALTY;
         quality *= 1.0 - fallen_ratio.powf(1.5) * FALLEN_PENALTY_STRENGTH;
         if upright_avg < UPRIGHT_FULL_SCORE_THRESHOLD {
             let upright_factor = clamp(upright_avg / UPRIGHT_FULL_SCORE_THRESHOLD, 0.0, 1.0);
@@ -1048,6 +1065,8 @@ struct TopologyProfile {
     mean_control_freq: f32,
     descriptor: [f32; 5],
     topology_fingerprint: String,
+    #[serde(default)]
+    coarse_topology_key: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1056,6 +1075,8 @@ struct GenerationTopologyDiagnostics {
     winner: TopologyProfile,
     best_n: Vec<TopologyProfile>,
     distinct_fingerprint_count: usize,
+    #[serde(default)]
+    distinct_coarse_fingerprint_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1208,6 +1229,8 @@ struct EvolutionDiagnosisTopology {
     latest_distinct_fingerprint_count: usize,
     latest_population_size: usize,
     distinct_fingerprint_ratio: f32,
+    latest_distinct_coarse_fingerprint_count: usize,
+    distinct_coarse_fingerprint_ratio: f32,
     top_enabled_limb_counts: Vec<TopologyLimbCountStat>,
     representative_topologies: Vec<TopologyProfile>,
 }
@@ -2640,10 +2663,16 @@ fn build_generation_topology_diagnostics(
         .map(|candidate| topology_fingerprint(&candidate.genome))
         .collect::<std::collections::BTreeSet<_>>()
         .len();
+    let distinct_coarse_fingerprint_count = batch_results
+        .iter()
+        .map(|candidate| coarse_topology_key(&candidate.genome))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     Some(GenerationTopologyDiagnostics {
         winner,
         best_n,
         distinct_fingerprint_count,
+        distinct_coarse_fingerprint_count,
     })
 }
 
@@ -3135,9 +3164,19 @@ fn build_evolution_performance_diagnose_response(
         .and_then(|entry| entry.topology.as_ref())
         .map(|topology| topology.distinct_fingerprint_count)
         .unwrap_or(0);
+    let latest_distinct_coarse_fingerprint_count = history
+        .last()
+        .and_then(|entry| entry.topology.as_ref())
+        .map(|topology| topology.distinct_coarse_fingerprint_count)
+        .unwrap_or(0);
     let latest_population_size = status.population_size;
     let distinct_fingerprint_ratio = if latest_population_size > 0 {
         latest_distinct_fingerprint_count as f32 / latest_population_size as f32
+    } else {
+        0.0
+    };
+    let distinct_coarse_fingerprint_ratio = if latest_population_size > 0 {
+        latest_distinct_coarse_fingerprint_count as f32 / latest_population_size as f32
     } else {
         0.0
     };
@@ -3162,6 +3201,13 @@ fn build_evolution_performance_diagnose_response(
             code: "structural_diversity_behavioral_convergence".to_string(),
             severity: "info".to_string(),
             message: "Topology fingerprints are diverse, but behavior-level novelty is low; many structures map to similar gaits.".to_string(),
+        });
+    }
+    if distinct_coarse_fingerprint_ratio < 0.25 {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "coarse_topology_convergence".to_string(),
+            severity: "info".to_string(),
+            message: "Coarse topology classes are converging, even if fine-grained parameters still vary.".to_string(),
         });
     }
     if mutation_at_upper {
@@ -3237,6 +3283,8 @@ fn build_evolution_performance_diagnose_response(
             latest_distinct_fingerprint_count,
             latest_population_size,
             distinct_fingerprint_ratio,
+            latest_distinct_coarse_fingerprint_count,
+            distinct_coarse_fingerprint_ratio,
             top_enabled_limb_counts,
             representative_topologies,
         },
@@ -3469,15 +3517,8 @@ fn finite_or_zero(value: f32) -> f32 {
 
 fn build_topology_profile(generation: usize, candidate: &EvolutionCandidate) -> TopologyProfile {
     let genome = &candidate.genome;
-    let enabled_limb_count = genome.limbs.iter().filter(|limb| limb.enabled).count();
-    let mut segment_count_histogram = [0usize; MAX_SEGMENTS_PER_LIMB];
-    for limb in &genome.limbs {
-        if !limb.enabled {
-            continue;
-        }
-        let segment_count = active_segment_count(limb).clamp(1, MAX_SEGMENTS_PER_LIMB);
-        segment_count_histogram[segment_count - 1] += 1;
-    }
+    let enabled_limb_count = enabled_limb_count(genome);
+    let segment_count_histogram = segment_count_histogram(genome);
     TopologyProfile {
         generation,
         attempt: candidate.attempt,
@@ -3497,6 +3538,7 @@ fn build_topology_profile(generation: usize, candidate: &EvolutionCandidate) -> 
             finite_or_zero(candidate.descriptor[4]),
         ],
         topology_fingerprint: topology_fingerprint(genome),
+        coarse_topology_key: coarse_topology_key(genome),
     }
 }
 
@@ -3540,6 +3582,42 @@ fn topology_fingerprint(genome: &Genome) -> String {
     format!("{hash:016x}")
 }
 
+fn coarse_topology_key(genome: &Genome) -> String {
+    let enabled = enabled_limb_count(genome);
+    let hist = segment_count_histogram(genome);
+    let mean_segment_length = feature_segment_length_mean(genome);
+    let mean_segment_mass = feature_segment_mass_mean(genome);
+    let mean_control_amp = feature_control_amp_mean(genome);
+    let mean_control_freq = feature_control_freq_mean(genome);
+    let mean_segment_count = feature_segment_count_mean(genome);
+    let torso_wh = if genome.torso.h.abs() > 1e-5 {
+        genome.torso.w / genome.torso.h
+    } else {
+        1.0
+    };
+    let torso_dh = if genome.torso.h.abs() > 1e-5 {
+        genome.torso.d / genome.torso.h
+    } else {
+        1.0
+    };
+    format!(
+        "e{}-h{}:{}:{}:{}:{}-sc{}-sl{}-sm{}-ca{}-cf{}-wh{}-dh{}",
+        enabled,
+        hist[0],
+        hist[1],
+        hist[2],
+        hist[3],
+        hist[4],
+        quantize_to_bucket(mean_segment_count, 0.5),
+        quantize_to_bucket(mean_segment_length, 0.25),
+        quantize_to_bucket(mean_segment_mass, 0.2),
+        quantize_to_bucket(mean_control_amp, 0.5),
+        quantize_to_bucket(mean_control_freq, 0.25),
+        quantize_to_bucket(torso_wh, 0.2),
+        quantize_to_bucket(torso_dh, 0.2)
+    )
+}
+
 fn stable_hash_mix(hash: &mut u64, value: u64) {
     const FNV_PRIME: u64 = 1099511628211;
     *hash ^= value;
@@ -3551,6 +3629,22 @@ fn quantize_to_bucket(value: f32, step: f32) -> i64 {
         return 0;
     }
     (finite_or_zero(value) / step).round() as i64
+}
+
+fn enabled_limb_count(genome: &Genome) -> usize {
+    genome.limbs.iter().filter(|limb| limb.enabled).count()
+}
+
+fn segment_count_histogram(genome: &Genome) -> [usize; MAX_SEGMENTS_PER_LIMB] {
+    let mut histogram = [0usize; MAX_SEGMENTS_PER_LIMB];
+    for limb in &genome.limbs {
+        if !limb.enabled {
+            continue;
+        }
+        let segment_count = active_segment_count(limb).clamp(1, MAX_SEGMENTS_PER_LIMB);
+        histogram[segment_count - 1] += 1;
+    }
+    histogram
 }
 
 fn active_segment_count(limb: &LimbGene) -> usize {

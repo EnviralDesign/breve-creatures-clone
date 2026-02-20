@@ -41,7 +41,7 @@ Use this route for frequent polling.
 Server-side interpretation payload:
 - `states`: `plateauState`, `volatilityState`, `noveltyState`, `trendState`
 - `metrics`: recent-window best and novelty dispersion, slopes, mutation clamp state
-- `topology`: `distinctFingerprintRatio`, `topEnabledLimbCounts`, `representativeTopologies`
+- `topology`: `distinctFingerprintRatio`, `distinctCoarseFingerprintRatio`, `topEnabledLimbCounts`, `representativeTopologies`
 - `findings`: `{ code, severity, message }`
 - `recommendedActions`: short action list
 
@@ -74,6 +74,8 @@ Response:
     - `winner`
     - `bestN` (bounded; at most 3 profiles)
     - `distinctFingerprintCount`
+    - `distinctCoarseFingerprintCount`
+    - `winner.coarseTopologyKey` and `bestN[*].coarseTopologyKey`
   - `breeding`: `{ mutationRate, randomInjectChance, injectedGenomes, eliteKept }`
 - `learnedParams[]` (if enabled):
   - `{ name, bounds: [min,max], population: { min,p50,p90,max,std }, champion }`

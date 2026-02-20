@@ -35,7 +35,10 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
   - Includes:
     - `run`, `window`, `trends`
     - `generations` with per-generation fitness/selection/diversity/breeding stats
-    - `generations[*].topology` with winner + best-N topology profiles and fingerprint diversity count
+    - `generations[*].topology` with winner + best-N topology profiles and:
+      - `distinctFingerprintCount`
+      - `distinctCoarseFingerprintCount`
+      - per-profile `coarseTopologyKey`
     - `learnedParams` with bounded parameter-distribution summaries
 
 - `GET /api/evolution/performance/summary`
@@ -55,7 +58,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
   - Includes:
     - `states` (`plateauState`, `volatilityState`, `noveltyState`, `trendState`)
     - `metrics` (recent-window best/novelty stats, slopes, mutation pressure)
-    - `topology` (distinct fingerprint ratio, enabled-limb-count mix, representative topologies)
+    - `topology` (distinct + coarse fingerprint ratios, enabled-limb-count mix, representative topologies)
     - `findings` (coded diagnostics)
     - `recommendedActions`
 
