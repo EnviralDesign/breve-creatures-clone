@@ -42,7 +42,7 @@ const JOINT_MOTOR_FORCE_MULTIPLIER: f32 = 1.0;
 const AXIS_TILT_GAIN: f32 = 1.9;
 const FALLEN_HEIGHT_THRESHOLD: f32 = 0.35;
 const MAX_PLAUSIBLE_STEP_DISPLACEMENT: f32 = 1.5;
-const FITNESS_UPRIGHT_BONUS: f32 = 1.35;
+const FITNESS_UPRIGHT_BONUS: f32 = 0.95;
 const FITNESS_STRAIGHTNESS_BONUS: f32 = 1.5;
 const FITNESS_HEIGHT_BONUS: f32 = 0.6;
 const FITNESS_ENERGY_PENALTY: f32 = 0.8;
@@ -51,9 +51,13 @@ const FITNESS_NET_PROGRESS_WEIGHT: f32 = 0.95;
 const FALLEN_PENALTY_STRENGTH: f32 = 0.6;
 const UPRIGHT_FULL_SCORE_THRESHOLD: f32 = 0.5;
 const UPRIGHT_PENALTY_FLOOR: f32 = 0.4;
-const FITNESS_PROGRESS_UPRIGHT_GATE_EXPONENT: f32 = 2.0;
 const FITNESS_PROGRESS_STRAIGHTNESS_GATE_EXPONENT: f32 = 2.0;
 const FITNESS_PROGRESS_FALLEN_GATE_EXPONENT: f32 = 1.3;
+const FITNESS_PROGRESS_MIDPOINT_FRACTION: f32 = 0.5;
+const FITNESS_PROGRESS_LATE_FRACTION: f32 = 0.85;
+const FITNESS_SUSTAIN_BASE: f32 = 0.12;
+const FITNESS_SUSTAIN_MID_GAIN_WEIGHT: f32 = 0.58;
+const FITNESS_SUSTAIN_LATE_GAIN_WEIGHT: f32 = 0.30;
 const FITNESS_THRASH_ENERGY_RATIO_PENALTY: f32 = 0.55;
 const FITNESS_THRASH_INSTABILITY_RATIO_PENALTY: f32 = 0.65;
 const FITNESS_THRASH_PROGRESS_EPS: f32 = 0.45;
@@ -306,6 +310,8 @@ struct TrialAccumulator {
     spawn: Vector3<f32>,
     best_distance: f32,
     path_length: f32,
+    distance_at_mid_phase: Option<f32>,
+    distance_at_late_phase: Option<f32>,
     sampled_time: f32,
     upright_integral: f32,
     height_integral: f32,
@@ -341,6 +347,8 @@ impl TrialAccumulator {
             spawn,
             best_distance: 0.0,
             path_length: 0.0,
+            distance_at_mid_phase: None,
+            distance_at_late_phase: None,
             sampled_time: 0.0,
             upright_integral: 0.0,
             height_integral: 0.0,
@@ -392,6 +400,20 @@ impl TrialAccumulator {
                 let dz = torso_pos.z - last.z;
                 self.path_length += (dx * dx + dz * dz).sqrt();
             }
+        }
+
+        let current_distance = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
+        let effective_duration = (duration - SETTLE_SECONDS).max(1e-6);
+        let eval_time = (self.sampled_time - SETTLE_SECONDS).max(0.0);
+        if self.distance_at_mid_phase.is_none()
+            && eval_time >= effective_duration * FITNESS_PROGRESS_MIDPOINT_FRACTION
+        {
+            self.distance_at_mid_phase = Some(current_distance);
+        }
+        if self.distance_at_late_phase.is_none()
+            && eval_time >= effective_duration * FITNESS_PROGRESS_LATE_FRACTION
+        {
+            self.distance_at_late_phase = Some(current_distance);
         }
 
         self.last_torso_pos = Some(torso_pos);
@@ -452,14 +474,33 @@ impl TrialAccumulator {
         } else {
             0.0
         };
+        let distance_at_mid = self.distance_at_mid_phase.unwrap_or(net_distance);
+        let distance_at_late = self.distance_at_late_phase.unwrap_or(net_distance);
+        let gain_after_mid_ratio = clamp(
+            (net_distance - distance_at_mid).max(0.0)
+                / net_distance.max(FITNESS_THRASH_PROGRESS_EPS),
+            0.0,
+            1.0,
+        );
+        let gain_after_late_ratio = clamp(
+            (net_distance - distance_at_late).max(0.0)
+                / net_distance.max(FITNESS_THRASH_PROGRESS_EPS),
+            0.0,
+            1.0,
+        );
+        let sustain_factor = clamp(
+            FITNESS_SUSTAIN_BASE
+                + gain_after_mid_ratio * FITNESS_SUSTAIN_MID_GAIN_WEIGHT
+                + gain_after_late_ratio * FITNESS_SUSTAIN_LATE_GAIN_WEIGHT,
+            0.0,
+            1.0,
+        );
         let raw_progress = net_distance * FITNESS_NET_PROGRESS_WEIGHT
             + peak_distance * (1.0 - FITNESS_NET_PROGRESS_WEIGHT);
-        let upright_gate =
-            clamp(upright_avg, 0.0, 1.0).powf(FITNESS_PROGRESS_UPRIGHT_GATE_EXPONENT);
         let straight_gate =
             clamp(straightness, 0.0, 1.0).powf(FITNESS_PROGRESS_STRAIGHTNESS_GATE_EXPONENT);
         let fallen_gate = (1.0 - fallen_ratio).powf(FITNESS_PROGRESS_FALLEN_GATE_EXPONENT);
-        let progress = raw_progress * upright_gate * straight_gate * fallen_gate;
+        let progress = raw_progress * straight_gate * fallen_gate * sustain_factor;
 
         let mut quality = progress;
         quality += upright_avg * FITNESS_UPRIGHT_BONUS;
