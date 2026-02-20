@@ -12,7 +12,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -57,11 +57,12 @@ const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
 const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 const DEFAULT_BIND_PORT: u16 = 8787;
 const PORT_FALLBACK_ATTEMPTS: u16 = 32;
-const SATELLITE_TRIAL_TIMEOUT: Duration = Duration::from_secs(30);
+const SATELLITE_TRIAL_TIMEOUT: Duration = Duration::from_secs(10);
 const SATELLITE_RECONNECT_DELAY: Duration = Duration::from_secs(3);
 const SATELLITE_DISPATCH_RETRY_LIMIT: usize = 8;
 const SATELLITE_CAPACITY_ERROR: &str = "satellite at capacity";
 const MAX_FITNESS_HISTORY_POINTS: usize = 4096;
+const MAX_PERFORMANCE_HISTORY_POINTS: usize = 4096;
 const DEFAULT_POPULATION_SIZE: usize = 80;
 const MIN_POPULATION_SIZE: usize = 1;
 const MAX_POPULATION_SIZE: usize = 128;
@@ -71,6 +72,15 @@ const DEFAULT_GENERATION_SECONDS: f32 = 18.0;
 const EVOLUTION_VIEW_FRAME_LIMIT: usize = 900;
 const CHECKPOINT_DIR: &str = "data/checkpoints";
 const AUTOSAVE_EVERY_GENERATIONS: usize = 5;
+const DEFAULT_PERFORMANCE_WINDOW_GENERATIONS: usize = 120;
+const MAX_PERFORMANCE_WINDOW_GENERATIONS: usize = 400;
+const DEFAULT_PERFORMANCE_STRIDE: usize = 1;
+const MAX_PERFORMANCE_STRIDE: usize = 8;
+const MIN_BREEDING_MUTATION_RATE: f32 = 0.18;
+const MAX_BREEDING_MUTATION_RATE: f32 = 0.72;
+const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
+const MAX_GENERATION_TOPOLOGY_CANDIDATES: usize = 3;
+const SUMMARY_BEST_TOPOLOGY_COUNT: usize = 5;
 static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -972,6 +982,185 @@ struct EvolutionFitnessHistoryResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GenerationDistributionStats {
+    min: f32,
+    p50: f32,
+    p90: f32,
+    max: f32,
+    std: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationFitnessStats {
+    best: f32,
+    p50: f32,
+    p90: f32,
+    std: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationSelectionStats {
+    mean: f32,
+    p90: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationDiversityStats {
+    novelty_mean: f32,
+    novelty_p90: f32,
+    local_competition_mean: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationDescriptorStats {
+    centroid: [f32; 5],
+    spread: [f32; 5],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationBreedingStats {
+    mutation_rate: f32,
+    random_inject_chance: f32,
+    injected_genomes: usize,
+    elite_kept: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TopologyProfile {
+    generation: usize,
+    attempt: usize,
+    fitness: f32,
+    selection_score: f32,
+    enabled_limb_count: usize,
+    segment_count_histogram: [usize; MAX_SEGMENTS_PER_LIMB],
+    mean_segment_length: f32,
+    mean_segment_mass: f32,
+    mean_control_amp: f32,
+    mean_control_freq: f32,
+    descriptor: [f32; 5],
+    topology_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationTopologyDiagnostics {
+    winner: TopologyProfile,
+    best_n: Vec<TopologyProfile>,
+    distinct_fingerprint_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationPerformanceSummary {
+    generation: usize,
+    fitness: GenerationFitnessStats,
+    selection: GenerationSelectionStats,
+    diversity: GenerationDiversityStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    descriptor: Option<GenerationDescriptorStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    topology: Option<GenerationTopologyDiagnostics>,
+    breeding: GenerationBreedingStats,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionPerformanceQuery {
+    window_generations: Option<usize>,
+    stride: Option<usize>,
+    include_param_stats: Option<bool>,
+    include_descriptors: Option<bool>,
+    include_topology: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionPerformanceRun {
+    generation: usize,
+    population_size: usize,
+    trial_count: usize,
+    run_speed: f32,
+    paused: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionPerformanceWindow {
+    from_generation: usize,
+    to_generation: usize,
+    count: usize,
+    stride: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionPerformanceTrends {
+    best_fitness_slope: f32,
+    median_fitness_slope: f32,
+    stagnation_generations: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LearnedParameterSummary {
+    name: String,
+    bounds: [f32; 2],
+    population: GenerationDistributionStats,
+    champion: f32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionPerformanceResponse {
+    run: EvolutionPerformanceRun,
+    window: EvolutionPerformanceWindow,
+    trends: EvolutionPerformanceTrends,
+    generations: Vec<GenerationPerformanceSummary>,
+    learned_params: Vec<LearnedParameterSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionConvergenceSignal {
+    name: String,
+    state: String,
+    std: f32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionMutationPressure {
+    current_rate: f32,
+    at_lower_clamp: bool,
+    at_upper_clamp: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionPerformanceSummaryResponse {
+    generation: usize,
+    best_ever_fitness: f32,
+    recent_best_fitness: f32,
+    stagnation_generations: usize,
+    diversity_state: String,
+    mutation_pressure: EvolutionMutationPressure,
+    convergence: Vec<EvolutionConvergenceSignal>,
+    signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    latest_topology: Option<TopologyProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    best_ever_topology: Option<TopologyProfile>,
+    best_n_topologies: Vec<TopologyProfile>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct EvolutionStatus {
     generation: usize,
     population_size: usize,
@@ -1014,6 +1203,8 @@ struct EvolutionRuntimeSnapshot {
     injection_queue: Vec<EvolutionInjection>,
     #[serde(default)]
     fitness_history: Vec<GenerationFitnessSummary>,
+    #[serde(default)]
+    performance_history: Vec<GenerationPerformanceSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1074,6 +1265,7 @@ struct EvolutionSharedState {
     view: EvolutionViewState,
     runtime_snapshot: Option<EvolutionRuntimeSnapshot>,
     fitness_history: Vec<GenerationFitnessSummary>,
+    performance_history: Vec<GenerationPerformanceSummary>,
 }
 
 #[derive(Clone)]
@@ -1120,6 +1312,7 @@ impl EvolutionController {
                 view: EvolutionViewState::default(),
                 runtime_snapshot: None,
                 fitness_history: Vec::new(),
+                performance_history: Vec::new(),
             })),
             events,
         })
@@ -1232,6 +1425,7 @@ impl EvolutionController {
     fn update_runtime_snapshot(&self, snapshot: EvolutionRuntimeSnapshot) {
         let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
         shared.fitness_history = snapshot.fitness_history.clone();
+        shared.performance_history = snapshot.performance_history.clone();
         shared.runtime_snapshot = Some(snapshot);
     }
 
@@ -1250,6 +1444,23 @@ impl EvolutionController {
 
     fn clear_fitness_history(&self) {
         self.set_fitness_history(Vec::new());
+    }
+
+    fn snapshot_performance_history(&self) -> Vec<GenerationPerformanceSummary> {
+        self.shared
+            .lock()
+            .expect("evolution shared mutex poisoned")
+            .performance_history
+            .clone()
+    }
+
+    fn set_performance_history(&self, history: Vec<GenerationPerformanceSummary>) {
+        let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
+        shared.performance_history = history;
+    }
+
+    fn clear_performance_history(&self) {
+        self.set_performance_history(Vec::new());
     }
 
     fn current_best_genome(&self) -> Option<Genome> {
@@ -1429,6 +1640,28 @@ impl EvolutionController {
             .send(EvolutionStreamEvent::GenerationSummary { summary });
     }
 
+    fn emit_generation_performance(&self, summary: GenerationPerformanceSummary) {
+        let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
+        let append = match shared.performance_history.last() {
+            None => true,
+            Some(last) if summary.generation > last.generation => true,
+            Some(last) if summary.generation == last.generation => false,
+            Some(_) => {
+                shared.performance_history.clear();
+                true
+            }
+        };
+        if append {
+            shared.performance_history.push(summary);
+        } else if let Some(last) = shared.performance_history.last_mut() {
+            *last = summary;
+        }
+        if shared.performance_history.len() > MAX_PERFORMANCE_HISTORY_POINTS {
+            let drop_count = shared.performance_history.len() - MAX_PERFORMANCE_HISTORY_POINTS;
+            shared.performance_history.drain(0..drop_count);
+        }
+    }
+
     fn start_trial(&self, genome: Genome, part_sizes: Vec<[f32; 3]>) {
         {
             let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
@@ -1552,6 +1785,7 @@ fn start_evolution_worker(
                 best_genome = loaded_status.best_genome.clone();
                 novelty_archive = loaded.novelty_archive.clone();
                 controller.set_fitness_history(loaded.fitness_history.clone());
+                controller.set_performance_history(loaded.performance_history.clone());
                 batch_genomes = loaded.batch_genomes.clone();
                 batch_results = loaded.batch_results.clone();
                 attempt_trials = loaded.attempt_trials.clone();
@@ -1614,6 +1848,7 @@ fn start_evolution_worker(
                 best_genome = None;
                 novelty_archive.clear();
                 controller.clear_fitness_history();
+                controller.clear_performance_history();
                 reset_evolution_batch(
                     &mut rng,
                     pending_population_size,
@@ -1748,7 +1983,7 @@ fn start_evolution_worker(
                 {
                     controller.emit_generation_summary(summary);
                 }
-                finalize_generation(
+                let performance = finalize_generation(
                     &mut rng,
                     &mut batch_genomes,
                     &mut batch_results,
@@ -1764,6 +1999,9 @@ fn start_evolution_worker(
                     pending_population_size,
                     injected_genomes,
                 );
+                if let Some(summary) = performance {
+                    controller.emit_generation_performance(summary);
+                }
                 controller.update_status(|status| {
                     status.generation = generation;
                     status.population_size = population_size;
@@ -1901,7 +2139,7 @@ fn start_evolution_worker(
                             controller.emit_generation_summary(summary);
                         }
                         let injected_genomes = dequeue_injected_genomes(&controller, &mut rng, 1);
-                        finalize_generation(
+                        let performance = finalize_generation(
                             &mut rng,
                             &mut batch_genomes,
                             &mut batch_results,
@@ -1917,6 +2155,9 @@ fn start_evolution_worker(
                             pending_population_size,
                             injected_genomes,
                         );
+                        if let Some(summary) = performance {
+                            controller.emit_generation_performance(summary);
+                        }
                         let remaining = controller.consume_fast_forward_generation();
                         controller.update_status(|status| {
                             status.generation = generation;
@@ -2197,6 +2438,7 @@ fn publish_runtime_snapshot(
         novelty_archive: novelty_archive.to_vec(),
         injection_queue: controller.injection_queue_snapshot(),
         fitness_history: controller.snapshot_fitness_history(),
+        performance_history: controller.snapshot_performance_history(),
     };
     controller.update_runtime_snapshot(snapshot);
 }
@@ -2239,6 +2481,104 @@ fn build_generation_fitness_summary(
     })
 }
 
+fn build_generation_performance_summary(
+    generation: usize,
+    batch_results: &[EvolutionCandidate],
+    mutation_rate: f32,
+    random_inject_chance: f32,
+    injected_genomes: usize,
+    elite_kept: usize,
+) -> Option<GenerationPerformanceSummary> {
+    if batch_results.is_empty() {
+        return None;
+    }
+    let fitnesses: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.fitness))
+        .collect();
+    let selection_scores: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.selection_score))
+        .collect();
+    let novelties: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.novelty))
+        .collect();
+    let local_competitions: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.local_competition))
+        .collect();
+    let best = fitnesses.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mut centroid = [0.0f32; 5];
+    let mut spread = [0.0f32; 5];
+    for axis in 0..5 {
+        let axis_values: Vec<f32> = batch_results
+            .iter()
+            .map(|item| finite_or_zero(item.descriptor[axis]))
+            .collect();
+        centroid[axis] = mean(&axis_values);
+        spread[axis] = std_dev(&axis_values);
+    }
+    let topology = build_generation_topology_diagnostics(generation, batch_results);
+    Some(GenerationPerformanceSummary {
+        generation,
+        fitness: GenerationFitnessStats {
+            best: finite_or_zero(best),
+            p50: quantile(&fitnesses, 0.5),
+            p90: quantile(&fitnesses, 0.9),
+            std: std_dev(&fitnesses),
+        },
+        selection: GenerationSelectionStats {
+            mean: mean(&selection_scores),
+            p90: quantile(&selection_scores, 0.9),
+        },
+        diversity: GenerationDiversityStats {
+            novelty_mean: mean(&novelties),
+            novelty_p90: quantile(&novelties, 0.9),
+            local_competition_mean: mean(&local_competitions),
+        },
+        descriptor: Some(GenerationDescriptorStats { centroid, spread }),
+        topology,
+        breeding: GenerationBreedingStats {
+            mutation_rate,
+            random_inject_chance,
+            injected_genomes,
+            elite_kept,
+        },
+    })
+}
+
+fn build_generation_topology_diagnostics(
+    generation: usize,
+    batch_results: &[EvolutionCandidate],
+) -> Option<GenerationTopologyDiagnostics> {
+    if batch_results.is_empty() {
+        return None;
+    }
+    let mut by_fitness = batch_results.to_vec();
+    by_fitness.sort_by(|a, b| {
+        b.fitness
+            .partial_cmp(&a.fitness)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let winner = build_topology_profile(generation, &by_fitness[0]);
+    let best_n = by_fitness
+        .iter()
+        .take(MAX_GENERATION_TOPOLOGY_CANDIDATES)
+        .map(|candidate| build_topology_profile(generation, candidate))
+        .collect::<Vec<_>>();
+    let distinct_fingerprint_count = batch_results
+        .iter()
+        .map(|candidate| topology_fingerprint(&candidate.genome))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    Some(GenerationTopologyDiagnostics {
+        winner,
+        best_n,
+        distinct_fingerprint_count,
+    })
+}
+
 fn finalize_generation(
     rng: &mut SmallRng,
     batch_genomes: &mut Vec<Genome>,
@@ -2254,7 +2594,7 @@ fn finalize_generation(
     best_genome: &mut Option<Genome>,
     pending_population_size: usize,
     injected_genomes: Vec<Genome>,
-) {
+) -> Option<GenerationPerformanceSummary> {
     apply_diversity_scores(batch_results, novelty_archive);
     update_novelty_archive(batch_results, novelty_archive);
 
@@ -2271,7 +2611,7 @@ fn finalize_generation(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let Some(top) = ranked_by_fitness.first() else {
-        return;
+        return None;
     };
     if top.fitness > *best_ever_score {
         *best_ever_score = top.fitness;
@@ -2281,22 +2621,28 @@ fn finalize_generation(
     let target_population_size =
         pending_population_size.clamp(MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
     let mut next_genomes: Vec<Genome> = Vec::with_capacity(target_population_size);
+    let mut injected_used = 0usize;
     for genome in injected_genomes.into_iter().take(target_population_size) {
         next_genomes.push(genome);
+        injected_used += 1;
     }
     let elite_count = ELITE_COUNT
         .min(ranked_by_fitness.len())
         .min(target_population_size.saturating_sub(next_genomes.len()));
+    let mut elite_kept = 0usize;
     if elite_count > 0 && next_genomes.len() < target_population_size {
         next_genomes.push(ranked_by_fitness[0].genome.clone());
+        elite_kept += 1;
     }
     if elite_count > 1 && next_genomes.len() < target_population_size {
         let diversity_elite = ranked_for_breeding.first();
         if let Some(candidate) = diversity_elite {
             if candidate.attempt != ranked_by_fitness[0].attempt {
                 next_genomes.push(candidate.genome.clone());
+                elite_kept += 1;
             } else if ranked_by_fitness.len() > 1 {
                 next_genomes.push(ranked_by_fitness[1].genome.clone());
+                elite_kept += 1;
             }
         }
     }
@@ -2314,6 +2660,21 @@ fn finalize_generation(
             .sum::<f32>()
             / ranked_for_breeding.len() as f32
     };
+    let base_mutation_rate = if ranked_for_breeding.len() == 1 {
+        0.65
+    } else {
+        0.24
+    };
+    let mutation_rate = clamp(
+        base_mutation_rate + (1.0 - mean_novelty_norm) * 0.08,
+        MIN_BREEDING_MUTATION_RATE,
+        MAX_BREEDING_MUTATION_RATE,
+    );
+    let random_inject_chance = if ranked_for_breeding.len() > 1 {
+        0.04 + (1.0 - mean_novelty_norm) * 0.04
+    } else {
+        0.0
+    };
     while next_genomes.len() < target_population_size {
         let tournament_size = 4usize.min(ranked_for_breeding.len().max(1));
         let parent_a = tournament_select(&ranked_for_breeding, tournament_size, rng)
@@ -2327,27 +2688,21 @@ fn finalize_generation(
             parent_a.clone()
         };
         let mut child = crossover_genome(&parent_a, &parent_b, rng);
-        let base_mutation_rate = if ranked_for_breeding.len() == 1 {
-            0.65
-        } else {
-            0.24
-        };
-        let mutation_rate = clamp(
-            base_mutation_rate + (1.0 - mean_novelty_norm) * 0.08,
-            0.18,
-            0.72,
-        );
         child = mutate_genome(child, mutation_rate, rng);
-        let random_inject_chance = if ranked_for_breeding.len() > 1 {
-            0.04 + (1.0 - mean_novelty_norm) * 0.04
-        } else {
-            0.0
-        };
         if ranked_for_breeding.len() > 1 && rng.random::<f32>() < random_inject_chance {
             child = random_genome(rng);
         }
         next_genomes.push(child);
     }
+
+    let performance_summary = build_generation_performance_summary(
+        *generation,
+        batch_results,
+        mutation_rate,
+        random_inject_chance,
+        injected_used,
+        elite_kept,
+    );
 
     *generation += 1;
     *population_size = target_population_size;
@@ -2357,6 +2712,678 @@ fn finalize_generation(
     *trial_seeds = build_trial_seed_set(*generation, TRIALS_PER_CANDIDATE);
     *current_attempt_index = 0;
     *current_trial_index = 0;
+    performance_summary
+}
+
+#[derive(Clone, Copy)]
+struct ParameterFeatureDefinition {
+    name: &'static str,
+    bounds: [f32; 2],
+    extractor: fn(&Genome) -> f32,
+}
+
+const LEARNED_PARAMETER_FEATURES: [ParameterFeatureDefinition; 11] = [
+    ParameterFeatureDefinition {
+        name: "torso.w",
+        bounds: [0.45, 3.1],
+        extractor: feature_torso_w,
+    },
+    ParameterFeatureDefinition {
+        name: "torso.h",
+        bounds: [0.45, 3.1],
+        extractor: feature_torso_h,
+    },
+    ParameterFeatureDefinition {
+        name: "torso.d",
+        bounds: [0.45, 3.1],
+        extractor: feature_torso_d,
+    },
+    ParameterFeatureDefinition {
+        name: "torso.mass",
+        bounds: [0.2, 1.95],
+        extractor: feature_torso_mass,
+    },
+    ParameterFeatureDefinition {
+        name: "mass_scale",
+        bounds: [0.7, 1.36],
+        extractor: feature_mass_scale,
+    },
+    ParameterFeatureDefinition {
+        name: "limb.enabled_ratio",
+        bounds: [0.0, 1.0],
+        extractor: feature_enabled_limb_ratio,
+    },
+    ParameterFeatureDefinition {
+        name: "limb.segment_count_mean",
+        bounds: [1.0, MAX_SEGMENTS_PER_LIMB as f32],
+        extractor: feature_segment_count_mean,
+    },
+    ParameterFeatureDefinition {
+        name: "segment.length_mean",
+        bounds: [0.4, 2.6],
+        extractor: feature_segment_length_mean,
+    },
+    ParameterFeatureDefinition {
+        name: "segment.mass_mean",
+        bounds: [0.1, 2.25],
+        extractor: feature_segment_mass_mean,
+    },
+    ParameterFeatureDefinition {
+        name: "control.amp_mean",
+        bounds: [0.35, 11.6],
+        extractor: feature_control_amp_mean,
+    },
+    ParameterFeatureDefinition {
+        name: "control.freq_mean",
+        bounds: [0.3, 4.9],
+        extractor: feature_control_freq_mean,
+    },
+];
+
+fn build_evolution_performance_response(
+    controller: &EvolutionController,
+    query: EvolutionPerformanceQuery,
+) -> EvolutionPerformanceResponse {
+    let status = controller.snapshot_status();
+    let history = controller.snapshot_performance_history();
+    let runtime_snapshot = controller.runtime_snapshot();
+    let window_generations = query
+        .window_generations
+        .unwrap_or(DEFAULT_PERFORMANCE_WINDOW_GENERATIONS)
+        .clamp(1, MAX_PERFORMANCE_WINDOW_GENERATIONS);
+    let stride = query
+        .stride
+        .unwrap_or(DEFAULT_PERFORMANCE_STRIDE)
+        .clamp(1, MAX_PERFORMANCE_STRIDE);
+    let include_param_stats = query.include_param_stats.unwrap_or(true);
+    let include_descriptors = query.include_descriptors.unwrap_or(true);
+    let include_topology = query.include_topology.unwrap_or(true);
+
+    let (from_generation, to_generation, recent_records) =
+        select_performance_window(&history, status.generation, window_generations);
+    let trends = EvolutionPerformanceTrends {
+        best_fitness_slope: linear_regression_slope(
+            &recent_records
+                .iter()
+                .map(|entry| (entry.generation as f32, entry.fitness.best))
+                .collect::<Vec<_>>(),
+        ),
+        median_fitness_slope: linear_regression_slope(
+            &recent_records
+                .iter()
+                .map(|entry| (entry.generation as f32, entry.fitness.p50))
+                .collect::<Vec<_>>(),
+        ),
+        stagnation_generations: stagnation_generations(&history),
+    };
+    let mut generations = downsample_performance_history(&recent_records, stride);
+    if !include_descriptors {
+        for point in &mut generations {
+            point.descriptor = None;
+        }
+    }
+    if !include_topology {
+        for point in &mut generations {
+            point.topology = None;
+        }
+    }
+    let learned_params = if include_param_stats {
+        build_learned_parameter_summaries(runtime_snapshot.as_ref(), status.best_genome.as_ref())
+    } else {
+        Vec::new()
+    };
+
+    EvolutionPerformanceResponse {
+        run: EvolutionPerformanceRun {
+            generation: status.generation,
+            population_size: status.population_size,
+            trial_count: status.trial_count,
+            run_speed: status.run_speed,
+            paused: status.paused,
+        },
+        window: EvolutionPerformanceWindow {
+            from_generation,
+            to_generation,
+            count: generations.len(),
+            stride,
+        },
+        trends,
+        generations,
+        learned_params,
+    }
+}
+
+fn build_evolution_performance_summary_response(
+    controller: &EvolutionController,
+) -> EvolutionPerformanceSummaryResponse {
+    let status = controller.snapshot_status();
+    let history = controller.snapshot_performance_history();
+    let runtime_snapshot = controller.runtime_snapshot();
+    let learned_params =
+        build_learned_parameter_summaries(runtime_snapshot.as_ref(), status.best_genome.as_ref());
+    let latest_topology = history.iter().rev().find_map(|entry| {
+        entry
+            .topology
+            .as_ref()
+            .map(|topology| topology.winner.clone())
+    });
+    let best_ever_topology = history
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .topology
+                .as_ref()
+                .map(|topology| topology.winner.clone())
+        })
+        .max_by(|a, b| {
+            a.fitness
+                .partial_cmp(&b.fitness)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let best_n_topologies = summarize_best_n_topologies(&history, SUMMARY_BEST_TOPOLOGY_COUNT);
+
+    let recent_best_fitness = history
+        .iter()
+        .rev()
+        .take(20)
+        .map(|item| item.fitness.best)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let recent_best_fitness = if recent_best_fitness.is_finite() {
+        recent_best_fitness
+    } else {
+        0.0
+    };
+    let stagnation = stagnation_generations(&history);
+    let latest = history.last();
+    let mutation_rate = latest
+        .map(|item| item.breeding.mutation_rate)
+        .unwrap_or(0.0);
+    let has_mutation_rate = latest.is_some();
+    let novelty_slope = {
+        let points: Vec<(f32, f32)> = history
+            .iter()
+            .rev()
+            .take(32)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|item| (item.generation as f32, item.diversity.novelty_mean))
+            .collect();
+        linear_regression_slope(&points)
+    };
+    let diversity_state = match latest.map(|item| item.diversity.novelty_mean) {
+        Some(novelty) if novelty < 0.22 => "low",
+        Some(novelty) if novelty < 0.48 => "medium",
+        Some(_) => "high",
+        None => "unknown",
+    };
+    let mut convergence = Vec::new();
+    for target in ["torso.mass", "control.amp_mean"] {
+        if let Some(item) = learned_params.iter().find(|entry| entry.name == target) {
+            convergence.push(EvolutionConvergenceSignal {
+                name: item.name.clone(),
+                state: convergence_state(item),
+                std: item.population.std,
+            });
+        }
+    }
+    let mut signals = Vec::new();
+    if stagnation >= 20 {
+        signals.push("fitness_plateau".to_string());
+    }
+    if novelty_slope < -0.002 {
+        signals.push("novelty_declining".to_string());
+    }
+    if mutation_rate > 0.55 {
+        signals.push("mutation_pressure_high".to_string());
+    }
+
+    EvolutionPerformanceSummaryResponse {
+        generation: status.generation,
+        best_ever_fitness: status.best_ever_score,
+        recent_best_fitness,
+        stagnation_generations: stagnation,
+        diversity_state: diversity_state.to_string(),
+        mutation_pressure: EvolutionMutationPressure {
+            current_rate: mutation_rate,
+            at_lower_clamp: has_mutation_rate && mutation_rate <= MIN_BREEDING_MUTATION_RATE + 1e-4,
+            at_upper_clamp: has_mutation_rate && mutation_rate >= MAX_BREEDING_MUTATION_RATE - 1e-4,
+        },
+        convergence,
+        signals,
+        latest_topology,
+        best_ever_topology,
+        best_n_topologies,
+    }
+}
+
+fn summarize_best_n_topologies(
+    history: &[GenerationPerformanceSummary],
+    n: usize,
+) -> Vec<TopologyProfile> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut best_by_fingerprint: HashMap<String, TopologyProfile> = HashMap::new();
+    for entry in history {
+        let Some(topology) = &entry.topology else {
+            continue;
+        };
+        for profile in &topology.best_n {
+            best_by_fingerprint
+                .entry(profile.topology_fingerprint.clone())
+                .and_modify(|existing| {
+                    if profile.fitness > existing.fitness {
+                        *existing = profile.clone();
+                    }
+                })
+                .or_insert_with(|| profile.clone());
+        }
+    }
+    let mut values = best_by_fingerprint.into_values().collect::<Vec<_>>();
+    values.sort_by(|a, b| {
+        b.fitness
+            .partial_cmp(&a.fitness)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.generation.cmp(&a.generation))
+    });
+    values.truncate(n);
+    values
+}
+
+fn select_performance_window(
+    history: &[GenerationPerformanceSummary],
+    fallback_generation: usize,
+    window_generations: usize,
+) -> (usize, usize, Vec<GenerationPerformanceSummary>) {
+    let to_generation = history
+        .last()
+        .map(|item| item.generation)
+        .unwrap_or(fallback_generation.max(1));
+    let from_generation = to_generation
+        .saturating_sub(window_generations.saturating_sub(1))
+        .max(1);
+    let window = history
+        .iter()
+        .filter(|entry| entry.generation >= from_generation && entry.generation <= to_generation)
+        .cloned()
+        .collect::<Vec<_>>();
+    (from_generation, to_generation, window)
+}
+
+fn downsample_performance_history(
+    history: &[GenerationPerformanceSummary],
+    stride: usize,
+) -> Vec<GenerationPerformanceSummary> {
+    if stride <= 1 || history.len() <= 1 {
+        return history.to_vec();
+    }
+    let mut downsampled = history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            if index % stride == 0 {
+                Some(item.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    if let Some(last) = history.last() {
+        let needs_tail = downsampled
+            .last()
+            .map(|item| item.generation != last.generation)
+            .unwrap_or(true);
+        if needs_tail {
+            downsampled.push(last.clone());
+        }
+    }
+    downsampled
+}
+
+fn stagnation_generations(history: &[GenerationPerformanceSummary]) -> usize {
+    let Some(last) = history.last() else {
+        return 0;
+    };
+    let mut best = f32::NEG_INFINITY;
+    let mut last_improved_generation = last.generation;
+    for entry in history {
+        if entry.fitness.best > best + FITNESS_STAGNATION_EPSILON {
+            best = entry.fitness.best;
+            last_improved_generation = entry.generation;
+        }
+    }
+    last.generation.saturating_sub(last_improved_generation)
+}
+
+fn convergence_state(summary: &LearnedParameterSummary) -> String {
+    let width = (summary.bounds[1] - summary.bounds[0]).max(1e-6);
+    let ratio = summary.population.std / width;
+    if ratio < 0.08 {
+        "narrowing".to_string()
+    } else if ratio < 0.2 {
+        "stable".to_string()
+    } else {
+        "wide".to_string()
+    }
+}
+
+fn build_learned_parameter_summaries(
+    runtime_snapshot: Option<&EvolutionRuntimeSnapshot>,
+    best_genome: Option<&Genome>,
+) -> Vec<LearnedParameterSummary> {
+    let Some(snapshot) = runtime_snapshot else {
+        return Vec::new();
+    };
+    if snapshot.batch_genomes.is_empty() {
+        return Vec::new();
+    }
+    LEARNED_PARAMETER_FEATURES
+        .iter()
+        .map(|feature| {
+            let values: Vec<f32> = snapshot
+                .batch_genomes
+                .iter()
+                .map(|genome| finite_or_zero((feature.extractor)(genome)))
+                .collect();
+            let population = summarize_distribution(&values);
+            let champion = best_genome
+                .map(|genome| finite_or_zero((feature.extractor)(genome)))
+                .unwrap_or(population.p90);
+            LearnedParameterSummary {
+                name: feature.name.to_string(),
+                bounds: feature.bounds,
+                population,
+                champion,
+            }
+        })
+        .collect()
+}
+
+fn summarize_distribution(values: &[f32]) -> GenerationDistributionStats {
+    if values.is_empty() {
+        return GenerationDistributionStats {
+            min: 0.0,
+            p50: 0.0,
+            p90: 0.0,
+            max: 0.0,
+            std: 0.0,
+        };
+    }
+    let min = values.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    GenerationDistributionStats {
+        min: finite_or_zero(min),
+        p50: quantile(values, 0.5),
+        p90: quantile(values, 0.9),
+        max: finite_or_zero(max),
+        std: std_dev(values),
+    }
+}
+
+fn linear_regression_slope(points: &[(f32, f32)]) -> f32 {
+    if points.len() < 2 {
+        return 0.0;
+    }
+    let mean_x = points.iter().map(|(x, _)| *x).sum::<f32>() / points.len() as f32;
+    let mean_y = points.iter().map(|(_, y)| *y).sum::<f32>() / points.len() as f32;
+    let mut numerator = 0.0;
+    let mut denominator = 0.0;
+    for (x, y) in points {
+        let dx = *x - mean_x;
+        numerator += dx * (*y - mean_y);
+        denominator += dx * dx;
+    }
+    if denominator.abs() < 1e-9 {
+        0.0
+    } else {
+        numerator / denominator
+    }
+}
+
+fn mean(values: &[f32]) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().sum::<f32>() / values.len() as f32
+}
+
+fn std_dev(values: &[f32]) -> f32 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+    let avg = mean(values);
+    let variance = values
+        .iter()
+        .map(|value| {
+            let delta = *value - avg;
+            delta * delta
+        })
+        .sum::<f32>()
+        / values.len() as f32;
+    variance.sqrt()
+}
+
+fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
+fn build_topology_profile(generation: usize, candidate: &EvolutionCandidate) -> TopologyProfile {
+    let genome = &candidate.genome;
+    let enabled_limb_count = genome.limbs.iter().filter(|limb| limb.enabled).count();
+    let mut segment_count_histogram = [0usize; MAX_SEGMENTS_PER_LIMB];
+    for limb in &genome.limbs {
+        if !limb.enabled {
+            continue;
+        }
+        let segment_count = active_segment_count(limb).clamp(1, MAX_SEGMENTS_PER_LIMB);
+        segment_count_histogram[segment_count - 1] += 1;
+    }
+    TopologyProfile {
+        generation,
+        attempt: candidate.attempt,
+        fitness: finite_or_zero(candidate.fitness),
+        selection_score: finite_or_zero(candidate.selection_score),
+        enabled_limb_count,
+        segment_count_histogram,
+        mean_segment_length: feature_segment_length_mean(genome),
+        mean_segment_mass: feature_segment_mass_mean(genome),
+        mean_control_amp: feature_control_amp_mean(genome),
+        mean_control_freq: feature_control_freq_mean(genome),
+        descriptor: [
+            finite_or_zero(candidate.descriptor[0]),
+            finite_or_zero(candidate.descriptor[1]),
+            finite_or_zero(candidate.descriptor[2]),
+            finite_or_zero(candidate.descriptor[3]),
+            finite_or_zero(candidate.descriptor[4]),
+        ],
+        topology_fingerprint: topology_fingerprint(genome),
+    }
+}
+
+fn topology_fingerprint(genome: &Genome) -> String {
+    let mut hash = 1469598103934665603u64;
+    stable_hash_mix(&mut hash, MAX_LIMBS as u64);
+    stable_hash_mix(&mut hash, MAX_SEGMENTS_PER_LIMB as u64);
+    stable_hash_mix(&mut hash, quantize_to_bucket(genome.torso.w, 0.05) as u64);
+    stable_hash_mix(&mut hash, quantize_to_bucket(genome.torso.h, 0.05) as u64);
+    stable_hash_mix(&mut hash, quantize_to_bucket(genome.torso.d, 0.05) as u64);
+    for limb in &genome.limbs {
+        stable_hash_mix(&mut hash, u64::from(limb.enabled));
+        let count = active_segment_count(limb).clamp(1, MAX_SEGMENTS_PER_LIMB);
+        stable_hash_mix(&mut hash, count as u64);
+        if !limb.enabled {
+            continue;
+        }
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.anchor_x, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.anchor_y, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.anchor_z, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.axis_y, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.axis_z, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.dir_x, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.dir_y, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(limb.dir_z, 0.05) as u64);
+        for segment in limb.segments.iter().take(count.min(limb.segments.len())) {
+            stable_hash_mix(&mut hash, quantize_to_bucket(segment.length, 0.05) as u64);
+            stable_hash_mix(
+                &mut hash,
+                quantize_to_bucket(segment.thickness, 0.05) as u64,
+            );
+            stable_hash_mix(&mut hash, quantize_to_bucket(segment.mass, 0.05) as u64);
+        }
+        for control in limb.controls.iter().take(count.min(limb.controls.len())) {
+            stable_hash_mix(&mut hash, quantize_to_bucket(control.amp, 0.1) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(control.freq, 0.05) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(control.phase, 0.1) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(control.bias, 0.1) as u64);
+        }
+    }
+    format!("{hash:016x}")
+}
+
+fn stable_hash_mix(hash: &mut u64, value: u64) {
+    const FNV_PRIME: u64 = 1099511628211;
+    *hash ^= value;
+    *hash = hash.wrapping_mul(FNV_PRIME);
+}
+
+fn quantize_to_bucket(value: f32, step: f32) -> i64 {
+    if step <= 0.0 {
+        return 0;
+    }
+    (finite_or_zero(value) / step).round() as i64
+}
+
+fn active_segment_count(limb: &LimbGene) -> usize {
+    limb.segment_count.clamp(1, MAX_SEGMENTS_PER_LIMB as u32) as usize
+}
+
+fn for_each_active_segment<F>(genome: &Genome, mut f: F)
+where
+    F: FnMut(&SegmentGene),
+{
+    for limb in &genome.limbs {
+        if !limb.enabled {
+            continue;
+        }
+        let count = active_segment_count(limb).min(limb.segments.len());
+        for segment in limb.segments.iter().take(count) {
+            f(segment);
+        }
+    }
+}
+
+fn for_each_active_control<F>(genome: &Genome, mut f: F)
+where
+    F: FnMut(&ControlGene),
+{
+    for limb in &genome.limbs {
+        if !limb.enabled {
+            continue;
+        }
+        let count = active_segment_count(limb).min(limb.controls.len());
+        for control in limb.controls.iter().take(count) {
+            f(control);
+        }
+    }
+}
+
+fn feature_torso_w(genome: &Genome) -> f32 {
+    genome.torso.w
+}
+
+fn feature_torso_h(genome: &Genome) -> f32 {
+    genome.torso.h
+}
+
+fn feature_torso_d(genome: &Genome) -> f32 {
+    genome.torso.d
+}
+
+fn feature_torso_mass(genome: &Genome) -> f32 {
+    genome.torso.mass
+}
+
+fn feature_mass_scale(genome: &Genome) -> f32 {
+    genome.mass_scale
+}
+
+fn feature_enabled_limb_ratio(genome: &Genome) -> f32 {
+    let enabled = genome.limbs.iter().filter(|limb| limb.enabled).count();
+    enabled as f32 / MAX_LIMBS as f32
+}
+
+fn feature_segment_count_mean(genome: &Genome) -> f32 {
+    let mut count = 0usize;
+    let mut total = 0.0f32;
+    for limb in &genome.limbs {
+        if !limb.enabled {
+            continue;
+        }
+        total += active_segment_count(limb) as f32;
+        count += 1;
+    }
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f32
+    }
+}
+
+fn feature_segment_length_mean(genome: &Genome) -> f32 {
+    let mut count = 0usize;
+    let mut total = 0.0f32;
+    for_each_active_segment(genome, |segment| {
+        total += segment.length;
+        count += 1;
+    });
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f32
+    }
+}
+
+fn feature_segment_mass_mean(genome: &Genome) -> f32 {
+    let mut count = 0usize;
+    let mut total = 0.0f32;
+    for_each_active_segment(genome, |segment| {
+        total += segment.mass;
+        count += 1;
+    });
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f32
+    }
+}
+
+fn feature_control_amp_mean(genome: &Genome) -> f32 {
+    let mut count = 0usize;
+    let mut total = 0.0f32;
+    for_each_active_control(genome, |control| {
+        total += control.amp;
+        count += 1;
+    });
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f32
+    }
+}
+
+fn feature_control_freq_mean(genome: &Genome) -> f32 {
+    let mut count = 0usize;
+    let mut total = 0.0f32;
+    for_each_active_control(genome, |control| {
+        total += control.freq;
+        count += 1;
+    });
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f32
+    }
 }
 
 #[tokio::main]
@@ -2390,6 +3417,14 @@ async fn main() {
         .route("/api/eval/generation", post(eval_generation_handler))
         .route("/api/evolution/state", get(evolution_state_handler))
         .route("/api/evolution/history", get(evolution_history_handler))
+        .route(
+            "/api/evolution/performance",
+            get(evolution_performance_handler),
+        )
+        .route(
+            "/api/evolution/performance/summary",
+            get(evolution_performance_summary_handler),
+        )
         .route("/api/evolution/control", post(evolution_control_handler))
         .route(
             "/api/evolution/genome/current",
@@ -2524,6 +3559,24 @@ async fn evolution_history_handler(
     Json(EvolutionFitnessHistoryResponse {
         history: state.evolution.snapshot_fitness_history(),
     })
+}
+
+async fn evolution_performance_handler(
+    State(state): State<AppState>,
+    Query(query): Query<EvolutionPerformanceQuery>,
+) -> Json<EvolutionPerformanceResponse> {
+    Json(build_evolution_performance_response(
+        &state.evolution,
+        query,
+    ))
+}
+
+async fn evolution_performance_summary_handler(
+    State(state): State<AppState>,
+) -> Json<EvolutionPerformanceSummaryResponse> {
+    Json(build_evolution_performance_summary_response(
+        &state.evolution,
+    ))
 }
 
 async fn evolution_control_handler(

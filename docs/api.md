@@ -24,6 +24,32 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `bestFitness`
     - `attemptFitnesses` (all candidate fitness values for that generation)
 
+- `GET /api/evolution/performance`
+  - Returns bounded structured evolution analytics focused on tuning signals.
+  - Query params:
+    - `windowGenerations` (optional, default `120`, max `400`)
+    - `stride` (optional, default `1`, max `8`)
+    - `includeParamStats` (optional, default `true`)
+    - `includeDescriptors` (optional, default `true`)
+    - `includeTopology` (optional, default `true`)
+  - Includes:
+    - `run`, `window`, `trends`
+    - `generations` with per-generation fitness/selection/diversity/breeding stats
+    - `generations[*].topology` with winner + best-N topology profiles and fingerprint diversity count
+    - `learnedParams` with bounded parameter-distribution summaries
+
+- `GET /api/evolution/performance/summary`
+  - Returns compact summary fields suitable for AI control loops.
+  - Includes:
+    - `generation`, `bestEverFitness`, `recentBestFitness`
+    - `stagnationGenerations`, `diversityState`
+    - `mutationPressure`
+    - `convergence`
+    - `signals`
+    - `latestTopology`
+    - `bestEverTopology`
+    - `bestNTopologies` (deduped by topology fingerprint)
+
 - `POST /api/evolution/control`
   - Body:
     - `action`
