@@ -3073,6 +3073,16 @@ fn run_generation_stream(
                 break;
             }
 
+            let orphaned = satellite_pool.take_orphaned();
+            if !orphaned.is_empty() {
+                let mut p = pending_jobs.lock().unwrap();
+                for tid in orphaned {
+                    if let Some((a, t)) = working_satellites.remove(&tid) {
+                        p.push((a, t));
+                    }
+                }
+            }
+
             let timeouts = satellite_pool.reap_timeouts();
             if !timeouts.is_empty() {
                 let mut p = pending_jobs.lock().unwrap();
@@ -4163,6 +4173,7 @@ struct SatellitePoolInner {
     connections: HashMap<String, SatelliteConnection>,
     completed: HashMap<u64, TrialResult>,
     failed: HashMap<u64, String>,
+    orphaned: Vec<u64>,
 }
 
 impl SatellitePool {
@@ -4172,6 +4183,7 @@ impl SatellitePool {
                 connections: HashMap::new(),
                 completed: HashMap::new(),
                 failed: HashMap::new(),
+                orphaned: Vec::new(),
             }),
             next_trial_id: AtomicUsize::new(1),
         }
@@ -4208,6 +4220,11 @@ impl SatellitePool {
         inner.failed.remove(&trial_id)
     }
 
+    fn take_orphaned(&self) -> Vec<u64> {
+        let mut inner = self.inner.lock().unwrap();
+        std::mem::take(&mut inner.orphaned)
+    }
+
     fn register(&self, id: String, tx: mpsc::UnboundedSender<SatelliteMessage>) {
         let mut inner = self.inner.lock().unwrap();
         inner.connections.insert(
@@ -4223,7 +4240,9 @@ impl SatellitePool {
 
     fn unregister(&self, id: &str) {
         let mut inner = self.inner.lock().unwrap();
-        inner.connections.remove(id);
+        if let Some(conn) = inner.connections.remove(id) {
+            inner.orphaned.extend(conn.in_flight.into_keys());
+        }
     }
 
     fn next_trial_id(&self) -> u64 {
