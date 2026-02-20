@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -12,7 +13,8 @@
       --hud-subtle: #9fbc7e;
     }
 
-    html, body {
+    html,
+    body {
       margin: 0;
       width: 100%;
       height: 100%;
@@ -187,12 +189,14 @@
       #genomePanel {
         width: 320px;
       }
+
       #genomeCanvas {
         height: 320px;
       }
     }
   </style>
 </head>
+
 <body>
   <canvas id="app"></canvas>
   <div id="hud">
@@ -201,7 +205,8 @@
       <button id="toggleHudBtn" class="panelToggle" type="button">Hide</button>
     </div>
     <div id="hudBody">
-      <div><span class="label">Generation:</span><span id="gen">1</span> (<span id="champIndex">1</span>/<span id="pop">16</span>)</div>
+      <div><span class="label">Generation:</span><span id="gen">1</span> (<span id="champIndex">1</span>/<span
+          id="pop">16</span>)</div>
       <div><span class="label">Best score:</span><span id="bestEver">0.00</span></div>
       <div><span class="label">Current score:</span><span id="bestNow">0.00</span></div>
       <div><span class="label">Trial:</span><span id="trialInfo">1/1</span></div>
@@ -228,8 +233,8 @@
       </div>
       <label class="ctrl">
         Batch size
-        <input id="populationSlider" type="range" min="1" max="64" step="1" value="40">
-        <span id="populationSliderValue">40</span>
+        <input id="populationSlider" type="range" min="1" max="128" step="1" value="80">
+        <span id="populationSliderValue">80</span>
       </label>
       <label class="ctrl">
         Speed
@@ -291,9 +296,9 @@
     import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
     import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js";
 
-    const DEFAULT_POPULATION_SIZE = 40;
+    const DEFAULT_POPULATION_SIZE = 80;
     const MIN_POPULATION_SIZE = 1;
-    const MAX_POPULATION_SIZE = 64;
+    const MAX_POPULATION_SIZE = 128;
     const ELITE_COUNT = 2;
     const MAX_LIMBS = 6;
     const MAX_SEGMENTS_PER_LIMB = 5;
@@ -326,7 +331,7 @@
     const SELECTION_NOVELTY_WEIGHT = 0.28;
     const SELECTION_LOCAL_COMPETITION_WEIGHT = 0.1;
     const FITNESS_UPRIGHT_BONUS = 1.35;
-    const FITNESS_STRAIGHTNESS_BONUS = 0.8;
+    const FITNESS_STRAIGHTNESS_BONUS = 1.5;
     const FITNESS_HEIGHT_BONUS = 0.6;
     const FITNESS_ENERGY_PENALTY = 1.2;
     const FITNESS_INSTABILITY_PENALTY = 1.25;
@@ -334,7 +339,7 @@
     const FALLEN_PENALTY_STRENGTH = 0.6;
     const UPRIGHT_FULL_SCORE_THRESHOLD = 0.5;
     const UPRIGHT_PENALTY_FLOOR = 0.4;
-    const FALLEN_HEIGHT_THRESHOLD = 0.55;
+    const FALLEN_HEIGHT_THRESHOLD = 0.35;
     const SETTLE_SECONDS = 2.25;
     const USE_RUST_BACKEND = true;
     const BACKEND_HTTP_URL = window.location.origin;
@@ -2548,11 +2553,11 @@
         };
       }
 
-      drive() {}
+      drive() { }
 
-      measureFitness() {}
+      measureFitness() { }
 
-      syncVisuals() {}
+      syncVisuals() { }
 
       getTrialSummary(durationSeconds) {
         return {
@@ -2850,7 +2855,7 @@
         this.fitness = this.estimateLiveScore(Math.max(this.sampledTime, dt));
       }
 
-      advancePlayback() {}
+      advancePlayback() { }
 
       estimateLiveScore(durationSeconds) {
         return this.computeMetrics(durationSeconds).quality;
@@ -3447,4 +3452,5 @@
     connectEvolutionSocket();
   </script>
 </body>
+
 </html>
