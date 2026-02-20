@@ -61,6 +61,7 @@ const SATELLITE_TRIAL_TIMEOUT: Duration = Duration::from_secs(30);
 const SATELLITE_RECONNECT_DELAY: Duration = Duration::from_secs(3);
 const SATELLITE_DISPATCH_RETRY_LIMIT: usize = 8;
 const SATELLITE_CAPACITY_ERROR: &str = "satellite at capacity";
+const MAX_FITNESS_HISTORY_POINTS: usize = 4096;
 const DEFAULT_POPULATION_SIZE: usize = 80;
 const MIN_POPULATION_SIZE: usize = 1;
 const MAX_POPULATION_SIZE: usize = 128;
@@ -955,6 +956,20 @@ struct CheckpointListResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GenerationFitnessSummary {
+    generation: usize,
+    best_fitness: f32,
+    attempt_fitnesses: Vec<f32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionFitnessHistoryResponse {
+    history: Vec<GenerationFitnessSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct EvolutionStatus {
     generation: usize,
     population_size: usize,
@@ -995,6 +1010,8 @@ struct EvolutionRuntimeSnapshot {
     current_trial_index: usize,
     novelty_archive: Vec<NoveltyEntry>,
     injection_queue: Vec<EvolutionInjection>,
+    #[serde(default)]
+    fitness_history: Vec<GenerationFitnessSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1010,6 +1027,7 @@ struct EvolutionCheckpointFile {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum EvolutionStreamEvent {
     Status { status: EvolutionStatus },
+    GenerationSummary { summary: GenerationFitnessSummary },
     TrialStarted {
         genome: Genome,
         part_sizes: Vec<[f32; 3]>,
@@ -1043,6 +1061,7 @@ struct EvolutionSharedState {
     status: EvolutionStatus,
     view: EvolutionViewState,
     runtime_snapshot: Option<EvolutionRuntimeSnapshot>,
+    fitness_history: Vec<GenerationFitnessSummary>,
 }
 
 #[derive(Clone)]
@@ -1088,6 +1107,7 @@ impl EvolutionController {
                 status: initial_status,
                 view: EvolutionViewState::default(),
                 runtime_snapshot: None,
+                fitness_history: Vec::new(),
             })),
             events,
         })
@@ -1181,7 +1201,25 @@ impl EvolutionController {
 
     fn update_runtime_snapshot(&self, snapshot: EvolutionRuntimeSnapshot) {
         let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
+        shared.fitness_history = snapshot.fitness_history.clone();
         shared.runtime_snapshot = Some(snapshot);
+    }
+
+    fn snapshot_fitness_history(&self) -> Vec<GenerationFitnessSummary> {
+        self.shared
+            .lock()
+            .expect("evolution shared mutex poisoned")
+            .fitness_history
+            .clone()
+    }
+
+    fn set_fitness_history(&self, history: Vec<GenerationFitnessSummary>) {
+        let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
+        shared.fitness_history = history;
+    }
+
+    fn clear_fitness_history(&self) {
+        self.set_fitness_history(Vec::new());
     }
 
     fn current_best_genome(&self) -> Option<Genome> {
@@ -1327,6 +1365,31 @@ impl EvolutionController {
         let _ = self.events.send(EvolutionStreamEvent::Status { status });
     }
 
+    fn emit_generation_summary(&self, summary: GenerationFitnessSummary) {
+        {
+            let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
+            let append = match shared.fitness_history.last() {
+                None => true,
+                Some(last) if summary.generation > last.generation => true,
+                Some(last) if summary.generation == last.generation => false,
+                Some(_) => {
+                    shared.fitness_history.clear();
+                    true
+                }
+            };
+            if append {
+                shared.fitness_history.push(summary.clone());
+            } else if let Some(last) = shared.fitness_history.last_mut() {
+                *last = summary.clone();
+            }
+            if shared.fitness_history.len() > MAX_FITNESS_HISTORY_POINTS {
+                let drop_count = shared.fitness_history.len() - MAX_FITNESS_HISTORY_POINTS;
+                shared.fitness_history.drain(0..drop_count);
+            }
+        }
+        let _ = self.events.send(EvolutionStreamEvent::GenerationSummary { summary });
+    }
+
     fn start_trial(&self, genome: Genome, part_sizes: Vec<[f32; 3]>) {
         {
             let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
@@ -1441,6 +1504,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                 best_ever_score = loaded_status.best_ever_score;
                 best_genome = loaded_status.best_genome.clone();
                 novelty_archive = loaded.novelty_archive.clone();
+                controller.set_fitness_history(loaded.fitness_history.clone());
                 batch_genomes = loaded.batch_genomes.clone();
                 batch_results = loaded.batch_results.clone();
                 attempt_trials = loaded.attempt_trials.clone();
@@ -1499,6 +1563,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                 best_ever_score = 0.0;
                 best_genome = None;
                 novelty_archive.clear();
+                controller.clear_fitness_history();
                 reset_evolution_batch(
                     &mut rng,
                     pending_population_size,
@@ -1633,6 +1698,9 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                     continue;
                 }
                 let injected_genomes = dequeue_injected_genomes(&controller, &mut rng, 1);
+                if let Some(summary) = build_generation_fitness_summary(generation, &batch_results) {
+                    controller.emit_generation_summary(summary);
+                }
                 finalize_generation(
                     &mut rng,
                     &mut batch_genomes,
@@ -1784,6 +1852,9 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                                 attempt,
                             })
                             .collect();
+                        if let Some(summary) = build_generation_fitness_summary(generation, &batch_results) {
+                            controller.emit_generation_summary(summary);
+                        }
                         let injected_genomes = dequeue_injected_genomes(&controller, &mut rng, 1);
                         finalize_generation(
                             &mut rng,
@@ -2079,8 +2150,36 @@ fn publish_runtime_snapshot(
         current_trial_index,
         novelty_archive: novelty_archive.to_vec(),
         injection_queue: controller.injection_queue_snapshot(),
+        fitness_history: controller.snapshot_fitness_history(),
     };
     controller.update_runtime_snapshot(snapshot);
+}
+
+fn build_generation_fitness_summary(
+    generation: usize,
+    batch_results: &[EvolutionCandidate],
+) -> Option<GenerationFitnessSummary> {
+    if batch_results.is_empty() {
+        return None;
+    }
+    let mut ranked_attempts: Vec<(usize, f32)> = batch_results
+        .iter()
+        .map(|item| {
+            let fitness = if item.fitness.is_finite() { item.fitness } else { 0.0 };
+            (item.attempt, fitness)
+        })
+        .collect();
+    ranked_attempts.sort_unstable_by_key(|(attempt, _)| *attempt);
+    let attempt_fitnesses: Vec<f32> = ranked_attempts.into_iter().map(|(_, fitness)| fitness).collect();
+    let best_fitness = attempt_fitnesses
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    Some(GenerationFitnessSummary {
+        generation,
+        best_fitness: if best_fitness.is_finite() { best_fitness } else { 0.0 },
+        attempt_fitnesses,
+    })
 }
 
 fn finalize_generation(
@@ -2226,6 +2325,7 @@ async fn main() {
         .route("/api/eval/ws", get(ws_eval_handler))
         .route("/api/eval/generation", post(eval_generation_handler))
         .route("/api/evolution/state", get(evolution_state_handler))
+        .route("/api/evolution/history", get(evolution_history_handler))
         .route("/api/evolution/control", post(evolution_control_handler))
         .route("/api/evolution/genome/current", get(evolution_current_genome_handler))
         .route("/api/evolution/genome/best", get(evolution_best_genome_handler))
@@ -2332,6 +2432,14 @@ async fn ws_eval_handler(ws: WebSocketUpgrade, State(state): State<AppState>) ->
 
 async fn evolution_state_handler(State(state): State<AppState>) -> Json<EvolutionStatus> {
     Json(state.evolution.snapshot_status())
+}
+
+async fn evolution_history_handler(
+    State(state): State<AppState>,
+) -> Json<EvolutionFitnessHistoryResponse> {
+    Json(EvolutionFitnessHistoryResponse {
+        history: state.evolution.snapshot_fitness_history(),
+    })
 }
 
 async fn evolution_control_handler(

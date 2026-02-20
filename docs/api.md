@@ -17,6 +17,13 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `injectionQueueCount`
     - `currentGenome`, `bestGenome`
 
+- `GET /api/evolution/history`
+  - Returns backend-owned fitness history points.
+  - Each point includes:
+    - `generation`
+    - `bestFitness`
+    - `attemptFitnesses` (all candidate fitness values for that generation)
+
 - `POST /api/evolution/control`
   - Body:
     - `action`
@@ -77,6 +84,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
 - `GET /api/evolution/ws`
   - Streams:
     - `status`
+    - `generation_summary`
     - `trial_started`
     - `snapshot`
     - `trial_complete`

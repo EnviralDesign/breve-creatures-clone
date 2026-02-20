@@ -17,7 +17,6 @@ Browser-based evolutionary creature simulation shipped as a single Rust executab
 - `src/` - simulation engine, API endpoints, and static asset serving
 - `ui/` - browser UI assets bundled into the executable
 - `docs/` - protocol and architecture notes
-- `tools/` - local helper tooling
 
 ## Quick Start
 
@@ -34,6 +33,7 @@ cargo run --release
 2. Open app
 
 - `http://127.0.0.1:8787`
+- If port `8787` is already in use, open the fallback URL printed in startup logs.
 
 ## Runtime Config
 
@@ -72,6 +72,7 @@ cargo run --release -- --satellite ws://<PRIMARY_IP>:8787
 - `GET /`
 - `GET /health`
 - `GET /api/evolution/state`
+- `GET /api/evolution/history`
 - `POST /api/evolution/control`
 - `GET /api/evolution/ws`
 - `GET /api/evolution/genome/current`
@@ -83,5 +84,6 @@ cargo run --release -- --satellite ws://<PRIMARY_IP>:8787
 - `GET /api/trial/ws`
 - `POST /api/eval/generation`
 - `GET /api/eval/ws`
+- `GET /api/satellite/ws`
 
 Detailed request/stream payload contracts: `docs/api.md`.

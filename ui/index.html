@@ -185,6 +185,49 @@
       letter-spacing: 0.22px;
     }
 
+    #fitnessHistoryPanel {
+      position: fixed;
+      left: 14px;
+      right: 14px;
+      bottom: 14px;
+      min-height: 214px;
+      padding: 10px;
+      background: rgba(10, 15, 11, 0.72);
+      border: 1px solid rgba(183, 208, 112, 0.35);
+      border-radius: 10px;
+      backdrop-filter: blur(3px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+      user-select: none;
+    }
+
+    #fitnessHistoryPanel.collapsed {
+      min-height: auto;
+      width: auto;
+      right: auto;
+      min-width: 245px;
+    }
+
+    #fitnessHistoryPanel.collapsed #fitnessHistoryBody {
+      display: none;
+    }
+
+    #fitnessHistoryCanvas {
+      width: 100%;
+      height: 170px;
+      display: block;
+      border: 1px solid rgba(180, 201, 115, 0.22);
+      border-radius: 8px;
+      background: radial-gradient(circle at 22% 18%, rgba(94, 134, 90, 0.08), rgba(0, 0, 0, 0.16));
+    }
+
+    #fitnessHistoryMeta {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #b9d698;
+      line-height: 1.35;
+      letter-spacing: 0.22px;
+    }
+
     @media (max-width: 980px) {
       #genomePanel {
         width: 320px;
@@ -192,6 +235,10 @@
 
       #genomeCanvas {
         height: 320px;
+      }
+
+      #fitnessHistoryCanvas {
+        height: 154px;
       }
     }
   </style>
@@ -280,6 +327,16 @@
       <div id="genomeMeta">No champion yet.</div>
     </div>
   </div>
+  <div id="fitnessHistoryPanel">
+    <div class="panelTop">
+      <span>Fitness History</span>
+      <button id="toggleFitnessHistoryBtn" class="panelToggle" type="button">Hide</button>
+    </div>
+    <div id="fitnessHistoryBody">
+      <canvas id="fitnessHistoryCanvas"></canvas>
+      <div id="fitnessHistoryMeta">Waiting for generation results...</div>
+    </div>
+  </div>
 
   <script type="importmap">
     {
@@ -356,6 +413,7 @@
     const BACKEND_EVOLUTION_GENOME_IMPORT_URL = `${BACKEND_HTTP_URL}/api/evolution/genome/import`;
     const BACKEND_EVOLUTION_CHECKPOINT_SAVE_URL = `${BACKEND_HTTP_URL}/api/evolution/checkpoint/save`;
     const BACKEND_EVOLUTION_CHECKPOINT_LOAD_URL = `${BACKEND_HTTP_URL}/api/evolution/checkpoint/load`;
+    const BACKEND_EVOLUTION_HISTORY_URL = `${BACKEND_HTTP_URL}/api/evolution/history`;
 
     const GROUND_GROUP = 1;
 
@@ -437,6 +495,11 @@
     const genomeMeta = document.getElementById("genomeMeta");
     const genomeTitle = document.getElementById("genomeTitle");
     const genomeCtx = genomeCanvas.getContext("2d");
+    const fitnessHistoryPanel = document.getElementById("fitnessHistoryPanel");
+    const fitnessHistoryCanvas = document.getElementById("fitnessHistoryCanvas");
+    const fitnessHistoryMeta = document.getElementById("fitnessHistoryMeta");
+    const toggleFitnessHistoryBtn = document.getElementById("toggleFitnessHistoryBtn");
+    const fitnessHistoryCtx = fitnessHistoryCanvas.getContext("2d");
     const skip1Btn = document.getElementById("skip1Btn");
     const skip10Btn = document.getElementById("skip10Btn");
     const skip50Btn = document.getElementById("skip50Btn");
@@ -497,11 +560,16 @@
     let lastCheckpointId = "";
     let hudCollapsed = false;
     let genomeCollapsed = false;
+    let fitnessHistoryCollapsed = false;
     let simSpeed = 1;
     let effectiveSimSpeed = 1;
     let genomeVizMode = "best";
     let paused = false;
     let cameraManualUntil = 0;
+    let fitnessHistory = [];
+    let fitnessHistoryFetchToken = 0;
+    let fitnessHistoryRefreshInFlight = false;
+    let lastKnownGeneration = generation;
     let sunLight = null;
     const sunOffset = new THREE.Vector3(56, 74, 34);
     const sunTargetPos = new THREE.Vector3();
@@ -578,6 +646,9 @@
     toggleGenomeBtn.addEventListener("click", () => {
       setGenomeCollapsed(!genomeCollapsed);
     });
+    toggleFitnessHistoryBtn.addEventListener("click", () => {
+      setFitnessHistoryCollapsed(!fitnessHistoryCollapsed);
+    });
     window.addEventListener("keydown", (event) => {
       if (event.code === "Space") {
         event.preventDefault();
@@ -589,6 +660,8 @@
     let accumulator = 0;
     setHudCollapsed(false);
     setGenomeCollapsed(false);
+    setFitnessHistoryCollapsed(false);
+    resizeFitnessHistoryCanvas();
 
     function animate(nowMs) {
       requestAnimationFrame(animate);
@@ -793,8 +866,90 @@
         const payload = await response.json();
         lastCheckpointId = payload.id || "";
         loadCheckpointBtn.title = lastCheckpointId ? `Last loaded: ${lastCheckpointId}` : "";
+        await refreshFitnessHistoryFromBackend();
       } catch (error) {
         console.error("checkpoint load failed", error);
+      }
+    }
+
+    function normalizeFitnessHistoryEntry(source) {
+      if (!source || typeof source !== "object") return null;
+      const generationRaw = source.generation ?? source.generationIndex ?? source.generation_index;
+      const generationValue = Number(generationRaw);
+      if (!Number.isFinite(generationValue)) return null;
+      const generationIndex = Math.max(1, generationValue | 0);
+      const attemptsRaw = source.attemptFitnesses ?? source.attempt_fitnesses;
+      const attemptFitnesses = Array.isArray(attemptsRaw)
+        ? attemptsRaw
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value))
+        : [];
+      const bestRaw = Number(source.bestFitness ?? source.best_fitness);
+      const bestFromAttempts = attemptFitnesses.length > 0
+        ? attemptFitnesses.reduce((best, value) => (value > best ? value : best), attemptFitnesses[0])
+        : 0;
+      const bestFitness = Number.isFinite(bestRaw) ? bestRaw : bestFromAttempts;
+      return {
+        generation: generationIndex,
+        bestFitness: Number.isFinite(bestFitness) ? bestFitness : 0,
+        attemptFitnesses,
+      };
+    }
+
+    function replaceFitnessHistory(entries) {
+      const normalized = Array.isArray(entries)
+        ? entries.map(normalizeFitnessHistoryEntry).filter(Boolean)
+        : [];
+      normalized.sort((a, b) => a.generation - b.generation);
+      const deduped = [];
+      for (const entry of normalized) {
+        const last = deduped[deduped.length - 1];
+        if (last && last.generation === entry.generation) {
+          deduped[deduped.length - 1] = entry;
+        } else {
+          deduped.push(entry);
+        }
+      }
+      fitnessHistory = deduped;
+      renderFitnessHistory();
+    }
+
+    function upsertFitnessHistoryEntry(source) {
+      const entry = normalizeFitnessHistoryEntry(source);
+      if (!entry) return;
+      const last = fitnessHistory[fitnessHistory.length - 1];
+      if (!last) {
+        fitnessHistory.push(entry);
+        renderFitnessHistory();
+        return;
+      }
+      if (entry.generation > last.generation) {
+        fitnessHistory.push(entry);
+        renderFitnessHistory();
+        return;
+      }
+      if (entry.generation === last.generation) {
+        fitnessHistory[fitnessHistory.length - 1] = entry;
+        renderFitnessHistory();
+      }
+    }
+
+    async function refreshFitnessHistoryFromBackend() {
+      if (fitnessHistoryRefreshInFlight) return;
+      fitnessHistoryRefreshInFlight = true;
+      const token = ++fitnessHistoryFetchToken;
+      try {
+        const response = await fetch(BACKEND_EVOLUTION_HISTORY_URL, { method: "GET" });
+        if (!response.ok) {
+          throw new Error(`history request failed (${response.status})`);
+        }
+        const payload = await response.json();
+        if (token !== fitnessHistoryFetchToken) return;
+        replaceFitnessHistory(payload?.history);
+      } catch (error) {
+        console.error("fitness history fetch failed", error);
+      } finally {
+        fitnessHistoryRefreshInFlight = false;
       }
     }
 
@@ -808,6 +963,7 @@
       socket.addEventListener("open", () => {
         evolutionConnected = true;
         backendOfflineReason = "";
+        void refreshFitnessHistoryFromBackend();
       });
 
       socket.addEventListener("message", (event) => {
@@ -820,6 +976,10 @@
         }
         if (msg.type === "status") {
           applyEvolutionStatus(msg.status || {});
+          return;
+        }
+        if (msg.type === "generation_summary") {
+          upsertFitnessHistoryEntry(msg.summary || msg);
           return;
         }
         if (msg.type === "trial_started") {
@@ -871,7 +1031,14 @@
     }
 
     function applyEvolutionStatus(status) {
-      generation = Number.isFinite(status.generation) ? status.generation : generation;
+      const nextGeneration = Number.isFinite(status.generation) ? Math.max(1, status.generation | 0) : generation;
+      if (nextGeneration < lastKnownGeneration) {
+        fitnessHistory = [];
+        renderFitnessHistory();
+        void refreshFitnessHistoryFromBackend();
+      }
+      generation = nextGeneration;
+      lastKnownGeneration = generation;
       populationSize = clamp((status.populationSize ?? status.population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
       pendingPopulationSize = clamp((status.pendingPopulationSize ?? status.pending_population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
       currentAttemptIndex = Math.max(0, (status.currentAttemptIndex ?? status.current_attempt_index ?? 0) | 0);
@@ -892,6 +1059,12 @@
       injectionQueueCount = Number.isFinite(queueRaw) ? Math.max(0, queueRaw | 0) : injectionQueueCount;
       if (Array.isArray(satellitesRaw)) {
         connectedSatellites = satellitesRaw.filter((id) => typeof id === "string");
+      }
+      const latestHistoryGeneration = fitnessHistory.length > 0
+        ? fitnessHistory[fitnessHistory.length - 1].generation
+        : 0;
+      if (generation > latestHistoryGeneration + 1) {
+        void refreshFitnessHistoryFromBackend();
       }
       if (Number.isFinite(status.currentScore ?? status.current_score)) {
         const score = Number(status.currentScore ?? status.current_score);
@@ -1683,6 +1856,7 @@
       composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       composer.setSize(window.innerWidth, window.innerHeight);
       resizeGenomeCanvas();
+      resizeFitnessHistoryCanvas();
     }
 
     function setGenomeVizVisibility(visible) {
@@ -1705,6 +1879,15 @@
       }
     }
 
+    function setFitnessHistoryCollapsed(collapsed) {
+      fitnessHistoryCollapsed = Boolean(collapsed);
+      fitnessHistoryPanel.classList.toggle("collapsed", fitnessHistoryCollapsed);
+      toggleFitnessHistoryBtn.textContent = fitnessHistoryCollapsed ? "Show" : "Hide";
+      if (!fitnessHistoryCollapsed) {
+        resizeFitnessHistoryCanvas();
+      }
+    }
+
     function resizeGenomeCanvas() {
       const width = Math.max(1, Math.floor(genomeCanvas.clientWidth));
       const height = Math.max(1, Math.floor(genomeCanvas.clientHeight));
@@ -1712,6 +1895,125 @@
       genomeCanvas.width = Math.max(1, Math.floor(width * dpr));
       genomeCanvas.height = Math.max(1, Math.floor(height * dpr));
       genomeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function resizeFitnessHistoryCanvas() {
+      const width = Math.max(1, Math.floor(fitnessHistoryCanvas.clientWidth));
+      const height = Math.max(1, Math.floor(fitnessHistoryCanvas.clientHeight));
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      fitnessHistoryCanvas.width = Math.max(1, Math.floor(width * dpr));
+      fitnessHistoryCanvas.height = Math.max(1, Math.floor(height * dpr));
+      fitnessHistoryCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      renderFitnessHistory();
+    }
+
+    function renderFitnessHistory() {
+      const W = Math.max(1, Math.floor(fitnessHistoryCanvas.clientWidth));
+      const H = Math.max(1, Math.floor(fitnessHistoryCanvas.clientHeight));
+      const ctx = fitnessHistoryCtx;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = "rgba(6, 10, 8, 0.46)";
+      ctx.fillRect(0, 0, W, H);
+
+      if (fitnessHistory.length === 0) {
+        fitnessHistoryMeta.textContent = "Waiting for generation results...";
+        ctx.fillStyle = "#b8d795";
+        ctx.font = "12px Trebuchet MS, Segoe UI, sans-serif";
+        ctx.fillText("Waiting for generation results...", 12, 22);
+        return;
+      }
+
+      const PADDING_LEFT = 42;
+      const PADDING_RIGHT = 12;
+      const PADDING_TOP = 10;
+      const PADDING_BOTTOM = 22;
+      const plotW = Math.max(1, W - PADDING_LEFT - PADDING_RIGHT);
+      const plotH = Math.max(1, H - PADDING_TOP - PADDING_BOTTOM);
+      const maxVisible = Math.max(12, Math.floor(plotW / 3));
+      const entries = fitnessHistory.slice(-maxVisible);
+
+      let minFitness = Infinity;
+      let maxFitness = -Infinity;
+      for (const entry of entries) {
+        for (const value of entry.attemptFitnesses) {
+          minFitness = Math.min(minFitness, value);
+          maxFitness = Math.max(maxFitness, value);
+        }
+        minFitness = Math.min(minFitness, entry.bestFitness);
+        maxFitness = Math.max(maxFitness, entry.bestFitness);
+      }
+      if (!Number.isFinite(minFitness) || !Number.isFinite(maxFitness)) {
+        minFitness = 0;
+        maxFitness = 1;
+      }
+      const span = Math.max(1e-3, maxFitness - minFitness);
+      const paddedMin = minFitness - span * 0.08;
+      const paddedMax = maxFitness + span * 0.08;
+      const den = Math.max(1e-3, paddedMax - paddedMin);
+
+      const yForFitness = (fitness) =>
+        PADDING_TOP + (1 - (fitness - paddedMin) / den) * plotH;
+      const xForIndex = (index) =>
+        PADDING_LEFT + (entries.length <= 1 ? 0 : (index / (entries.length - 1)) * plotW);
+
+      const gridLines = 4;
+      for (let i = 0; i <= gridLines; i++) {
+        const y = PADDING_TOP + (i / gridLines) * plotH;
+        ctx.strokeStyle = i === gridLines ? "rgba(170, 200, 120, 0.28)" : "rgba(170, 194, 117, 0.10)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(PADDING_LEFT, y);
+        ctx.lineTo(W - PADDING_RIGHT, y);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = "rgba(185, 214, 152, 0.82)";
+      ctx.font = "10px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.fillText(paddedMax.toFixed(2), 4, PADDING_TOP + 3);
+      ctx.fillText(paddedMin.toFixed(2), 4, H - PADDING_BOTTOM + 3);
+
+      ctx.fillStyle = "rgba(215, 224, 206, 0.28)";
+      for (let i = 0; i < entries.length; i++) {
+        const x = xForIndex(i);
+        const attempts = entries[i].attemptFitnesses;
+        for (const value of attempts) {
+          const y = yForFitness(value);
+          ctx.beginPath();
+          ctx.arc(x, y, 1.7, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.strokeStyle = "rgba(210, 240, 159, 0.94)";
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let i = 0; i < entries.length; i++) {
+        const x = xForIndex(i);
+        const y = yForFitness(entries[i].bestFitness);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(217, 245, 168, 0.95)";
+      for (let i = 0; i < entries.length; i++) {
+        const x = xForIndex(i);
+        const y = yForFitness(entries[i].bestFitness);
+        ctx.beginPath();
+        ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const last = entries[entries.length - 1];
+      const first = entries[0];
+      fitnessHistoryMeta.textContent =
+        `gens ${first.generation}-${last.generation} | latest best ${last.bestFitness.toFixed(2)} | points ${fitnessHistory.length}`;
+      ctx.fillStyle = "rgba(185, 214, 152, 0.82)";
+      ctx.font = "10px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.fillText(`Gen ${first.generation}`, PADDING_LEFT, H - 6);
+      const rightLabel = `Gen ${last.generation}`;
+      const rightWidth = ctx.measureText(rightLabel).width;
+      ctx.fillText(rightLabel, W - PADDING_RIGHT - rightWidth, H - 6);
     }
 
     function renderGenomeViz(champion, currentCandidate) {
