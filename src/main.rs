@@ -59,6 +59,8 @@ const DEFAULT_BIND_PORT: u16 = 8787;
 const PORT_FALLBACK_ATTEMPTS: u16 = 32;
 const SATELLITE_TRIAL_TIMEOUT: Duration = Duration::from_secs(30);
 const SATELLITE_RECONNECT_DELAY: Duration = Duration::from_secs(3);
+const SATELLITE_DISPATCH_RETRY_LIMIT: usize = 8;
+const SATELLITE_CAPACITY_ERROR: &str = "satellite at capacity";
 const DEFAULT_POPULATION_SIZE: usize = 80;
 const MIN_POPULATION_SIZE: usize = 1;
 const MAX_POPULATION_SIZE: usize = 128;
@@ -2793,6 +2795,7 @@ fn run_generation_stream(
 
         let mut working_satellites: HashMap<u64, (usize, usize)> = HashMap::new();
         let mut completed_trials = vec![vec![None; trial_count]; attempt_count];
+        let mut satellite_retry_counts: HashMap<(usize, usize), usize> = HashMap::new();
         let mut finished_trials = 0;
         let total_trials = attempt_count * trial_count;
         let mut first_error: Option<String> = None;
@@ -2803,6 +2806,7 @@ fn run_generation_stream(
                 match outcome {
                     Ok((a, t, res)) => {
                         completed_trials[a][t] = Some(res);
+                        satellite_retry_counts.remove(&(a, t));
                         finished_trials += 1;
                         if !pending_report[a] {
                             let _ = tx.blocking_send(GenerationStreamEvent::AttemptTrialStarted {
@@ -2828,6 +2832,7 @@ fn run_generation_stream(
                 if let Some(res) = satellite_pool.take_result(tid) {
                     if let Some((a, t)) = working_satellites.remove(&tid) {
                         completed_trials[a][t] = Some(res);
+                        satellite_retry_counts.remove(&(a, t));
                         finished_trials += 1;
                         if !pending_report[a] {
                             let _ = tx.blocking_send(GenerationStreamEvent::AttemptTrialStarted {
@@ -2839,6 +2844,29 @@ fn run_generation_stream(
                         }
                     }
                 }
+                if let Some(message) = satellite_pool.take_failure(tid) {
+                    if let Some((a, t)) = working_satellites.remove(&tid) {
+                        if message == SATELLITE_CAPACITY_ERROR {
+                            let retries = satellite_retry_counts.entry((a, t)).or_insert(0);
+                            *retries += 1;
+                            if *retries > SATELLITE_DISPATCH_RETRY_LIMIT {
+                                if first_error.is_none() {
+                                    first_error = Some(format!(
+                                        "satellite repeatedly rejected trial {tid} as at-capacity (retries exceeded)"
+                                    ));
+                                }
+                            } else {
+                                pending_jobs.lock().unwrap().push((a, t));
+                            }
+                        } else if first_error.is_none() {
+                            first_error = Some(format!("satellite trial {tid} failed: {message}"));
+                        }
+                    }
+                }
+            }
+
+            if first_error.is_some() {
+                break;
             }
 
             let timeouts = satellite_pool.reap_timeouts();
@@ -3855,6 +3883,7 @@ struct SatellitePool {
 struct SatellitePoolInner {
     connections: HashMap<String, SatelliteConnection>,
     completed: HashMap<u64, TrialResult>,
+    failed: HashMap<u64, String>,
 }
 
 impl SatellitePool {
@@ -3863,6 +3892,7 @@ impl SatellitePool {
             inner: Mutex::new(SatellitePoolInner {
                 connections: HashMap::new(),
                 completed: HashMap::new(),
+                failed: HashMap::new(),
             }),
             next_trial_id: AtomicUsize::new(1),
         }
@@ -3887,6 +3917,16 @@ impl SatellitePool {
     fn take_result(&self, trial_id: u64) -> Option<TrialResult> {
         let mut inner = self.inner.lock().unwrap();
         inner.completed.remove(&trial_id)
+    }
+
+    fn push_failure(&self, trial_id: u64, message: String) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.failed.insert(trial_id, message);
+    }
+
+    fn take_failure(&self, trial_id: u64) -> Option<String> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.failed.remove(&trial_id)
     }
 
     fn register(&self, id: String, tx: mpsc::UnboundedSender<SatelliteMessage>) {
@@ -4017,7 +4057,8 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
                     if let Ok(sat_msg) = serde_json::from_str::<SatelliteMessage>(&text) {
                         match sat_msg {
                             SatelliteMessage::Ready => {
-                                pool.mark_idle(&sat_id_for_rx);
+                                // Ready can race with assignment and falsely flip a busy satellite
+                                // to idle. TrialResult / TrialError already carry definitive state.
                             }
                             SatelliteMessage::TrialResult { trial_id, fitness, metrics, descriptor } => {
                                 info!(
@@ -4036,6 +4077,7 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
                                     "satellite {} trial {} failed: {}",
                                     sat_id_for_rx, trial_id, message
                                 );
+                                pool.push_failure(trial_id, message);
                                 pool.mark_idle(&sat_id_for_rx);
                             }
                             SatelliteMessage::Pong => {}
