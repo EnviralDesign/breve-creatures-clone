@@ -37,7 +37,7 @@ const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
 const MOTOR_TORQUE_KNEE: f32 = 68.0;
-const JOINT_MOTOR_RESPONSE: f32 = 16.0;
+const JOINT_MOTOR_RESPONSE: f32 = 12.0;
 const JOINT_MOTOR_FORCE_MULTIPLIER: f32 = 1.0;
 const AXIS_TILT_GAIN: f32 = 1.9;
 const FALLEN_HEIGHT_THRESHOLD: f32 = 0.55;
@@ -83,6 +83,8 @@ struct SegmentGene {
     length: f32,
     thickness: f32,
     mass: f32,
+    #[serde(default = "default_motor_strength")]
+    motor_strength: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -651,7 +653,8 @@ impl TrialSimulator {
                     MOTOR_TORQUE_HIP
                 } else {
                     MOTOR_TORQUE_KNEE
-                } * JOINT_MOTOR_FORCE_MULTIPLIER
+                } * segment_gene.motor_strength
+                    * JOINT_MOTOR_FORCE_MULTIPLIER
                     * config.motor_power_scale;
                 if let Some(joint_ref) = impulse_joints.get_mut(joint_handle, false) {
                     joint_ref
@@ -3319,6 +3322,7 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
                             1.05,
                         ),
                         mass: clamp(rng_range(rng, 0.24, 1.75) * hierarchy_scale, 0.14, 2.0),
+                        motor_strength: rng_range(rng, 0.5, 3.0),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -3406,6 +3410,7 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             sg.length = lerp(sa.length, sb.length, seg_blend);
             sg.thickness = lerp(sa.thickness, sb.thickness, seg_blend);
             sg.mass = lerp(sa.mass, sb.mass, seg_blend);
+            sg.motor_strength = lerp(sa.motor_strength, sb.motor_strength, seg_blend);
 
             let ctrl_blend = rng.random::<f32>();
             cg.amp = lerp(ca.amp, cb.amp, ctrl_blend);
@@ -3473,6 +3478,7 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
             segment.length = mutate_number(segment.length, 0.4, 2.6, chance, 0.21, rng);
             segment.thickness = mutate_number(segment.thickness, 0.12, 1.1, chance, 0.24, rng);
             segment.mass = mutate_number(segment.mass, 0.1, 2.25, chance, 0.24, rng);
+            segment.motor_strength = mutate_number(segment.motor_strength, 0.5, 3.0, chance, 0.2, rng);
         }
         for control in &mut limb.controls {
             control.amp = mutate_number(control.amp, 0.35, 11.6, chance, 0.18, rng);
@@ -3735,6 +3741,10 @@ fn default_limb_dir_y() -> f32 {
 
 fn default_limb_dir_z() -> f32 {
     0.0
+}
+
+fn default_motor_strength() -> f32 {
+    1.0
 }
 
 fn default_run_speed() -> f32 {
