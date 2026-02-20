@@ -94,6 +94,13 @@ const SUMMARY_BEST_TOPOLOGY_COUNT: usize = 5;
 const DIAG_RECENT_WINDOW: usize = 20;
 const DIAG_PLATEAU_STAGNATION_GENERATIONS: usize = 20;
 const DIAG_WATCH_STAGNATION_GENERATIONS: usize = 10;
+const FIXED_PRESET_SPAWN_HEIGHT: f32 = 2.05;
+const FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS: f32 = 0.45;
+const FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS: f32 = 1.8;
+const FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX: f32 = 0.65;
+const FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX: f32 = 1.45;
+const ENV_EVOLUTION_MORPHOLOGY_MODE: &str = "EVOLUTION_MORPHOLOGY_MODE";
+const ENV_EVOLUTION_MORPHOLOGY_PRESET: &str = "EVOLUTION_MORPHOLOGY_PRESET";
 static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -552,6 +559,9 @@ struct TrialSimulator {
     metrics: TrialAccumulator,
     elapsed: f32,
     duration: f32,
+    require_settled_before_actuation: bool,
+    settled_time_before_actuation: f32,
+    actuation_started: bool,
 }
 
 impl TrialSimulator {
@@ -599,7 +609,13 @@ impl TrialSimulator {
             * MASS_DENSITY_MULTIPLIER)
             .max(0.7);
 
-        let drop_start = vector![spawn.x, spawn.y + rng_range(&mut rng, 5.2, 7.7), spawn.z];
+        let fixed_preset = detect_morphology_preset(genome);
+        let use_fixed_preset_startup = fixed_preset.is_some();
+        let drop_start = if use_fixed_preset_startup {
+            vector![spawn.x, FIXED_PRESET_SPAWN_HEIGHT, spawn.z]
+        } else {
+            vector![spawn.x, spawn.y + rng_range(&mut rng, 5.2, 7.7), spawn.z]
+        };
         let torso_handle = insert_box_body(
             &mut bodies,
             &mut colliders,
@@ -611,28 +627,37 @@ impl TrialSimulator {
             let torso_body = bodies
                 .get_mut(torso_handle)
                 .ok_or_else(|| "torso body missing".to_string())?;
-            let rot = UnitQuaternion::from_euler_angles(
-                rng_range(&mut rng, -0.36, 0.36),
-                rng_range(&mut rng, 0.0, PI * 2.0),
-                rng_range(&mut rng, -0.28, 0.28),
-            );
+            let rot = if use_fixed_preset_startup {
+                UnitQuaternion::identity()
+            } else {
+                UnitQuaternion::from_euler_angles(
+                    rng_range(&mut rng, -0.36, 0.36),
+                    rng_range(&mut rng, 0.0, PI * 2.0),
+                    rng_range(&mut rng, -0.28, 0.28),
+                )
+            };
             torso_body.set_rotation(rot, true);
-            torso_body.set_linvel(
-                vector![
-                    rng_range(&mut rng, -0.8, 0.8),
-                    rng_range(&mut rng, -0.6, 0.3),
-                    rng_range(&mut rng, -0.8, 0.8)
-                ],
-                true,
-            );
-            torso_body.set_angvel(
-                vector![
-                    rng_range(&mut rng, -1.8, 1.8),
-                    rng_range(&mut rng, -2.2, 2.2),
-                    rng_range(&mut rng, -1.8, 1.8)
-                ],
-                true,
-            );
+            if use_fixed_preset_startup {
+                torso_body.set_linvel(vector![0.0, 0.0, 0.0], true);
+                torso_body.set_angvel(vector![0.0, 0.0, 0.0], true);
+            } else {
+                torso_body.set_linvel(
+                    vector![
+                        rng_range(&mut rng, -0.8, 0.8),
+                        rng_range(&mut rng, -0.6, 0.3),
+                        rng_range(&mut rng, -0.8, 0.8)
+                    ],
+                    true,
+                );
+                torso_body.set_angvel(
+                    vector![
+                        rng_range(&mut rng, -1.8, 1.8),
+                        rng_range(&mut rng, -2.2, 2.2),
+                        rng_range(&mut rng, -1.8, 1.8)
+                    ],
+                    true,
+                );
+            }
         }
 
         let mut parts = vec![SimPart {
@@ -806,6 +831,9 @@ impl TrialSimulator {
             metrics: TrialAccumulator::new(spawn, genome),
             elapsed: 0.0,
             duration: config.duration_seconds,
+            require_settled_before_actuation: use_fixed_preset_startup,
+            settled_time_before_actuation: 0.0,
+            actuation_started: false,
         })
     }
 
@@ -846,7 +874,33 @@ impl TrialSimulator {
         let dt = self.integration_parameters.dt;
         let sim_time = self.elapsed;
 
-        if sim_time >= SETTLE_SECONDS {
+        let mut can_actuate = sim_time >= SETTLE_SECONDS;
+        if can_actuate
+            && self.require_settled_before_actuation
+            && !self.actuation_started
+            && let Some(torso) = self.bodies.get(self.torso_handle)
+        {
+            let linear_speed = torso.linvel().norm();
+            let angular_speed = torso.angvel().norm();
+            if linear_speed <= FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX
+                && angular_speed <= FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX
+            {
+                self.settled_time_before_actuation += dt;
+            } else {
+                self.settled_time_before_actuation = 0.0;
+            }
+
+            let max_wait_elapsed =
+                sim_time >= SETTLE_SECONDS + FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS;
+            if self.settled_time_before_actuation >= FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS
+                || max_wait_elapsed
+            {
+                self.actuation_started = true;
+            }
+            can_actuate = self.actuation_started;
+        }
+
+        if can_actuate {
             let mut energy_step = 0.0;
             for controller in &self.controllers {
                 let signal = clamp(
@@ -962,6 +1016,21 @@ struct EvolutionControlRequest {
     population_size: Option<usize>,
     fast_forward_generations: Option<usize>,
     run_speed: Option<f32>,
+    morphology_mode: Option<EvolutionMorphologyMode>,
+    morphology_preset: Option<MorphologyPreset>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum EvolutionMorphologyMode {
+    Random,
+    FixedPreset,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum MorphologyPreset {
+    Spider4x2,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1152,6 +1221,8 @@ struct EvolutionPerformanceRun {
     trial_count: usize,
     run_speed: f32,
     paused: bool,
+    morphology_mode: EvolutionMorphologyMode,
+    morphology_preset: MorphologyPreset,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1213,6 +1284,8 @@ struct EvolutionPerformanceSummaryResponse {
     best_ever_fitness: f32,
     recent_best_fitness: f32,
     stagnation_generations: usize,
+    morphology_mode: EvolutionMorphologyMode,
+    morphology_preset: MorphologyPreset,
     diversity_state: String,
     mutation_pressure: EvolutionMutationPressure,
     convergence: Vec<EvolutionConvergenceSignal>,
@@ -1308,6 +1381,10 @@ struct EvolutionStatus {
     fast_forward_remaining: usize,
     fast_forward_active: bool,
     injection_queue_count: usize,
+    #[serde(default = "default_morphology_mode")]
+    morphology_mode: EvolutionMorphologyMode,
+    #[serde(default = "default_morphology_preset")]
+    morphology_preset: MorphologyPreset,
     #[serde(default)]
     connected_satellites: Vec<String>,
     current_genome: Option<Genome>,
@@ -1379,6 +1456,8 @@ struct EvolutionCommandState {
     pending_population_size: usize,
     run_speed: f32,
     fast_forward_remaining: usize,
+    morphology_mode: EvolutionMorphologyMode,
+    morphology_preset: MorphologyPreset,
     injection_queue: VecDeque<EvolutionInjection>,
     pending_loaded_checkpoint: Option<EvolutionRuntimeSnapshot>,
 }
@@ -1410,6 +1489,8 @@ struct EvolutionController {
 impl EvolutionController {
     fn new() -> Arc<Self> {
         let initial_population_size = DEFAULT_POPULATION_SIZE;
+        let (initial_morphology_mode, initial_morphology_preset) =
+            resolve_initial_morphology_override();
         let initial_status = EvolutionStatus {
             generation: 1,
             population_size: initial_population_size,
@@ -1424,6 +1505,8 @@ impl EvolutionController {
             fast_forward_remaining: 0,
             fast_forward_active: false,
             injection_queue_count: 0,
+            morphology_mode: initial_morphology_mode,
+            morphology_preset: initial_morphology_preset,
             connected_satellites: Vec::new(),
             current_genome: None,
             best_genome: None,
@@ -1436,6 +1519,8 @@ impl EvolutionController {
                 pending_population_size: initial_population_size,
                 run_speed: 1.0,
                 fast_forward_remaining: 0,
+                morphology_mode: initial_morphology_mode,
+                morphology_preset: initial_morphology_preset,
                 injection_queue: VecDeque::new(),
                 pending_loaded_checkpoint: None,
             })),
@@ -1454,7 +1539,17 @@ impl EvolutionController {
         self.events.subscribe()
     }
 
-    fn command_snapshot(&self) -> (bool, bool, usize, f32, usize) {
+    fn command_snapshot(
+        &self,
+    ) -> (
+        bool,
+        bool,
+        usize,
+        f32,
+        usize,
+        EvolutionMorphologyMode,
+        MorphologyPreset,
+    ) {
         let mut commands = self
             .commands
             .lock()
@@ -1467,6 +1562,8 @@ impl EvolutionController {
             commands.pending_population_size,
             commands.run_speed,
             commands.fast_forward_remaining,
+            commands.morphology_mode,
+            commands.morphology_preset,
         )
     }
 
@@ -1690,12 +1787,30 @@ impl EvolutionController {
                 commands.fast_forward_remaining = 0;
                 info!("control stop_fast_forward: before={}, after=0", before);
             }
+            "set_morphology_mode" => {
+                let Some(mode) = request.morphology_mode else {
+                    return Err(
+                        "morphologyMode is required for set_morphology_mode".to_string(),
+                    );
+                };
+                commands.morphology_mode = mode;
+                if let Some(preset) = request.morphology_preset {
+                    commands.morphology_preset = preset;
+                } else if mode == EvolutionMorphologyMode::FixedPreset {
+                    commands.morphology_preset = default_morphology_preset();
+                }
+                commands.restart_requested = true;
+                commands.fast_forward_remaining = 0;
+                commands.injection_queue.clear();
+            }
             other => return Err(format!("unsupported action '{other}'")),
         }
         let paused = commands.paused;
         let pending_population_size = commands.pending_population_size;
         let run_speed = commands.run_speed;
         let fast_forward_remaining = commands.fast_forward_remaining;
+        let morphology_mode = commands.morphology_mode;
+        let morphology_preset = commands.morphology_preset;
         let injection_queue_count = commands.injection_queue.len();
         drop(commands);
 
@@ -1707,6 +1822,8 @@ impl EvolutionController {
             shared.status.fast_forward_remaining = fast_forward_remaining;
             shared.status.fast_forward_active = fast_forward_remaining > 0;
             shared.status.injection_queue_count = injection_queue_count;
+            shared.status.morphology_mode = morphology_mode;
+            shared.status.morphology_preset = morphology_preset;
             shared.status.clone()
         };
         self.broadcast_status(status.clone());
@@ -1935,6 +2052,8 @@ fn start_evolution_worker(
                     commands.pending_population_size = loaded_status.pending_population_size;
                     commands.run_speed = loaded_status.run_speed.clamp(0.5, 8.0);
                     commands.fast_forward_remaining = loaded_status.fast_forward_remaining;
+                    commands.morphology_mode = loaded_status.morphology_mode;
+                    commands.morphology_preset = loaded_status.morphology_preset;
                     commands.injection_queue = VecDeque::from(loaded.injection_queue.clone());
                 }
                 controller.update_status(|status| {
@@ -1969,6 +2088,8 @@ fn start_evolution_worker(
                 pending_population_size,
                 run_speed,
                 fast_forward_remaining,
+                morphology_mode,
+                morphology_preset,
             ) = controller.command_snapshot();
             if restart_requested {
                 info!(
@@ -1985,6 +2106,8 @@ fn start_evolution_worker(
                     &mut rng,
                     pending_population_size,
                     generation,
+                    morphology_mode,
+                    morphology_preset,
                     &mut population_size,
                     &mut batch_genomes,
                     &mut batch_results,
@@ -2037,6 +2160,8 @@ fn start_evolution_worker(
                     &mut rng,
                     pending_population_size,
                     generation,
+                    morphology_mode,
+                    morphology_preset,
                     &mut population_size,
                     &mut batch_genomes,
                     &mut batch_results,
@@ -2077,6 +2202,8 @@ fn start_evolution_worker(
                         &mut rng,
                         pending_population_size,
                         generation,
+                        morphology_mode,
+                        morphology_preset,
                         &mut population_size,
                         &mut batch_genomes,
                         &mut batch_results,
@@ -2110,7 +2237,13 @@ fn start_evolution_worker(
                     );
                     continue;
                 }
-                let injected_genomes = dequeue_injected_genomes(&controller, &mut rng, 1);
+                let injected_genomes = dequeue_injected_genomes(
+                    &controller,
+                    &mut rng,
+                    1,
+                    morphology_mode,
+                    morphology_preset,
+                );
                 if let Some(summary) = build_generation_fitness_summary(generation, &batch_results)
                 {
                     controller.emit_generation_summary(summary);
@@ -2130,6 +2263,8 @@ fn start_evolution_worker(
                     &mut best_genome,
                     pending_population_size,
                     injected_genomes,
+                    morphology_mode,
+                    morphology_preset,
                 );
                 if let Some(summary) = performance {
                     controller.emit_generation_performance(summary);
@@ -2270,7 +2405,13 @@ fn start_evolution_worker(
                         {
                             controller.emit_generation_summary(summary);
                         }
-                        let injected_genomes = dequeue_injected_genomes(&controller, &mut rng, 1);
+                        let injected_genomes = dequeue_injected_genomes(
+                            &controller,
+                            &mut rng,
+                            1,
+                            morphology_mode,
+                            morphology_preset,
+                        );
                         let performance = finalize_generation(
                             &mut rng,
                             &mut batch_genomes,
@@ -2286,6 +2427,8 @@ fn start_evolution_worker(
                             &mut best_genome,
                             pending_population_size,
                             injected_genomes,
+                            morphology_mode,
+                            morphology_preset,
                         );
                         if let Some(summary) = performance {
                             controller.emit_generation_performance(summary);
@@ -2378,7 +2521,7 @@ fn start_evolution_worker(
             let wall_trial_start = Instant::now();
 
             for step in 0..steps {
-                let (paused_now, restart_now, _, _, _) = controller.command_snapshot();
+                let (paused_now, restart_now, _, _, _, _, _) = controller.command_snapshot();
                 if restart_now {
                     controller.force_restart();
                     aborted = true;
@@ -2387,7 +2530,8 @@ fn start_evolution_worker(
                 if paused_now {
                     loop {
                         std::thread::sleep(Duration::from_millis(25));
-                        let (paused_loop, restart_loop, _, _, _) = controller.command_snapshot();
+                        let (paused_loop, restart_loop, _, _, _, _, _) =
+                            controller.command_snapshot();
                         if restart_loop {
                             controller.force_restart();
                             aborted = true;
@@ -2516,6 +2660,8 @@ fn reset_evolution_batch(
     rng: &mut SmallRng,
     target_population_size: usize,
     generation_index: usize,
+    morphology_mode: EvolutionMorphologyMode,
+    morphology_preset: MorphologyPreset,
     population_size: &mut usize,
     batch_genomes: &mut Vec<Genome>,
     batch_results: &mut Vec<EvolutionCandidate>,
@@ -2526,7 +2672,12 @@ fn reset_evolution_batch(
 ) {
     let clamped_size = target_population_size.clamp(MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
     *population_size = clamped_size;
-    *batch_genomes = (0..clamped_size).map(|_| random_genome(rng)).collect();
+    *batch_genomes = (0..clamped_size)
+        .map(|_| {
+            let genome = random_genome(rng);
+            apply_morphology_mode(genome, morphology_mode, morphology_preset, rng)
+        })
+        .collect();
     batch_results.clear();
     *attempt_trials = vec![Vec::new(); clamped_size];
     *trial_seeds = build_trial_seed_set(generation_index, TRIALS_PER_CANDIDATE);
@@ -2538,13 +2689,18 @@ fn dequeue_injected_genomes(
     controller: &EvolutionController,
     rng: &mut SmallRng,
     max_count: usize,
+    morphology_mode: EvolutionMorphologyMode,
+    morphology_preset: MorphologyPreset,
 ) -> Vec<Genome> {
     controller
         .take_injections(max_count)
         .into_iter()
-        .map(|injection| match injection.mutation_mode {
-            InjectMutationMode::None => injection.genome,
-            InjectMutationMode::Light => mutate_genome(injection.genome, 0.12, rng),
+        .map(|injection| {
+            let genome = match injection.mutation_mode {
+                InjectMutationMode::None => injection.genome,
+                InjectMutationMode::Light => mutate_genome(injection.genome, 0.12, rng),
+            };
+            apply_morphology_mode(genome, morphology_mode, morphology_preset, rng)
         })
         .collect()
 }
@@ -2732,6 +2888,8 @@ fn finalize_generation(
     best_genome: &mut Option<Genome>,
     pending_population_size: usize,
     injected_genomes: Vec<Genome>,
+    morphology_mode: EvolutionMorphologyMode,
+    morphology_preset: MorphologyPreset,
 ) -> Option<GenerationPerformanceSummary> {
     apply_diversity_scores(batch_results, novelty_archive);
     update_novelty_archive(batch_results, novelty_archive);
@@ -2831,6 +2989,11 @@ fn finalize_generation(
             child = random_genome(rng);
         }
         next_genomes.push(child);
+    }
+    for genome in &mut next_genomes {
+        let constrained =
+            apply_morphology_mode(genome.clone(), morphology_mode, morphology_preset, rng);
+        *genome = constrained;
     }
 
     let performance_summary = build_generation_performance_summary(
@@ -2978,6 +3141,8 @@ fn build_evolution_performance_response(
             trial_count: status.trial_count,
             run_speed: status.run_speed,
             paused: status.paused,
+            morphology_mode: status.morphology_mode,
+            morphology_preset: status.morphology_preset,
         },
         window: EvolutionPerformanceWindow {
             from_generation,
@@ -3081,6 +3246,8 @@ fn build_evolution_performance_summary_response(
         best_ever_fitness: status.best_ever_score,
         recent_best_fitness,
         stagnation_generations: stagnation,
+        morphology_mode: status.morphology_mode,
+        morphology_preset: status.morphology_preset,
         diversity_state: diversity_state.to_string(),
         mutation_pressure: EvolutionMutationPressure {
             current_rate: mutation_rate,
@@ -5175,6 +5342,350 @@ fn hash_uint32(a: u32, b: u32, c: u32) -> u32 {
     h ^= h >> 17;
     h = h.wrapping_add(h << 5);
     h
+}
+
+fn default_morphology_mode() -> EvolutionMorphologyMode {
+    EvolutionMorphologyMode::Random
+}
+
+fn default_morphology_preset() -> MorphologyPreset {
+    MorphologyPreset::Spider4x2
+}
+
+fn parse_morphology_mode_token(token: &str) -> Option<EvolutionMorphologyMode> {
+    let normalized = token.trim().to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "random" => Some(EvolutionMorphologyMode::Random),
+        "fixed" | "fixed_preset" | "preset" => Some(EvolutionMorphologyMode::FixedPreset),
+        _ => None,
+    }
+}
+
+fn parse_morphology_preset_token(token: &str) -> Option<MorphologyPreset> {
+    let normalized = token.trim().to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "spider4x2" | "spider_4x2" | "spider" => Some(MorphologyPreset::Spider4x2),
+        _ => None,
+    }
+}
+
+fn resolve_initial_morphology_override() -> (EvolutionMorphologyMode, MorphologyPreset) {
+    let mut mode = default_morphology_mode();
+    let mut preset = default_morphology_preset();
+    let mut mode_explicitly_set = false;
+
+    if let Ok(raw_mode) = std::env::var(ENV_EVOLUTION_MORPHOLOGY_MODE) {
+        if let Some(parsed) = parse_morphology_mode_token(&raw_mode) {
+            mode = parsed;
+            mode_explicitly_set = true;
+        } else {
+            warn!(
+                "{} has invalid value '{}'; expected 'random' or 'fixed_preset'",
+                ENV_EVOLUTION_MORPHOLOGY_MODE, raw_mode
+            );
+        }
+    }
+
+    if let Ok(raw_preset) = std::env::var(ENV_EVOLUTION_MORPHOLOGY_PRESET) {
+        if let Some(parsed) = parse_morphology_preset_token(&raw_preset) {
+            preset = parsed;
+            if !mode_explicitly_set {
+                mode = EvolutionMorphologyMode::FixedPreset;
+            }
+        } else {
+            warn!(
+                "{} has invalid value '{}'; expected 'spider4x2'",
+                ENV_EVOLUTION_MORPHOLOGY_PRESET, raw_preset
+            );
+        }
+    }
+
+    info!(
+        "evolution morphology startup: mode={}, preset={} (override with {} and {})",
+        morphology_mode_label(mode),
+        morphology_preset_label(preset),
+        ENV_EVOLUTION_MORPHOLOGY_MODE,
+        ENV_EVOLUTION_MORPHOLOGY_PRESET
+    );
+    (mode, preset)
+}
+
+fn morphology_mode_label(mode: EvolutionMorphologyMode) -> &'static str {
+    match mode {
+        EvolutionMorphologyMode::Random => "random",
+        EvolutionMorphologyMode::FixedPreset => "fixed_preset",
+    }
+}
+
+fn morphology_preset_label(preset: MorphologyPreset) -> &'static str {
+    match preset {
+        MorphologyPreset::Spider4x2 => "spider4x2",
+    }
+}
+
+fn detect_morphology_preset(genome: &Genome) -> Option<MorphologyPreset> {
+    if matches_spider4x2_preset(genome) {
+        Some(MorphologyPreset::Spider4x2)
+    } else {
+        None
+    }
+}
+
+fn approx_eq(a: f32, b: f32, tolerance: f32) -> bool {
+    (a - b).abs() <= tolerance
+}
+
+fn matches_spider4x2_preset(genome: &Genome) -> bool {
+    if genome.limbs.len() < MAX_LIMBS {
+        return false;
+    }
+    if !approx_eq(genome.torso.w, 1.68, 0.02)
+        || !approx_eq(genome.torso.h, 0.66, 0.02)
+        || !approx_eq(genome.torso.d, 1.22, 0.02)
+        || !approx_eq(genome.torso.mass, 1.08, 0.04)
+        || !approx_eq(genome.mass_scale, 1.0, 0.05)
+    {
+        return false;
+    }
+    let expected_anchors = [
+        (0.72, -0.06, 0.46),
+        (-0.72, -0.06, 0.46),
+        (0.72, -0.06, -0.46),
+        (-0.72, -0.06, -0.46),
+    ];
+    for (limb_index, expected) in expected_anchors.iter().enumerate() {
+        let limb = &genome.limbs[limb_index];
+        if !limb.enabled || limb.segment_count != 2 {
+            return false;
+        }
+        if !approx_eq(limb.anchor_x, expected.0, 0.05)
+            || !approx_eq(limb.anchor_y, expected.1, 0.05)
+            || !approx_eq(limb.anchor_z, expected.2, 0.05)
+        {
+            return false;
+        }
+    }
+    for limb in genome.limbs.iter().skip(4).take(MAX_LIMBS.saturating_sub(4)) {
+        if limb.enabled {
+            return false;
+        }
+    }
+    true
+}
+
+fn apply_morphology_mode(
+    genome: Genome,
+    mode: EvolutionMorphologyMode,
+    preset: MorphologyPreset,
+    rng: &mut SmallRng,
+) -> Genome {
+    match mode {
+        EvolutionMorphologyMode::Random => {
+            let mut adjusted = genome;
+            ensure_active_body_plan(&mut adjusted, rng);
+            adjusted
+        }
+        EvolutionMorphologyMode::FixedPreset => {
+            constrain_genome_to_morphology_preset(genome, preset, rng)
+        }
+    }
+}
+
+fn constrain_genome_to_morphology_preset(
+    source: Genome,
+    preset: MorphologyPreset,
+    rng: &mut SmallRng,
+) -> Genome {
+    let mut constrained = morphology_preset_template_genome(preset);
+    constrained.hue = source.hue;
+    copy_control_genes(&source, &mut constrained);
+    ensure_active_body_plan(&mut constrained, rng);
+    constrained
+}
+
+fn morphology_preset_template_genome(preset: MorphologyPreset) -> Genome {
+    match preset {
+        MorphologyPreset::Spider4x2 => spider4x2_template_genome(),
+    }
+}
+
+fn copy_control_genes(source: &Genome, target: &mut Genome) {
+    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
+        let Some(source_limb) = source.limbs.get(limb_index) else {
+            continue;
+        };
+        for (control_index, target_control) in target_limb.controls.iter_mut().enumerate() {
+            let Some(source_control) = source_limb.controls.get(control_index) else {
+                continue;
+            };
+            *target_control = source_control.clone();
+        }
+    }
+}
+
+fn spider4x2_template_genome() -> Genome {
+    let torso = TorsoGene {
+        w: 1.68,
+        h: 0.66,
+        d: 1.22,
+        mass: 1.08,
+    };
+    let mut limbs = vec![disabled_limb_template(); MAX_LIMBS];
+    let anchor_y = -0.06;
+    let freq = 1.7;
+    limbs[0] = spider_leg_template(
+        0.72,
+        anchor_y,
+        0.46,
+        0.08,
+        0.24,
+        [0.94, -0.10, 0.33],
+        0.0,
+        freq,
+    );
+    limbs[1] = spider_leg_template(
+        -0.72,
+        anchor_y,
+        0.46,
+        0.08,
+        -0.24,
+        [-0.94, -0.10, 0.33],
+        PI,
+        freq,
+    );
+    limbs[2] = spider_leg_template(
+        0.72,
+        anchor_y,
+        -0.46,
+        -0.08,
+        0.24,
+        [0.94, -0.10, -0.33],
+        PI,
+        freq,
+    );
+    limbs[3] = spider_leg_template(
+        -0.72,
+        anchor_y,
+        -0.46,
+        -0.08,
+        -0.24,
+        [-0.94, -0.10, -0.33],
+        0.0,
+        freq,
+    );
+    Genome {
+        torso,
+        limbs,
+        hue: 0.0,
+        mass_scale: 1.0,
+    }
+}
+
+fn disabled_limb_template() -> LimbGene {
+    LimbGene {
+        enabled: false,
+        segment_count: 1,
+        anchor_x: 0.0,
+        anchor_y: 0.0,
+        anchor_z: 0.0,
+        axis_y: 0.0,
+        axis_z: 0.0,
+        dir_x: 0.0,
+        dir_y: -1.0,
+        dir_z: 0.0,
+        segments: (0..MAX_SEGMENTS_PER_LIMB)
+            .map(|_| SegmentGene {
+                length: 0.9,
+                thickness: 0.2,
+                mass: 0.45,
+                motor_strength: 1.0,
+                joint_stiffness: 45.0,
+            })
+            .collect(),
+        controls: (0..MAX_SEGMENTS_PER_LIMB)
+            .map(|_| ControlGene {
+                amp: 1.0,
+                freq: 1.0,
+                phase: 0.0,
+                bias: 0.0,
+            })
+            .collect(),
+    }
+}
+
+fn spider_leg_template(
+    anchor_x: f32,
+    anchor_y: f32,
+    anchor_z: f32,
+    axis_y: f32,
+    axis_z: f32,
+    dir: [f32; 3],
+    phase: f32,
+    freq: f32,
+) -> LimbGene {
+    let mut segments = vec![
+        SegmentGene {
+            length: 2.04,
+            thickness: 0.28,
+            mass: 0.95,
+            motor_strength: 1.0,
+            joint_stiffness: 48.0,
+        },
+        SegmentGene {
+            length: 1.76,
+            thickness: 0.24,
+            mass: 0.74,
+            motor_strength: 0.9,
+            joint_stiffness: 44.0,
+        },
+    ];
+    while segments.len() < MAX_SEGMENTS_PER_LIMB {
+        segments.push(SegmentGene {
+            length: 1.6,
+            thickness: 0.22,
+            mass: 0.68,
+            motor_strength: 0.88,
+            joint_stiffness: 40.0,
+        });
+    }
+
+    let mut controls = vec![
+        ControlGene {
+            amp: 2.9,
+            freq,
+            phase,
+            bias: 0.0,
+        },
+        ControlGene {
+            amp: 2.2,
+            freq,
+            phase: wrap_phase(phase + PI * 0.45),
+            bias: -0.16,
+        },
+    ];
+    while controls.len() < MAX_SEGMENTS_PER_LIMB {
+        controls.push(ControlGene {
+            amp: 1.0,
+            freq,
+            phase,
+            bias: 0.0,
+        });
+    }
+
+    LimbGene {
+        enabled: true,
+        segment_count: 2,
+        anchor_x,
+        anchor_y,
+        anchor_z,
+        axis_y,
+        axis_z,
+        dir_x: dir[0],
+        dir_y: dir[1],
+        dir_z: dir[2],
+        segments,
+        controls,
+    }
 }
 
 fn random_genome(rng: &mut SmallRng) -> Genome {

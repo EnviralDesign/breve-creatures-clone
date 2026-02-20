@@ -11,6 +11,7 @@ Use these HTTP routes:
 - `GET /api/evolution/performance/summary`
 - `GET /api/evolution/performance`
 - `GET /api/evolution/performance/diagnose`
+- `POST /api/evolution/control`
 
 Call summary first, then request detailed history only when needed.
 
@@ -23,6 +24,8 @@ Compact control-loop payload:
 - `bestEverFitness`
 - `recentBestFitness`
 - `stagnationGenerations`
+- `morphologyMode`
+- `morphologyPreset`
 - `diversityState` (`low` | `medium` | `high` | `unknown`)
 - `mutationPressure`:
   - `currentRate`
@@ -59,7 +62,7 @@ Query params:
 - `includeTopology` (default `true`)
 
 Response:
-- `run`: `{ generation, populationSize, trialCount, runSpeed, paused }`
+- `run`: `{ generation, populationSize, trialCount, runSpeed, paused, morphologyMode, morphologyPreset }`
 - `window`: `{ fromGeneration, toGeneration, count, stride }`
 - `trends`:
   - `bestFitnessSlope`
@@ -79,6 +82,38 @@ Response:
   - `breeding`: `{ mutationRate, randomInjectChance, injectedGenomes, eliteKept }`
 - `learnedParams[]` (if enabled):
   - `{ name, bounds: [min,max], population: { min,p50,p90,max,std }, champion }`
+
+## Morphology Control
+
+### `POST /api/evolution/control` with `action: "set_morphology_mode"`
+
+Request body:
+- `action`: `"set_morphology_mode"`
+- `morphologyMode`: `"random"` or `"fixed_preset"`
+- `morphologyPreset` (optional): currently `"spider4x2"`
+
+Behavior:
+- Switching morphology mode forces an evolution restart.
+- Fast-forward queue and injection queue are cleared on mode switch.
+- Status now reports:
+  - `morphologyMode`
+  - `morphologyPreset`
+
+Preset notes:
+- `spider4x2` = fixed hand-designed body:
+  - 1 torso
+  - 4 enabled legs
+  - 2 active segments per leg
+  - 2 disabled spare limb slots
+- In fixed mode, topology/body params are locked to the preset while control genes continue evolving.
+
+## Startup Overrides (No API Call)
+
+For CLI/server startup overrides:
+- `EVOLUTION_MORPHOLOGY_MODE=random|fixed_preset`
+- `EVOLUTION_MORPHOLOGY_PRESET=spider4x2`
+
+If only `EVOLUTION_MORPHOLOGY_PRESET` is set, mode auto-switches to `fixed_preset`.
 
 ## Learned Parameter Names
 
