@@ -860,9 +860,6 @@ impl AppState {
     fn new() -> Self {
         let sim_worker_limit = resolve_sim_worker_limit();
         let evolution = EvolutionController::new();
-        if let Ok((_id, snapshot)) = load_checkpoint_snapshot(None) {
-            evolution.set_pending_loaded_checkpoint(snapshot);
-        }
         let satellite_pool = Arc::new(SatellitePool::new());
         start_evolution_worker(evolution.clone(), satellite_pool.clone(), sim_worker_limit);
         Self {
@@ -971,6 +968,8 @@ struct EvolutionStatus {
     fast_forward_remaining: usize,
     fast_forward_active: bool,
     injection_queue_count: usize,
+    #[serde(default)]
+    connected_satellites: Vec<String>,
     current_genome: Option<Genome>,
     best_genome: Option<Genome>,
 }
@@ -1068,6 +1067,7 @@ impl EvolutionController {
             fast_forward_remaining: 0,
             fast_forward_active: false,
             injection_queue_count: 0,
+            connected_satellites: Vec::new(),
             current_genome: None,
             best_genome: None,
         };
@@ -1368,6 +1368,21 @@ impl EvolutionController {
     fn emit_error(&self, message: String) {
         let _ = self.events.send(EvolutionStreamEvent::Error { message });
     }
+
+    fn set_connected_satellites(&self, satellites: Vec<String>) {
+        let status = {
+            let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
+            if shared.status.connected_satellites == satellites {
+                None
+            } else {
+                shared.status.connected_satellites = satellites;
+                Some(shared.status.clone())
+            }
+        };
+        if let Some(status) = status {
+            self.broadcast_status(status);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1414,6 +1429,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
 
         controller.force_restart();
         loop {
+            controller.set_connected_satellites(satellite_pool.connected_ids());
             if let Some(loaded) = controller.take_pending_loaded_checkpoint() {
                 let loaded_status = loaded.status.clone();
                 generation = loaded_status.generation.max(1);
@@ -2392,8 +2408,10 @@ async fn evolution_checkpoint_load_handler(
     State(state): State<AppState>,
     Json(request): Json<CheckpointLoadRequest>,
 ) -> Result<Json<CheckpointLoadResponse>, (StatusCode, String)> {
-    let (id, snapshot) =
+    let (id, mut snapshot) =
         load_checkpoint_snapshot(request.id.as_deref()).map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+    snapshot.status.fast_forward_remaining = 0;
+    snapshot.status.fast_forward_active = false;
     state.evolution.set_pending_loaded_checkpoint(snapshot);
     Ok(Json(CheckpointLoadResponse { id }))
 }
@@ -3854,6 +3872,13 @@ impl SatellitePool {
         self.inner.lock().unwrap().connections.len()
     }
 
+    fn connected_ids(&self) -> Vec<String> {
+        let inner = self.inner.lock().unwrap();
+        let mut ids: Vec<String> = inner.connections.keys().cloned().collect();
+        ids.sort_unstable();
+        ids
+    }
+
     fn push_result(&self, trial_id: u64, result: TrialResult) {
         let mut inner = self.inner.lock().unwrap();
         inner.completed.insert(trial_id, result);
@@ -3963,6 +3988,9 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
     }
 
     state.satellite_pool.register(satellite_id.clone(), msg_tx);
+    state
+        .evolution
+        .set_connected_satellites(state.satellite_pool.connected_ids());
     info!("satellite connected: id={}, total={}", satellite_id, state.satellite_pool.connected_count());
 
     // Spawn a task to forward outgoing messages to the WebSocket
@@ -4029,6 +4057,9 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
     }
 
     state.satellite_pool.unregister(&satellite_id);
+    state
+        .evolution
+        .set_connected_satellites(state.satellite_pool.connected_ids());
     info!("satellite disconnected: id={}, total={}", satellite_id, state.satellite_pool.connected_count());
 }
 

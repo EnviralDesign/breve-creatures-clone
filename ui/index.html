@@ -214,6 +214,7 @@
       <div><span class="label">Sim rate:</span><span id="simRate">1.00x</span></div>
       <div><span class="label">Queued batch:</span><span id="queuedPop">none</span></div>
       <div><span class="label">Fast skip:</span><span id="fastSkipStatus">off</span></div>
+      <div><span class="label">Satellites:</span><span id="satellites">none</span></div>
       <div class="ctrl">
         Evolution
         <button id="pauseResumeBtn" type="button">Pause</button>
@@ -266,7 +267,7 @@
         <button id="skip500Btn" type="button">+500</button>
         <button id="skipStopBtn" type="button">Stop</button>
       </div>
-      <div class="hint">Space: pause | R: reseed (confirmation) | Drag: temporary manual camera</div>
+      <div class="hint">Space: pause | Drag: temporary manual camera</div>
     </div>
   </div>
   <div id="genomePanel">
@@ -426,6 +427,7 @@
     const simRateLabel = document.getElementById("simRate");
     const queuedPopLabel = document.getElementById("queuedPop");
     const fastSkipStatusLabel = document.getElementById("fastSkipStatus");
+    const satellitesLabel = document.getElementById("satellites");
     const populationSlider = document.getElementById("populationSlider");
     const populationSliderValue = document.getElementById("populationSliderValue");
     const speedSelect = document.getElementById("speedSelect");
@@ -463,6 +465,7 @@
     populationLabel.textContent = String(DEFAULT_POPULATION_SIZE);
     queuedPopLabel.textContent = "none";
     fastSkipStatusLabel.textContent = "off";
+    satellitesLabel.textContent = "none";
     trialInfoLabel.textContent = `1/${TRIALS_PER_CANDIDATE}`;
 
     let population = [];
@@ -490,6 +493,7 @@
     let evolutionReconnectTimer = null;
     let evolutionConnected = false;
     let injectionQueueCount = 0;
+    let connectedSatellites = [];
     let lastCheckpointId = "";
     let hudCollapsed = false;
     let genomeCollapsed = false;
@@ -578,8 +582,6 @@
       if (event.code === "Space") {
         event.preventDefault();
         void sendEvolutionControl({ action: paused ? "resume" : "pause" });
-      } else if (event.key === "r" || event.key === "R") {
-        requestResetEvolution("Keyboard restart (R)");
       }
     });
 
@@ -638,13 +640,6 @@
 
     function shouldWarnReset() {
       return generation > 1 || currentAttemptIndex > 0 || batchResults.length > 0 || generationClock > 0.75 || bestEverScore > 0.05;
-    }
-
-    function requestResetEvolution(trigger) {
-      const accepted = window.confirm(`${trigger} will reset current evolution progress. Continue?`);
-      if (accepted) {
-        void sendEvolutionControl({ action: "restart" });
-      }
     }
 
     function resetEvolution() {
@@ -891,9 +886,13 @@
       const ffRemainingRaw = status.fastForwardRemaining ?? status.fast_forward_remaining;
       const ffActiveRaw = status.fastForwardActive ?? status.fast_forward_active;
       const queueRaw = status.injectionQueueCount ?? status.injection_queue_count;
+      const satellitesRaw = status.connectedSatellites ?? status.connected_satellites;
       fastForwardGenerationsRemaining = Number.isFinite(ffRemainingRaw) ? Math.max(0, ffRemainingRaw | 0) : fastForwardGenerationsRemaining;
       backendFastForwardBusy = Boolean(ffActiveRaw);
       injectionQueueCount = Number.isFinite(queueRaw) ? Math.max(0, queueRaw | 0) : injectionQueueCount;
+      if (Array.isArray(satellitesRaw)) {
+        connectedSatellites = satellitesRaw.filter((id) => typeof id === "string");
+      }
       if (Number.isFinite(status.currentScore ?? status.current_score)) {
         const score = Number(status.currentScore ?? status.current_score);
         const view = getPrimaryBackendView();
@@ -1560,6 +1559,9 @@
           ? `${fastForwardGenerationsRemaining} gens remaining${backendFastForwardBusy ? " (processing...)" : ""}`
           : "off")
         : `offline${backendOfflineReason ? `: ${backendOfflineReason}` : ""}`;
+      satellitesLabel.textContent = connectedSatellites.length > 0
+        ? `${connectedSatellites.length} connected: ${connectedSatellites.join(", ")}`
+        : "none";
       pauseResumeBtn.textContent = paused ? "Resume" : "Pause";
     }
 
