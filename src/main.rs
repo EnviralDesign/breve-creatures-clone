@@ -1,5 +1,5 @@
-use std::f32::consts::PI;
 use std::collections::{HashMap, VecDeque};
+use std::f32::consts::PI;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
@@ -666,15 +666,17 @@ impl TrialSimulator {
                 } * segment_gene.motor_strength
                     * JOINT_MOTOR_FORCE_MULTIPLIER
                     * config.motor_power_scale;
-                let stiffness = segment_gene.joint_stiffness
-                    * segment_gene.motor_strength;
+                let stiffness = segment_gene.joint_stiffness * segment_gene.motor_strength;
                 if let Some(joint_ref) = impulse_joints.get_mut(joint_handle, false) {
                     joint_ref
                         .data
                         .set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
-                    joint_ref
-                        .data
-                        .set_motor_position(JointAxis::AngX, 0.0, stiffness, JOINT_MOTOR_RESPONSE);
+                    joint_ref.data.set_motor_position(
+                        JointAxis::AngX,
+                        0.0,
+                        stiffness,
+                        JOINT_MOTOR_RESPONSE,
+                    );
                     joint_ref.data.set_motor_max_force(JointAxis::AngX, torque);
                 }
                 controllers.push(SimController {
@@ -799,8 +801,8 @@ impl TrialSimulator {
                         .data
                         .set_motor_max_force(JointAxis::AngX, controller.torque);
                 }
-                energy_step += (target_angle.abs() * controller.stiffness)
-                    .min(controller.torque) * dt;
+                energy_step +=
+                    (target_angle.abs() * controller.stiffness).min(controller.torque) * dt;
             }
             self.metrics.add_energy(energy_step);
         }
@@ -1026,15 +1028,25 @@ struct EvolutionCheckpointFile {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum EvolutionStreamEvent {
-    Status { status: EvolutionStatus },
-    GenerationSummary { summary: GenerationFitnessSummary },
+    Status {
+        status: EvolutionStatus,
+    },
+    GenerationSummary {
+        summary: GenerationFitnessSummary,
+    },
     TrialStarted {
         genome: Genome,
         part_sizes: Vec<[f32; 3]>,
     },
-    Snapshot { frame: SnapshotFrame },
-    TrialComplete { result: TrialResult },
-    Error { message: String },
+    Snapshot {
+        frame: SnapshotFrame,
+    },
+    TrialComplete {
+        result: TrialResult,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1118,7 +1130,10 @@ impl EvolutionController {
     }
 
     fn command_snapshot(&self) -> (bool, bool, usize, f32, usize) {
-        let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         let restart = commands.restart_requested;
         commands.restart_requested = false;
         (
@@ -1131,12 +1146,18 @@ impl EvolutionController {
     }
 
     fn take_pending_loaded_checkpoint(&self) -> Option<EvolutionRuntimeSnapshot> {
-        let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         commands.pending_loaded_checkpoint.take()
     }
 
     fn force_restart(&self) {
-        let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         commands.restart_requested = true;
     }
 
@@ -1145,7 +1166,10 @@ impl EvolutionController {
         genomes: Vec<Genome>,
         mutation_mode: InjectMutationMode,
     ) -> EvolutionGenomeImportResponse {
-        let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         let before = commands.injection_queue.len();
         for genome in genomes {
             commands.injection_queue.push_back(EvolutionInjection {
@@ -1169,7 +1193,10 @@ impl EvolutionController {
     }
 
     fn take_injections(&self, max_count: usize) -> Vec<EvolutionInjection> {
-        let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         let mut items = Vec::new();
         for _ in 0..max_count {
             let Some(item) = commands.injection_queue.pop_front() else {
@@ -1186,7 +1213,10 @@ impl EvolutionController {
     }
 
     fn set_pending_loaded_checkpoint(&self, snapshot: EvolutionRuntimeSnapshot) {
-        let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         commands.pending_loaded_checkpoint = Some(snapshot);
         commands.restart_requested = false;
     }
@@ -1241,13 +1271,19 @@ impl EvolutionController {
     }
 
     fn injection_queue_snapshot(&self) -> Vec<EvolutionInjection> {
-        let commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         commands.injection_queue.iter().cloned().collect()
     }
 
     fn consume_fast_forward_generation(&self) -> usize {
         let remaining = {
-            let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+            let mut commands = self
+                .commands
+                .lock()
+                .expect("evolution command mutex poisoned");
             if commands.fast_forward_remaining > 0 {
                 commands.fast_forward_remaining -= 1;
             }
@@ -1264,7 +1300,10 @@ impl EvolutionController {
     }
 
     fn apply_control(&self, request: EvolutionControlRequest) -> Result<EvolutionStatus, String> {
-        let mut commands = self.commands.lock().expect("evolution command mutex poisoned");
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("evolution command mutex poisoned");
         match request.action.as_str() {
             "pause" => commands.paused = true,
             "resume" => commands.paused = false,
@@ -1300,9 +1339,7 @@ impl EvolutionController {
                 commands.paused = false;
                 info!(
                     "control queue_fast_forward: requested={}, before={}, after={}",
-                    requested,
-                    before,
-                    commands.fast_forward_remaining
+                    requested, before, commands.fast_forward_remaining
                 );
             }
             "stop_fast_forward" => {
@@ -1387,7 +1424,9 @@ impl EvolutionController {
                 shared.fitness_history.drain(0..drop_count);
             }
         }
-        let _ = self.events.send(EvolutionStreamEvent::GenerationSummary { summary });
+        let _ = self
+            .events
+            .send(EvolutionStreamEvent::GenerationSummary { summary });
     }
 
     fn start_trial(&self, genome: Genome, part_sizes: Vec<[f32; 3]>) {
@@ -1400,7 +1439,9 @@ impl EvolutionController {
             shared.status.current_genome = Some(genome.clone());
             shared.status.current_score = 0.0;
         }
-        let _ = self.events.send(EvolutionStreamEvent::TrialStarted { genome, part_sizes });
+        let _ = self
+            .events
+            .send(EvolutionStreamEvent::TrialStarted { genome, part_sizes });
     }
 
     fn push_snapshot(&self, frame: SnapshotFrame) {
@@ -1427,7 +1468,9 @@ impl EvolutionController {
                 }
             }
         }
-        let _ = self.events.send(EvolutionStreamEvent::TrialComplete { result });
+        let _ = self
+            .events
+            .send(EvolutionStreamEvent::TrialComplete { result });
     }
 
     fn emit_error(&self, message: String) {
@@ -1469,7 +1512,11 @@ struct NoveltyEntry {
     fitness: f32,
 }
 
-fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: Arc<SatellitePool>, sim_worker_limit: usize) {
+fn start_evolution_worker(
+    controller: Arc<EvolutionController>,
+    satellite_pool: Arc<SatellitePool>,
+    sim_worker_limit: usize,
+) {
     std::thread::spawn(move || {
         let mut rng = SmallRng::seed_from_u64(rand::random::<u64>());
         let config = TrialConfig {
@@ -1522,13 +1569,13 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                     commands.pending_population_size = loaded_status.pending_population_size;
                     commands.run_speed = loaded_status.run_speed.clamp(0.5, 8.0);
                     commands.fast_forward_remaining = loaded_status.fast_forward_remaining;
-                    commands.injection_queue =
-                        VecDeque::from(loaded.injection_queue.clone());
+                    commands.injection_queue = VecDeque::from(loaded.injection_queue.clone());
                 }
                 controller.update_status(|status| {
                     *status = loaded_status.clone();
                     status.run_speed = loaded_status.run_speed.clamp(0.5, 8.0);
-                    status.current_attempt_index = current_attempt_index.min(population_size.saturating_sub(1));
+                    status.current_attempt_index =
+                        current_attempt_index.min(population_size.saturating_sub(1));
                     status.current_trial_index = current_trial_index;
                     status.injection_queue_count = loaded.injection_queue.len();
                 });
@@ -1545,15 +1592,18 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                 autosave_runtime_snapshot_if_due(&controller);
                 info!(
                     "checkpoint loaded into worker: generation={}, population_size={}, fast_forward_remaining={}",
-                    generation,
-                    population_size,
-                    loaded_status.fast_forward_remaining
+                    generation, population_size, loaded_status.fast_forward_remaining
                 );
                 continue;
             }
 
-            let (paused, restart_requested, pending_population_size, run_speed, fast_forward_remaining) =
-                controller.command_snapshot();
+            let (
+                paused,
+                restart_requested,
+                pending_population_size,
+                run_speed,
+                fast_forward_remaining,
+            ) = controller.command_snapshot();
             if restart_requested {
                 info!(
                     "evolution restart requested; resetting to generation=1, population_size={}",
@@ -1649,9 +1699,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                 );
                 info!(
                     "evolution batch seeded: generation={}, population_size={}, trials_per_candidate={}",
-                    generation,
-                    population_size,
-                    TRIALS_PER_CANDIDATE
+                    generation, population_size, TRIALS_PER_CANDIDATE
                 );
                 continue;
             }
@@ -1691,14 +1739,13 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                     );
                     info!(
                         "evolution batch reseeded: generation={}, population_size={}, trials_per_candidate={}",
-                        generation,
-                        population_size,
-                        TRIALS_PER_CANDIDATE
+                        generation, population_size, TRIALS_PER_CANDIDATE
                     );
                     continue;
                 }
                 let injected_genomes = dequeue_injected_genomes(&controller, &mut rng, 1);
-                if let Some(summary) = build_generation_fitness_summary(generation, &batch_results) {
+                if let Some(summary) = build_generation_fitness_summary(generation, &batch_results)
+                {
                     controller.emit_generation_summary(summary);
                 }
                 finalize_generation(
@@ -1741,10 +1788,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                 );
                 info!(
                     "generation advanced: generation={}, population_size={}, best_ever_score={:.3}, fast_forward_remaining={}",
-                    generation,
-                    population_size,
-                    best_ever_score,
-                    fast_forward_remaining
+                    generation, population_size, best_ever_score, fast_forward_remaining
                 );
                 continue;
             }
@@ -1752,8 +1796,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
             if fast_forward_remaining > 0 {
                 info!(
                     "fast-forward processing generation={}, queued_remaining={}",
-                    generation,
-                    fast_forward_remaining
+                    generation, fast_forward_remaining
                 );
                 let request = GenerationEvalRequest {
                     genomes: batch_genomes.clone(),
@@ -1803,8 +1846,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                             controller.update_status(|status| {
                                 status.current_attempt_index =
                                     attempt_index.min(population_size.saturating_sub(1));
-                                status.current_trial_index =
-                                    TRIALS_PER_CANDIDATE.saturating_sub(1);
+                                status.current_trial_index = TRIALS_PER_CANDIDATE.saturating_sub(1);
                             });
                         }
                         GenerationStreamEvent::GenerationComplete { results } => {
@@ -1823,8 +1865,9 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                     Err(message)
                 } else {
                     worker_result.and_then(|_| {
-                        streamed_results
-                            .ok_or_else(|| "fast-forward generation produced no results".to_string())
+                        streamed_results.ok_or_else(|| {
+                            "fast-forward generation produced no results".to_string()
+                        })
                     })
                 };
                 match final_results {
@@ -1852,7 +1895,9 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                                 attempt,
                             })
                             .collect();
-                        if let Some(summary) = build_generation_fitness_summary(generation, &batch_results) {
+                        if let Some(summary) =
+                            build_generation_fitness_summary(generation, &batch_results)
+                        {
                             controller.emit_generation_summary(summary);
                         }
                         let injected_genomes = dequeue_injected_genomes(&controller, &mut rng, 1);
@@ -1898,9 +1943,7 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
                         autosave_runtime_snapshot_if_due(&controller);
                         info!(
                             "fast-forward generation complete: generation={}, best_ever_score={:.3}, queued_remaining={}",
-                            generation,
-                            best_ever_score,
-                            remaining
+                            generation, best_ever_score, remaining
                         );
                     }
                     Err(err) => {
@@ -1921,7 +1964,9 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
             let seed = trial_seeds
                 .get(current_trial_index)
                 .copied()
-                .unwrap_or_else(|| hash_uint32(generation as u32, current_trial_index as u32, 0x9e3779b9) as u64);
+                .unwrap_or_else(|| {
+                    hash_uint32(generation as u32, current_trial_index as u32, 0x9e3779b9) as u64
+                });
             let mut sim = match TrialSimulator::new(&genome, seed, &config) {
                 Ok(sim) => sim,
                 Err(err) => {
@@ -2072,7 +2117,8 @@ fn start_evolution_worker(controller: Arc<EvolutionController>, satellite_pool: 
             current_attempt_index += 1;
             current_trial_index = 0;
             controller.update_status(|status| {
-                status.current_attempt_index = current_attempt_index.min(population_size.saturating_sub(1));
+                status.current_attempt_index =
+                    current_attempt_index.min(population_size.saturating_sub(1));
                 status.current_trial_index = 0;
                 status.best_ever_score = best_ever_score;
                 status.best_genome = best_genome.clone();
@@ -2165,19 +2211,30 @@ fn build_generation_fitness_summary(
     let mut ranked_attempts: Vec<(usize, f32)> = batch_results
         .iter()
         .map(|item| {
-            let fitness = if item.fitness.is_finite() { item.fitness } else { 0.0 };
+            let fitness = if item.fitness.is_finite() {
+                item.fitness
+            } else {
+                0.0
+            };
             (item.attempt, fitness)
         })
         .collect();
     ranked_attempts.sort_unstable_by_key(|(attempt, _)| *attempt);
-    let attempt_fitnesses: Vec<f32> = ranked_attempts.into_iter().map(|(_, fitness)| fitness).collect();
+    let attempt_fitnesses: Vec<f32> = ranked_attempts
+        .into_iter()
+        .map(|(_, fitness)| fitness)
+        .collect();
     let best_fitness = attempt_fitnesses
         .iter()
         .copied()
         .fold(f32::NEG_INFINITY, f32::max);
     Some(GenerationFitnessSummary {
         generation,
-        best_fitness: if best_fitness.is_finite() { best_fitness } else { 0.0 },
+        best_fitness: if best_fitness.is_finite() {
+            best_fitness
+        } else {
+            0.0
+        },
         attempt_fitnesses,
     })
 }
@@ -2221,7 +2278,8 @@ fn finalize_generation(
         *best_genome = Some(top.genome.clone());
     }
 
-    let target_population_size = pending_population_size.clamp(MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
+    let target_population_size =
+        pending_population_size.clamp(MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
     let mut next_genomes: Vec<Genome> = Vec::with_capacity(target_population_size);
     for genome in injected_genomes.into_iter().take(target_population_size) {
         next_genomes.push(genome);
@@ -2244,11 +2302,7 @@ fn finalize_generation(
     }
     if target_population_size == 1 && next_genomes.is_empty() && !ranked_by_fitness.is_empty() {
         next_genomes.clear();
-        next_genomes.push(mutate_genome(
-            ranked_by_fitness[0].genome.clone(),
-            0.7,
-            rng,
-        ));
+        next_genomes.push(mutate_genome(ranked_by_fitness[0].genome.clone(), 0.7, rng));
     }
 
     let mean_novelty_norm = if ranked_for_breeding.is_empty() {
@@ -2262,7 +2316,9 @@ fn finalize_generation(
     };
     while next_genomes.len() < target_population_size {
         let tournament_size = 4usize.min(ranked_for_breeding.len().max(1));
-        let parent_a = tournament_select(&ranked_for_breeding, tournament_size, rng).genome.clone();
+        let parent_a = tournament_select(&ranked_for_breeding, tournament_size, rng)
+            .genome
+            .clone();
         let parent_b = if ranked_for_breeding.len() > 1 {
             tournament_select(&ranked_for_breeding, tournament_size, rng)
                 .genome
@@ -2271,8 +2327,16 @@ fn finalize_generation(
             parent_a.clone()
         };
         let mut child = crossover_genome(&parent_a, &parent_b, rng);
-        let base_mutation_rate = if ranked_for_breeding.len() == 1 { 0.65 } else { 0.24 };
-        let mutation_rate = clamp(base_mutation_rate + (1.0 - mean_novelty_norm) * 0.08, 0.18, 0.72);
+        let base_mutation_rate = if ranked_for_breeding.len() == 1 {
+            0.65
+        } else {
+            0.24
+        };
+        let mutation_rate = clamp(
+            base_mutation_rate + (1.0 - mean_novelty_norm) * 0.08,
+            0.18,
+            0.72,
+        );
         child = mutate_genome(child, mutation_rate, rng);
         let random_inject_chance = if ranked_for_breeding.len() > 1 {
             0.04 + (1.0 - mean_novelty_norm) * 0.04
@@ -2327,12 +2391,30 @@ async fn main() {
         .route("/api/evolution/state", get(evolution_state_handler))
         .route("/api/evolution/history", get(evolution_history_handler))
         .route("/api/evolution/control", post(evolution_control_handler))
-        .route("/api/evolution/genome/current", get(evolution_current_genome_handler))
-        .route("/api/evolution/genome/best", get(evolution_best_genome_handler))
-        .route("/api/evolution/genome/import", post(evolution_import_genome_handler))
-        .route("/api/evolution/checkpoint/save", post(evolution_checkpoint_save_handler))
-        .route("/api/evolution/checkpoint/list", get(evolution_checkpoint_list_handler))
-        .route("/api/evolution/checkpoint/load", post(evolution_checkpoint_load_handler))
+        .route(
+            "/api/evolution/genome/current",
+            get(evolution_current_genome_handler),
+        )
+        .route(
+            "/api/evolution/genome/best",
+            get(evolution_best_genome_handler),
+        )
+        .route(
+            "/api/evolution/genome/import",
+            post(evolution_import_genome_handler),
+        )
+        .route(
+            "/api/evolution/checkpoint/save",
+            post(evolution_checkpoint_save_handler),
+        )
+        .route(
+            "/api/evolution/checkpoint/list",
+            get(evolution_checkpoint_list_handler),
+        )
+        .route(
+            "/api/evolution/checkpoint/load",
+            post(evolution_checkpoint_load_handler),
+        )
         .route("/api/evolution/ws", get(ws_evolution_handler))
         .route("/api/satellite/ws", get(ws_satellite_handler))
         .route("/", get(frontend_root))
@@ -2355,7 +2437,9 @@ async fn main() {
         }
     };
     info!("breve-creatures listening on http://{addr}");
-    info!("frontend UI and satellite connections available on your LAN ip address at port {bind_port}");
+    info!(
+        "frontend UI and satellite connections available on your LAN ip address at port {bind_port}"
+    );
     if let Err(err) = axum::serve(listener, app).await {
         error!("server exited unexpectedly: {err}");
     }
@@ -2456,21 +2540,19 @@ async fn evolution_control_handler(
 async fn evolution_current_genome_handler(
     State(state): State<AppState>,
 ) -> Result<Json<Genome>, (StatusCode, String)> {
-    state
-        .evolution
-        .current_genome()
-        .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, "no current genome available".to_string()))
+    state.evolution.current_genome().map(Json).ok_or((
+        StatusCode::NOT_FOUND,
+        "no current genome available".to_string(),
+    ))
 }
 
 async fn evolution_best_genome_handler(
     State(state): State<AppState>,
 ) -> Result<Json<Genome>, (StatusCode, String)> {
-    state
-        .evolution
-        .current_best_genome()
-        .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, "no best genome available".to_string()))
+    state.evolution.current_best_genome().map(Json).ok_or((
+        StatusCode::NOT_FOUND,
+        "no best genome available".to_string(),
+    ))
 }
 
 async fn evolution_import_genome_handler(
@@ -2503,7 +2585,8 @@ async fn evolution_checkpoint_save_handler(
         StatusCode::CONFLICT,
         "runtime snapshot not yet available".to_string(),
     ))?;
-    let saved = save_checkpoint_snapshot(&snapshot, request.name.as_deref()).map_err(internal_err)?;
+    let saved =
+        save_checkpoint_snapshot(&snapshot, request.name.as_deref()).map_err(internal_err)?;
     Ok(Json(saved))
 }
 
@@ -2518,8 +2601,8 @@ async fn evolution_checkpoint_load_handler(
     State(state): State<AppState>,
     Json(request): Json<CheckpointLoadRequest>,
 ) -> Result<Json<CheckpointLoadResponse>, (StatusCode, String)> {
-    let (id, mut snapshot) =
-        load_checkpoint_snapshot(request.id.as_deref()).map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+    let (id, mut snapshot) = load_checkpoint_snapshot(request.id.as_deref())
+        .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
     snapshot.status.fast_forward_remaining = 0;
     snapshot.status.fast_forward_active = false;
     state.evolution.set_pending_loaded_checkpoint(snapshot);
@@ -2639,7 +2722,10 @@ async fn handle_evolution_socket(mut socket: WebSocket, state: AppState) {
     loop {
         match rx.recv().await {
             Ok(event) => {
-                if send_evolution_stream_event(&mut socket, event).await.is_err() {
+                if send_evolution_stream_event(&mut socket, event)
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -2863,8 +2949,7 @@ fn run_generation_stream(
         }
     }
 
-    let (result_tx, result_rx) =
-        std_mpsc::channel::<Result<(usize, usize, TrialResult), String>>();
+    let (result_tx, result_rx) = std_mpsc::channel::<Result<(usize, usize, TrialResult), String>>();
     let done = Arc::new(AtomicBool::new(false));
 
     std::thread::scope(|scope| {
@@ -2884,15 +2969,24 @@ fn run_generation_stream(
                     if let Some((a, t)) = job {
                         let outcome = TrialSimulator::new(&genomes[a], seeds[t], config_ref)
                             .and_then(|mut sim| {
-                                let steps = (config_ref.duration_seconds / config_ref.dt).ceil() as usize;
+                                let steps =
+                                    (config_ref.duration_seconds / config_ref.dt).ceil() as usize;
                                 for _ in 0..steps {
                                     sim.step()?;
                                 }
                                 Ok(sim.final_result())
                             });
                         match outcome {
-                            Ok(res) => { if res_tx.send(Ok((a, t, res))).is_err() { break; } },
-                            Err(e) => { if res_tx.send(Err(e)).is_err() { break; } }
+                            Ok(res) => {
+                                if res_tx.send(Ok((a, t, res))).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                if res_tx.send(Err(e)).is_err() {
+                                    break;
+                                }
+                            }
                         }
                     } else {
                         std::thread::sleep(Duration::from_millis(5));
@@ -2924,9 +3018,11 @@ fn run_generation_stream(
                             });
                             pending_report[a] = true;
                         }
-                    },
+                    }
                     Err(e) => {
-                        if first_error.is_none() { first_error = Some(e); }
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                        }
                     }
                 }
             }
@@ -2987,7 +3083,7 @@ fn run_generation_stream(
                 }
             }
 
-            while satellite_pool.idle_count() > 0 {
+            while satellite_pool.available_slot_count() > 0 {
                 let mut p = pending_jobs.lock().unwrap();
                 if let Some((a, t)) = p.pop() {
                     let genome = &request.genomes[a];
@@ -3013,7 +3109,9 @@ fn run_generation_stream(
         done.store(true, Ordering::Relaxed);
 
         if let Some(err) = first_error {
-            let _ = tx.blocking_send(GenerationStreamEvent::Error { message: err.clone() });
+            let _ = tx.blocking_send(GenerationStreamEvent::Error {
+                message: err.clone(),
+            });
             return Err(err);
         }
 
@@ -3249,8 +3347,12 @@ fn checkpoint_dir() -> PathBuf {
 
 fn ensure_checkpoint_dir() -> Result<PathBuf, String> {
     let dir = checkpoint_dir();
-    fs::create_dir_all(&dir)
-        .map_err(|err| format!("failed creating checkpoint directory '{}': {err}", dir.display()))?;
+    fs::create_dir_all(&dir).map_err(|err| {
+        format!(
+            "failed creating checkpoint directory '{}': {err}",
+            dir.display()
+        )
+    })?;
     Ok(dir)
 }
 
@@ -3270,7 +3372,10 @@ fn checkpoint_file_from_id(id: &str) -> PathBuf {
     checkpoint_dir().join(format!("{id}.json"))
 }
 
-fn write_checkpoint_file(path: &FsPath, checkpoint: &EvolutionCheckpointFile) -> Result<(), String> {
+fn write_checkpoint_file(
+    path: &FsPath,
+    checkpoint: &EvolutionCheckpointFile,
+) -> Result<(), String> {
     let payload = serde_json::to_vec_pretty(checkpoint)
         .map_err(|err| format!("failed serializing checkpoint: {err}"))?;
     fs::write(path, payload)
@@ -3365,7 +3470,9 @@ fn list_checkpoint_summaries() -> Result<Vec<CheckpointSummary>, String> {
     Ok(summaries)
 }
 
-fn load_checkpoint_snapshot(id: Option<&str>) -> Result<(String, EvolutionRuntimeSnapshot), String> {
+fn load_checkpoint_snapshot(
+    id: Option<&str>,
+) -> Result<(String, EvolutionRuntimeSnapshot), String> {
     let dir = ensure_checkpoint_dir()?;
     let path = match id {
         Some(requested_id) => checkpoint_file_from_id(requested_id),
@@ -3405,7 +3512,8 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             0.0
         };
 
-        neighbor_distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        neighbor_distances
+            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         let competition_k = neighbor_distances.len().min(6);
         if competition_k == 0 {
             results[i].local_competition = 1.0;
@@ -3419,15 +3527,24 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
         }
     }
 
-    normalize_candidate_field(results, |candidate| candidate.fitness, |candidate, value| {
-        candidate.quality_norm = value;
-    });
-    normalize_candidate_field(results, |candidate| candidate.novelty, |candidate, value| {
-        candidate.novelty_norm = value;
-    });
+    normalize_candidate_field(
+        results,
+        |candidate| candidate.fitness,
+        |candidate, value| {
+            candidate.quality_norm = value;
+        },
+    );
+    normalize_candidate_field(
+        results,
+        |candidate| candidate.novelty,
+        |candidate, value| {
+            candidate.novelty_norm = value;
+        },
+    );
     for result in results.iter_mut() {
-        result.selection_score =
-            0.62 * result.quality_norm + 0.28 * result.novelty_norm + 0.1 * result.local_competition;
+        result.selection_score = 0.62 * result.quality_norm
+            + 0.28 * result.novelty_norm
+            + 0.1 * result.local_competition;
     }
 }
 
@@ -3514,7 +3631,10 @@ fn tournament_select<'a>(
     size: usize,
     rng: &mut SmallRng,
 ) -> &'a EvolutionCandidate {
-    assert!(!ranked.is_empty(), "tournament_select requires non-empty input");
+    assert!(
+        !ranked.is_empty(),
+        "tournament_select requires non-empty input"
+    );
     let len = ranked.len();
     let mut best = &ranked[rng.random_range(0..len)];
     for _ in 1..size.max(1) {
@@ -3550,9 +3670,21 @@ fn hash_uint32(a: u32, b: u32, c: u32) -> u32 {
 
 fn random_genome(rng: &mut SmallRng) -> Genome {
     let torso = TorsoGene {
-        w: clamp(rng_range(rng, 0.5, 2.75) * rng_range(rng, 0.86, 1.18), 0.5, 3.0),
-        h: clamp(rng_range(rng, 0.5, 2.75) * rng_range(rng, 0.72, 1.15), 0.5, 3.0),
-        d: clamp(rng_range(rng, 0.5, 2.75) * rng_range(rng, 0.86, 1.18), 0.5, 3.0),
+        w: clamp(
+            rng_range(rng, 0.5, 2.75) * rng_range(rng, 0.86, 1.18),
+            0.5,
+            3.0,
+        ),
+        h: clamp(
+            rng_range(rng, 0.5, 2.75) * rng_range(rng, 0.72, 1.15),
+            0.5,
+            3.0,
+        ),
+        d: clamp(
+            rng_range(rng, 0.5, 2.75) * rng_range(rng, 0.86, 1.18),
+            0.5,
+            3.0,
+        ),
         mass: rng_range(rng, 0.26, 1.7),
     };
 
@@ -3565,11 +3697,7 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
                     let hierarchy_scale = rng_range(rng, 0.86, 1.16).powf(seg_index as f32);
                     SegmentGene {
                         length: clamp(rng_range(rng, 0.5, 2.25) * hierarchy_scale, 0.45, 2.5),
-                        thickness: clamp(
-                            rng_range(rng, 0.16, 0.95) * hierarchy_scale,
-                            0.14,
-                            1.05,
-                        ),
+                        thickness: clamp(rng_range(rng, 0.16, 0.95) * hierarchy_scale, 0.14, 1.05),
                         mass: clamp(rng_range(rng, 0.24, 1.75) * hierarchy_scale, 0.14, 2.0),
                         motor_strength: rng_range(rng, 0.5, 5.0),
                         joint_stiffness: rng_range(rng, 15.0, 120.0),
@@ -3630,7 +3758,11 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             continue;
         };
         let blend = rng_range(rng, 0.2, 0.8);
-        limb.enabled = if rng.random::<f32>() < 0.5 { la.enabled } else { lb.enabled };
+        limb.enabled = if rng.random::<f32>() < 0.5 {
+            la.enabled
+        } else {
+            lb.enabled
+        };
         limb.segment_count = if rng.random::<f32>() < 0.5 {
             la.segment_count
         } else {
@@ -3670,7 +3802,11 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             cg.bias = lerp(ca.bias, cb.bias, ctrl_blend);
         }
     }
-    child.hue = if rng.random::<f32>() < 0.5 { a.hue } else { b.hue };
+    child.hue = if rng.random::<f32>() < 0.5 {
+        a.hue
+    } else {
+        b.hue
+    };
     child.mass_scale = lerp(a.mass_scale, b.mass_scale, rng.random::<f32>());
     ensure_active_body_plan(&mut child, rng);
     child
@@ -3690,9 +3826,13 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
             limb.enabled = !limb.enabled;
         }
         if rng.random::<f32>() < chance * 0.65 {
-            let delta = if rng.random::<f32>() < 0.5 { -1i32 } else { 1i32 };
-            limb.segment_count = (limb.segment_count as i32 + delta)
-                .clamp(1, MAX_SEGMENTS_PER_LIMB as i32) as u32;
+            let delta = if rng.random::<f32>() < 0.5 {
+                -1i32
+            } else {
+                1i32
+            };
+            limb.segment_count =
+                (limb.segment_count as i32 + delta).clamp(1, MAX_SEGMENTS_PER_LIMB as i32) as u32;
         }
 
         limb.anchor_x = mutate_number(
@@ -3729,13 +3869,22 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
             segment.length = mutate_number(segment.length, 0.4, 2.6, chance, 0.21, rng);
             segment.thickness = mutate_number(segment.thickness, 0.12, 1.1, chance, 0.24, rng);
             segment.mass = mutate_number(segment.mass, 0.1, 2.25, chance, 0.24, rng);
-            segment.motor_strength = mutate_number(segment.motor_strength, 0.5, 5.0, chance, 0.2, rng);
-            segment.joint_stiffness = mutate_number(segment.joint_stiffness, 15.0, 120.0, chance, 0.2, rng);
+            segment.motor_strength =
+                mutate_number(segment.motor_strength, 0.5, 5.0, chance, 0.2, rng);
+            segment.joint_stiffness =
+                mutate_number(segment.joint_stiffness, 15.0, 120.0, chance, 0.2, rng);
         }
         for control in &mut limb.controls {
             control.amp = mutate_number(control.amp, 0.35, 11.6, chance, 0.18, rng);
             control.freq = mutate_number(control.freq, 0.3, 4.9, chance, 0.14, rng);
-            control.phase = wrap_phase(mutate_number(control.phase, 0.0, PI * 2.0, chance, 0.28, rng));
+            control.phase = wrap_phase(mutate_number(
+                control.phase,
+                0.0,
+                PI * 2.0,
+                chance,
+                0.28,
+                rng,
+            ));
             control.bias = mutate_number(control.bias, -2.35, 2.35, chance, 0.16, rng);
         }
     }
@@ -3864,17 +4013,34 @@ fn service_unavailable_err(message: String) -> (StatusCode, String) {
     (StatusCode::SERVICE_UNAVAILABLE, message)
 }
 
-fn resolve_sim_worker_limit() -> usize {
+fn resolve_configured_sim_worker_limit() -> Option<usize> {
     const ENV_VAR: &str = "SIM_MAX_CONCURRENT_JOBS";
     if let Ok(raw_value) = std::env::var(ENV_VAR) {
         match raw_value.parse::<usize>() {
-            Ok(parsed) if parsed > 0 => return parsed,
+            Ok(parsed) if parsed > 0 => return Some(parsed),
             _ => warn!("{ENV_VAR} must be a positive integer; got '{raw_value}'"),
         }
+    }
+    None
+}
+
+fn resolve_sim_worker_limit() -> usize {
+    if let Some(limit) = resolve_configured_sim_worker_limit() {
+        return limit;
     }
 
     std::thread::available_parallelism()
         .map(|parallelism| parallelism.get().saturating_sub(1).max(1))
+        .unwrap_or(1)
+}
+
+fn resolve_satellite_worker_limit() -> usize {
+    if let Some(limit) = resolve_configured_sim_worker_limit() {
+        return limit;
+    }
+
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get().max(1))
         .unwrap_or(1)
 }
 
@@ -3948,8 +4114,13 @@ async fn bind_listener(
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SatelliteMessage {
-    Welcome { id: String },
-    Ready,
+    Welcome {
+        id: String,
+    },
+    Ready {
+        #[serde(default = "default_satellite_ready_slots")]
+        slots: usize,
+    },
     RunTrial {
         trial_id: u64,
         genome: Genome,
@@ -3972,15 +4143,15 @@ enum SatelliteMessage {
     Pong,
 }
 
-#[derive(Debug)]
-enum SatelliteState {
-    Idle,
-    Working { trial_id: u64, assigned_at: Instant },
+fn default_satellite_ready_slots() -> usize {
+    1
 }
 
 struct SatelliteConnection {
     tx: mpsc::UnboundedSender<SatelliteMessage>,
-    state: SatelliteState,
+    available_slots: usize,
+    capacity_slots: usize,
+    in_flight: HashMap<u64, Instant>,
 }
 
 struct SatellitePool {
@@ -4039,10 +4210,15 @@ impl SatellitePool {
 
     fn register(&self, id: String, tx: mpsc::UnboundedSender<SatelliteMessage>) {
         let mut inner = self.inner.lock().unwrap();
-        inner.connections.insert(id, SatelliteConnection {
-            tx,
-            state: SatelliteState::Idle,
-        });
+        inner.connections.insert(
+            id,
+            SatelliteConnection {
+                tx,
+                available_slots: 0,
+                capacity_slots: 0,
+                in_flight: HashMap::new(),
+            },
+        );
     }
 
     fn unregister(&self, id: &str) {
@@ -4054,17 +4230,12 @@ impl SatellitePool {
         self.next_trial_id.fetch_add(1, Ordering::Relaxed) as u64
     }
 
-    /// Try to dispatch a trial to an idle satellite. Returns the trial_id if dispatched.
-    fn try_dispatch(
-        &self,
-        genome: &Genome,
-        seed: u64,
-        config: &TrialConfig,
-    ) -> Option<u64> {
+    /// Try to dispatch a trial to a satellite with available slots. Returns trial_id if dispatched.
+    fn try_dispatch(&self, genome: &Genome, seed: u64, config: &TrialConfig) -> Option<u64> {
         let trial_id = self.next_trial_id();
         let mut inner = self.inner.lock().unwrap();
         for conn in inner.connections.values_mut() {
-            if matches!(conn.state, SatelliteState::Idle) {
+            if conn.available_slots > 0 {
                 let msg = SatelliteMessage::RunTrial {
                     trial_id,
                     genome: genome.clone(),
@@ -4074,10 +4245,8 @@ impl SatellitePool {
                     motor_power_scale: config.motor_power_scale,
                 };
                 if conn.tx.send(msg).is_ok() {
-                    conn.state = SatelliteState::Working {
-                        trial_id,
-                        assigned_at: Instant::now(),
-                    };
+                    conn.available_slots -= 1;
+                    conn.in_flight.insert(trial_id, Instant::now());
                     return Some(trial_id);
                 }
             }
@@ -4085,18 +4254,28 @@ impl SatellitePool {
         None
     }
 
-    fn mark_idle(&self, satellite_id: &str) {
+    fn mark_ready(&self, satellite_id: &str, slots: usize) {
+        if slots == 0 {
+            return;
+        }
         let mut inner = self.inner.lock().unwrap();
         if let Some(conn) = inner.connections.get_mut(satellite_id) {
-            conn.state = SatelliteState::Idle;
+            conn.available_slots = conn.available_slots.saturating_add(slots);
+            let observed_capacity = conn.available_slots.saturating_add(conn.in_flight.len());
+            conn.capacity_slots = conn.capacity_slots.max(observed_capacity);
         }
     }
 
-    fn idle_count(&self) -> usize {
+    fn mark_trial_complete(&self, satellite_id: &str, trial_id: u64) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(conn) = inner.connections.get_mut(satellite_id) {
+            conn.in_flight.remove(&trial_id);
+        }
+    }
+
+    fn available_slot_count(&self) -> usize {
         let inner = self.inner.lock().unwrap();
-        inner.connections.values()
-            .filter(|c| matches!(c.state, SatelliteState::Idle))
-            .count()
+        inner.connections.values().map(|c| c.available_slots).sum()
     }
 
     fn reap_timeouts(&self) -> Vec<u64> {
@@ -4104,12 +4283,26 @@ impl SatellitePool {
         let now = Instant::now();
         let mut dead = Vec::new();
         for conn in inner.connections.values_mut() {
-            if let SatelliteState::Working { trial_id, assigned_at } = &conn.state {
-                if now.duration_since(*assigned_at) > SATELLITE_TRIAL_TIMEOUT {
-                    dead.push(*trial_id);
-                    conn.state = SatelliteState::Idle;
-                }
+            let timed_out_ids: Vec<u64> = conn
+                .in_flight
+                .iter()
+                .filter_map(|(trial_id, assigned_at)| {
+                    (now.duration_since(*assigned_at) > SATELLITE_TRIAL_TIMEOUT)
+                        .then_some(*trial_id)
+                })
+                .collect();
+            if timed_out_ids.is_empty() {
+                continue;
             }
+            for trial_id in &timed_out_ids {
+                conn.in_flight.remove(trial_id);
+            }
+            conn.available_slots = conn.available_slots.saturating_add(timed_out_ids.len());
+            if conn.capacity_slots > 0 {
+                let max_available = conn.capacity_slots.saturating_sub(conn.in_flight.len());
+                conn.available_slots = conn.available_slots.min(max_available);
+            }
+            dead.extend(timed_out_ids);
         }
         dead
     }
@@ -4117,10 +4310,7 @@ impl SatellitePool {
 
 // ─── Satellite WebSocket Server Handler (Primary Side) ──────────────────
 
-async fn ws_satellite_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> Response {
+async fn ws_satellite_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| handle_satellite_socket(socket, state))
 }
 
@@ -4130,7 +4320,9 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<SatelliteMessage>();
 
     // Send welcome
-    let welcome = SatelliteMessage::Welcome { id: satellite_id.clone() };
+    let welcome = SatelliteMessage::Welcome {
+        id: satellite_id.clone(),
+    };
     if let Ok(json) = serde_json::to_string(&welcome) {
         let _ = ws_tx.send(Message::Text(json.into())).await;
     }
@@ -4139,7 +4331,11 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
     state
         .evolution
         .set_connected_satellites(state.satellite_pool.connected_ids());
-    info!("satellite connected: id={}, total={}", satellite_id, state.satellite_pool.connected_count());
+    info!(
+        "satellite connected: id={}, total={}",
+        satellite_id,
+        state.satellite_pool.connected_count()
+    );
 
     // Spawn a task to forward outgoing messages to the WebSocket
     let sat_id_clone = satellite_id.clone();
@@ -4164,21 +4360,28 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
                 Message::Text(text) => {
                     if let Ok(sat_msg) = serde_json::from_str::<SatelliteMessage>(&text) {
                         match sat_msg {
-                            SatelliteMessage::Ready => {
-                                // Ready can race with assignment and falsely flip a busy satellite
-                                // to idle. TrialResult / TrialError already carry definitive state.
+                            SatelliteMessage::Ready { slots } => {
+                                pool.mark_ready(&sat_id_for_rx, slots.max(1));
                             }
-                            SatelliteMessage::TrialResult { trial_id, fitness, metrics, descriptor } => {
+                            SatelliteMessage::TrialResult {
+                                trial_id,
+                                fitness,
+                                metrics,
+                                descriptor,
+                            } => {
                                 info!(
                                     "satellite {} trial {} complete: fitness={:.3}",
                                     sat_id_for_rx, trial_id, fitness
                                 );
-                                pool.mark_idle(&sat_id_for_rx);
-                                pool.push_result(trial_id, TrialResult {
-                                    fitness,
-                                    metrics,
-                                    descriptor,
-                                });
+                                pool.mark_trial_complete(&sat_id_for_rx, trial_id);
+                                pool.push_result(
+                                    trial_id,
+                                    TrialResult {
+                                        fitness,
+                                        metrics,
+                                        descriptor,
+                                    },
+                                );
                             }
                             SatelliteMessage::TrialError { trial_id, message } => {
                                 warn!(
@@ -4186,7 +4389,7 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
                                     sat_id_for_rx, trial_id, message
                                 );
                                 pool.push_failure(trial_id, message);
-                                pool.mark_idle(&sat_id_for_rx);
+                                pool.mark_trial_complete(&sat_id_for_rx, trial_id);
                             }
                             SatelliteMessage::Pong => {}
                             _ => {}
@@ -4210,7 +4413,11 @@ async fn handle_satellite_socket(socket: WebSocket, state: AppState) {
     state
         .evolution
         .set_connected_satellites(state.satellite_pool.connected_ids());
-    info!("satellite disconnected: id={}, total={}", satellite_id, state.satellite_pool.connected_count());
+    info!(
+        "satellite disconnected: id={}, total={}",
+        satellite_id,
+        state.satellite_pool.connected_count()
+    );
 }
 
 // ─── Satellite Client Mode ──────────────────────────────────────────────
@@ -4227,7 +4434,7 @@ fn parse_satellite_arg(args: &[String]) -> Option<String> {
 }
 
 async fn run_satellite_client(primary_url: String) {
-    let worker_limit = resolve_sim_worker_limit();
+    let worker_limit = resolve_satellite_worker_limit();
     info!(
         "starting satellite mode: primary={}, worker_slots={}",
         primary_url, worker_limit
@@ -4246,10 +4453,16 @@ async fn run_satellite_client(primary_url: String) {
             Ok((ws_stream, _response)) => {
                 info!("connected to primary");
                 run_satellite_session(ws_stream, worker_limit).await;
-                warn!("disconnected from primary, reconnecting in {:?}", SATELLITE_RECONNECT_DELAY);
+                warn!(
+                    "disconnected from primary, reconnecting in {:?}",
+                    SATELLITE_RECONNECT_DELAY
+                );
             }
             Err(err) => {
-                warn!("failed to connect to primary: {}, retrying in {:?}", err, SATELLITE_RECONNECT_DELAY);
+                warn!(
+                    "failed to connect to primary: {}, retrying in {:?}",
+                    err, SATELLITE_RECONNECT_DELAY
+                );
             }
         }
         tokio::time::sleep(SATELLITE_RECONNECT_DELAY).await;
@@ -4257,7 +4470,9 @@ async fn run_satellite_client(primary_url: String) {
 }
 
 async fn run_satellite_session(
-    ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    ws_stream: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
     worker_limit: usize,
 ) {
     use tokio_tungstenite::tungstenite::Message as TMessage;
@@ -4267,8 +4482,11 @@ async fn run_satellite_session(
     let active_jobs = Arc::new(AtomicUsize::new(0));
     let satellite_id = Arc::new(Mutex::new(String::new()));
 
-    // Send initial ready signal
-    let ready = serde_json::to_string(&SatelliteMessage::Ready).unwrap();
+    // Advertise total available slots to primary.
+    let ready = serde_json::to_string(&SatelliteMessage::Ready {
+        slots: worker_limit.max(1),
+    })
+    .unwrap();
     if ws_tx.send(TMessage::Text(ready.into())).await.is_err() {
         return;
     }
@@ -4344,9 +4562,12 @@ async fn run_satellite_session(
                         break;
                     }
                 }
-                // Send ready after completing a trial
-                if matches!(result_msg, SatelliteMessage::TrialResult { .. }) {
-                    let ready = serde_json::to_string(&SatelliteMessage::Ready).unwrap();
+                // Return one slot after each completed or failed trial.
+                if matches!(
+                    &result_msg,
+                    SatelliteMessage::TrialResult { .. } | SatelliteMessage::TrialError { .. }
+                ) {
+                    let ready = serde_json::to_string(&SatelliteMessage::Ready { slots: 1 }).unwrap();
                     if ws_tx.send(TMessage::Text(ready.into())).await.is_err() {
                         break;
                     }
@@ -4378,7 +4599,9 @@ fn run_satellite_trial(
             let elapsed = start.elapsed();
             info!(
                 "satellite trial {} complete: fitness={:.3}, elapsed={:.2}s",
-                trial_id, result.fitness, elapsed.as_secs_f32()
+                trial_id,
+                result.fitness,
+                elapsed.as_secs_f32()
             );
             SatelliteMessage::TrialResult {
                 trial_id,

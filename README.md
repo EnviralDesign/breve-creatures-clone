@@ -38,7 +38,9 @@ cargo run --release
 ## Runtime Config
 
 - `SIM_PORT`: override bind port (default `8787`)
-- `SIM_MAX_CONCURRENT_JOBS`: cap simulation worker concurrency (default `available_cores - 1`, minimum `1`)
+- `SIM_MAX_CONCURRENT_JOBS`: cap simulation worker concurrency.
+  - Primary default: `available_cores - 1` (minimum `1`)
+  - Satellite default: `available_cores`
 
 ## Persistence
 
