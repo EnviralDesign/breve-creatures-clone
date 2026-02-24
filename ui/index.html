@@ -281,8 +281,8 @@
       </div>
       <label class="ctrl">
         Batch size
-        <input id="populationSlider" type="range" min="1" max="128" step="1" value="80">
-        <span id="populationSliderValue">80</span>
+        <input id="populationSlider" type="range" min="1" max="384" step="1" value="160">
+        <span id="populationSliderValue">160</span>
       </label>
       <label class="ctrl">
         Speed
@@ -355,15 +355,15 @@
     import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
     import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js";
 
-    const DEFAULT_POPULATION_SIZE = 40;
+    const DEFAULT_POPULATION_SIZE = 160;
     const MIN_POPULATION_SIZE = 1;
-    const MAX_POPULATION_SIZE = 128;
+    const MAX_POPULATION_SIZE = 384;
     const ELITE_COUNT = 2;
     const MAX_LIMBS = 6;
     const MAX_SEGMENTS_PER_LIMB = 5;
-    const GENERATION_SECONDS = 18;
-    const DEFAULT_TRIALS_PER_CANDIDATE = 5;
-    const MAX_TRIALS_PER_CANDIDATE = 16;
+    const GENERATION_SECONDS = 16;
+    const DEFAULT_TRIALS_PER_CANDIDATE = 3;
+    const MAX_TRIALS_PER_CANDIDATE = 3;
     const FIXED_TIME_STEP = 1 / 120;
     const MAX_FRAME_DELTA = 0.05;
     const MAX_PHYSICS_STEPS_PER_FRAME = 20;
@@ -373,7 +373,6 @@
     const BASE_BACKEND_SNAPSHOT_HZ = 30;
     const FAST_BACKEND_SNAPSHOT_HZ = 12;
     const BACKEND_FAST_FORWARD_DT = FIXED_TIME_STEP;
-    const FAST_FORWARD_DURATION_SECONDS = GENERATION_SECONDS;
     const FAST_FORWARD_REQUEST_TIMEOUT_MS = 180000;
     const MASS_DENSITY_MULTIPLIER = 1.4;
     const MAX_MOTOR_SPEED = 6.8;
@@ -519,18 +518,27 @@
     const toggleHudBtn = document.getElementById("toggleHudBtn");
     const toggleGenomeBtn = document.getElementById("toggleGenomeBtn");
     const hud = document.getElementById("hud");
+    let minPopulationSize = MIN_POPULATION_SIZE;
+    let maxPopulationSize = MAX_POPULATION_SIZE;
+    let defaultPopulationSize = DEFAULT_POPULATION_SIZE;
+    let defaultTrialCount = DEFAULT_TRIALS_PER_CANDIDATE;
+    let maxTrialCount = MAX_TRIALS_PER_CANDIDATE;
+    let generationSeconds = GENERATION_SECONDS;
+    let minRunSpeed = 0.5;
+    let maxRunSpeed = MAX_SIM_SPEED;
+    let fastForwardDurationSeconds = GENERATION_SECONDS;
 
-    populationSlider.min = String(MIN_POPULATION_SIZE);
-    populationSlider.max = String(MAX_POPULATION_SIZE);
-    populationSlider.value = String(DEFAULT_POPULATION_SIZE);
-    populationSliderValue.textContent = String(DEFAULT_POPULATION_SIZE);
+    populationSlider.min = String(minPopulationSize);
+    populationSlider.max = String(maxPopulationSize);
+    populationSlider.value = String(defaultPopulationSize);
+    populationSliderValue.textContent = String(defaultPopulationSize);
     speedSelect.value = "1";
     genomeVizModeSelect.value = "current";
-    populationLabel.textContent = String(DEFAULT_POPULATION_SIZE);
+    populationLabel.textContent = String(defaultPopulationSize);
     queuedPopLabel.textContent = "none";
     fastSkipStatusLabel.textContent = "off";
     satellitesLabel.textContent = "none";
-    trialInfoLabel.textContent = `1/${DEFAULT_TRIALS_PER_CANDIDATE}`;
+    trialInfoLabel.textContent = `1/${defaultTrialCount}`;
 
     let population = [];
     let batchGenomes = [];
@@ -539,10 +547,10 @@
     let trialSeeds = [];
     let currentAttemptIndex = 0;
     let currentTrialIndex = 0;
-    let populationSize = DEFAULT_POPULATION_SIZE;
-    let pendingPopulationSize = DEFAULT_POPULATION_SIZE;
+    let populationSize = defaultPopulationSize;
+    let pendingPopulationSize = defaultPopulationSize;
     let generation = 1;
-    let trialsPerCandidate = DEFAULT_TRIALS_PER_CANDIDATE;
+    let trialsPerCandidate = defaultTrialCount;
     let generationClock = 0;
     let simClock = 0;
     let bestEverScore = 0;
@@ -590,12 +598,12 @@
       populationSliderValue.textContent = populationSlider.value;
     });
     populationSlider.addEventListener("change", () => {
-      pendingPopulationSize = clamp(parseInt(populationSlider.value, 10), MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
+      pendingPopulationSize = clamp(parseInt(populationSlider.value, 10), minPopulationSize, maxPopulationSize);
       populationSliderValue.textContent = String(pendingPopulationSize);
       void sendEvolutionControl({ action: "set_population_size", populationSize: pendingPopulationSize });
     });
     speedSelect.addEventListener("change", () => {
-      simSpeed = clamp(parseFloat(speedSelect.value), 0.5, MAX_SIM_SPEED);
+      simSpeed = clamp(parseFloat(speedSelect.value), minRunSpeed, maxRunSpeed);
       void sendEvolutionControl({
         action: "set_run_speed",
         runSpeed: simSpeed,
@@ -708,7 +716,7 @@
         creature.measureFitness(dt);
       }
 
-      if (generationClock >= GENERATION_SECONDS) {
+      if (generationClock >= generationSeconds) {
         evolvePopulation();
       }
     }
@@ -1049,6 +1057,54 @@
     }
 
     function applyEvolutionStatus(status) {
+      const minPopulationRaw = status.minPopulationSize ?? status.min_population_size;
+      const maxPopulationRaw = status.maxPopulationSize ?? status.max_population_size;
+      const defaultPopulationRaw = status.defaultPopulationSize ?? status.default_population_size;
+      const defaultTrialRaw = status.defaultTrialCount ?? status.default_trial_count;
+      const maxTrialRaw = status.maxTrialCount ?? status.max_trial_count;
+      const defaultDurationRaw = status.defaultGenerationSeconds ?? status.default_generation_seconds;
+      const minRunRaw = status.minRunSpeed ?? status.min_run_speed;
+      const maxRunRaw = status.maxRunSpeed ?? status.max_run_speed;
+
+      if (Number.isFinite(minPopulationRaw)) {
+        minPopulationSize = Math.max(1, minPopulationRaw | 0);
+      }
+      if (Number.isFinite(maxPopulationRaw)) {
+        maxPopulationSize = Math.max(1, maxPopulationRaw | 0);
+      }
+      if (maxPopulationSize < minPopulationSize) {
+        maxPopulationSize = minPopulationSize;
+      }
+      if (Number.isFinite(defaultPopulationRaw)) {
+        defaultPopulationSize = clamp(defaultPopulationRaw | 0, minPopulationSize, maxPopulationSize);
+      } else {
+        defaultPopulationSize = clamp(defaultPopulationSize, minPopulationSize, maxPopulationSize);
+      }
+      if (Number.isFinite(maxTrialRaw)) {
+        maxTrialCount = Math.max(1, maxTrialRaw | 0);
+      }
+      if (Number.isFinite(defaultTrialRaw)) {
+        defaultTrialCount = clamp(defaultTrialRaw | 0, 1, maxTrialCount);
+      } else {
+        defaultTrialCount = clamp(defaultTrialCount, 1, maxTrialCount);
+      }
+      if (Number.isFinite(defaultDurationRaw) && defaultDurationRaw > 0) {
+        generationSeconds = Number(defaultDurationRaw);
+        fastForwardDurationSeconds = generationSeconds;
+      }
+      if (Number.isFinite(minRunRaw)) {
+        minRunSpeed = Math.max(0.1, Number(minRunRaw));
+      }
+      if (Number.isFinite(maxRunRaw)) {
+        maxRunSpeed = Math.max(minRunSpeed, Number(maxRunRaw));
+      }
+      if (simSpeed < minRunSpeed || simSpeed > maxRunSpeed) {
+        simSpeed = clamp(simSpeed, minRunSpeed, maxRunSpeed);
+        speedSelect.value = String(simSpeed);
+      }
+      populationSlider.min = String(minPopulationSize);
+      populationSlider.max = String(maxPopulationSize);
+
       const nextGeneration = Number.isFinite(status.generation) ? Math.max(1, status.generation | 0) : generation;
       if (nextGeneration < lastKnownGeneration) {
         fitnessHistory = [];
@@ -1057,11 +1113,11 @@
       }
       generation = nextGeneration;
       lastKnownGeneration = generation;
-      populationSize = clamp((status.populationSize ?? status.population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
-      pendingPopulationSize = clamp((status.pendingPopulationSize ?? status.pending_population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
+      populationSize = clamp((status.populationSize ?? status.population_size ?? populationSize) | 0, minPopulationSize, maxPopulationSize);
+      pendingPopulationSize = clamp((status.pendingPopulationSize ?? status.pending_population_size ?? populationSize) | 0, minPopulationSize, maxPopulationSize);
       const nextTrialCountRaw = status.trialCount ?? status.trial_count;
       if (Number.isFinite(nextTrialCountRaw)) {
-        trialsPerCandidate = clamp((nextTrialCountRaw | 0) || trialsPerCandidate, 1, MAX_TRIALS_PER_CANDIDATE);
+        trialsPerCandidate = clamp((nextTrialCountRaw | 0) || trialsPerCandidate, 1, maxTrialCount);
       }
       currentAttemptIndex = Math.max(0, (status.currentAttemptIndex ?? status.current_attempt_index ?? 0) | 0);
       currentTrialIndex = clamp(
@@ -1073,7 +1129,7 @@
       paused = Boolean(status.paused);
       const runSpeedRaw = status.runSpeed ?? status.run_speed;
       if (Number.isFinite(runSpeedRaw)) {
-        simSpeed = clamp(Number(runSpeedRaw), 0.5, MAX_SIM_SPEED);
+        simSpeed = clamp(Number(runSpeedRaw), minRunSpeed, maxRunSpeed);
         speedSelect.value = String(simSpeed);
       }
       const ffRemainingRaw = status.fastForwardRemaining ?? status.fast_forward_remaining;
@@ -1154,7 +1210,7 @@
       if (!attemptTrialMetrics[currentAttemptIndex]) {
         attemptTrialMetrics[currentAttemptIndex] = [];
       }
-      attemptTrialMetrics[currentAttemptIndex].push(creature.getTrialSummary(GENERATION_SECONDS));
+      attemptTrialMetrics[currentAttemptIndex].push(creature.getTrialSummary(generationSeconds));
 
       if (currentTrialIndex + 1 < trialsPerCandidate) {
         currentTrialIndex += 1;
@@ -1259,8 +1315,7 @@
 
     function disableBackendMode(reason) {
       if (!backendEnabled) return;
-      console.warn("Disabling Rust backend mode:", reason);
-      backendEnabled = false;
+      console.error("Backend unavailable:", reason);
       backendOfflineReason = reason || "backend unavailable";
       backendFastForwardBusy = false;
       fastForwardGenerationsRemaining = 0;
@@ -1324,7 +1379,7 @@
       const request = {
         genome: batchGenomes[attemptIndex],
         seed: trialSeed >>> 0,
-        durationSeconds: GENERATION_SECONDS,
+        durationSeconds: generationSeconds,
         dt: backendStepDtForSpeed(),
         snapshotHz: backendSnapshotHzForSpeed(),
         motorPowerScale: MOTOR_POWER_SCALE,
@@ -1377,7 +1432,7 @@
           } else {
             view.markTrialComplete({
               fitness: view.fitness,
-              metrics: view.getTrialSummary(GENERATION_SECONDS),
+              metrics: view.getTrialSummary(generationSeconds),
             });
           }
           trialCompleted = true;
@@ -1455,7 +1510,7 @@
       const requestPayload = {
         genomes,
         seeds,
-        durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : GENERATION_SECONDS,
+        durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : generationSeconds,
         dt: Number.isFinite(options.dt) ? options.dt : FIXED_TIME_STEP,
         motorPowerScale: MOTOR_POWER_SCALE,
       };
@@ -1491,7 +1546,7 @@
       const requestPayload = {
         genomes,
         seeds,
-        durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : GENERATION_SECONDS,
+        durationSeconds: Number.isFinite(options.durationSeconds) ? options.durationSeconds : generationSeconds,
         dt: Number.isFinite(options.dt) ? options.dt : FIXED_TIME_STEP,
         motorPowerScale: MOTOR_POWER_SCALE,
       };
@@ -1560,7 +1615,7 @@
           const type = msg?.type;
           if (type === "generation_started") {
             const nextTrialCount = msg.trialCount ?? msg.trial_count;
-            trialCount = clamp((nextTrialCount | 0) || trialCount, 1, MAX_TRIALS_PER_CANDIDATE);
+            trialCount = clamp((nextTrialCount | 0) || trialCount, 1, maxTrialCount);
             trialsPerCandidate = trialCount;
             if (options.onGenerationStarted) {
               options.onGenerationStarted({
@@ -1574,7 +1629,7 @@
             const attemptIndex = (msg.attemptIndex ?? msg.attempt_index ?? 0) | 0;
             const trialIndex = (msg.trialIndex ?? msg.trial_index ?? 0) | 0;
             const eventTrialCount = (msg.trialCount ?? msg.trial_count ?? trialCount) | 0;
-            trialCount = clamp(eventTrialCount || trialCount, 1, MAX_TRIALS_PER_CANDIDATE);
+            trialCount = clamp(eventTrialCount || trialCount, 1, maxTrialCount);
             trialsPerCandidate = trialCount;
             if (options.onAttemptTrialStarted) {
               options.onAttemptTrialStarted({
@@ -1657,7 +1712,7 @@
           let results;
           try {
             results = await evaluateGenerationBackendStream(batchGenomes, seeds, {
-              durationSeconds: FAST_FORWARD_DURATION_SECONDS,
+              durationSeconds: fastForwardDurationSeconds,
               dt: BACKEND_FAST_FORWARD_DT,
               signal: abortController.signal,
               token,
@@ -1751,7 +1806,7 @@
       simRateLabel.textContent = evolutionConnected
         ? `${effectiveSimSpeed.toFixed(2)}x (viewer)`
         : "0.00x (disconnected)";
-      timeLeftLabel.textContent = Math.max(0, GENERATION_SECONDS - generationClock).toFixed(1);
+      timeLeftLabel.textContent = Math.max(0, generationSeconds - generationClock).toFixed(1);
       const pendingText = pendingPopulationSize === populationSize ? "none" : `${pendingPopulationSize} (next gen)`;
       const injectionText = injectionQueueCount > 0 ? ` | inject ${injectionQueueCount}` : "";
       queuedPopLabel.textContent = `${pendingText}${injectionText}`;
@@ -2967,7 +3022,7 @@
         this.completionDispatched = true;
         return this.trialResult || {
           fitness: this.fitness,
-          metrics: this.getTrialSummary(GENERATION_SECONDS),
+          metrics: this.getTrialSummary(generationSeconds),
         };
       }
 

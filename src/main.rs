@@ -30,13 +30,22 @@ use tracing::{error, info, warn};
 
 const MAX_LIMBS: usize = 6;
 const MAX_SEGMENTS_PER_LIMB: usize = 5;
+const MAX_GRAPH_NODES: usize = 24;
+const MAX_GRAPH_EDGES_PER_NODE: usize = 4;
+const MAX_GRAPH_PARTS: usize = 72;
+const MIN_LOCAL_NEURONS: usize = 3;
+const MAX_LOCAL_NEURONS: usize = 12;
+const MIN_GLOBAL_NEURONS: usize = 4;
+const MAX_GLOBAL_NEURONS: usize = 14;
+const LOCAL_SENSOR_DIM: usize = 14;
+const GLOBAL_SENSOR_DIM: usize = 8;
+const BRAIN_SUBSTEPS_PER_PHYSICS_STEP: usize = 2;
 const FIXED_SIM_DT: f32 = 1.0 / 120.0;
 const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
 const MAX_MOTOR_SPEED: f32 = 6.8;
 const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
-const MOTOR_TORQUE_KNEE: f32 = 68.0;
 const BALL_AXIS_TORQUE_SCALE_Y: f32 = 0.7;
 const BALL_AXIS_TORQUE_SCALE_Z: f32 = 0.7;
 const BALL_AXIS_STIFFNESS_SCALE_Y: f32 = 0.75;
@@ -46,25 +55,8 @@ const JOINT_MOTOR_FORCE_MULTIPLIER: f32 = 1.0;
 const AXIS_TILT_GAIN: f32 = 1.9;
 const FALLEN_HEIGHT_THRESHOLD: f32 = 0.35;
 const MAX_PLAUSIBLE_STEP_DISPLACEMENT: f32 = 1.5;
-const FITNESS_UPRIGHT_BONUS: f32 = 0.95;
-const FITNESS_STRAIGHTNESS_BONUS: f32 = 1.5;
-const FITNESS_HEIGHT_BONUS: f32 = 0.6;
-const FITNESS_ENERGY_PENALTY: f32 = 0.8;
-const FITNESS_INSTABILITY_PENALTY: f32 = 1.25;
-const FITNESS_NET_PROGRESS_WEIGHT: f32 = 0.95;
-const FALLEN_PENALTY_STRENGTH: f32 = 0.6;
-const UPRIGHT_FULL_SCORE_THRESHOLD: f32 = 0.5;
-const UPRIGHT_PENALTY_FLOOR: f32 = 0.4;
-const FITNESS_PROGRESS_STRAIGHTNESS_GATE_EXPONENT: f32 = 2.0;
-const FITNESS_PROGRESS_FALLEN_GATE_EXPONENT: f32 = 1.3;
 const FITNESS_PROGRESS_MIDPOINT_FRACTION: f32 = 0.5;
 const FITNESS_PROGRESS_LATE_FRACTION: f32 = 0.85;
-const FITNESS_SUSTAIN_BASE: f32 = 0.12;
-const FITNESS_SUSTAIN_MID_GAIN_WEIGHT: f32 = 0.58;
-const FITNESS_SUSTAIN_LATE_GAIN_WEIGHT: f32 = 0.30;
-const FITNESS_THRASH_ENERGY_RATIO_PENALTY: f32 = 0.55;
-const FITNESS_THRASH_INSTABILITY_RATIO_PENALTY: f32 = 0.65;
-const FITNESS_THRASH_PROGRESS_EPS: f32 = 0.45;
 const SETTLE_SECONDS: f32 = 2.25;
 const GROUND_COLLISION_GROUP: Group = Group::GROUP_1;
 const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
@@ -75,14 +67,15 @@ const SATELLITE_TRIAL_TIMEOUT: Duration = Duration::from_secs(10);
 const SATELLITE_RECONNECT_DELAY: Duration = Duration::from_secs(3);
 const SATELLITE_DISPATCH_RETRY_LIMIT: usize = 8;
 const SATELLITE_CAPACITY_ERROR: &str = "satellite at capacity";
+const FAST_EVAL_TRIAL_WALLTIME_LIMIT: Duration = Duration::from_secs(20);
 const MAX_FITNESS_HISTORY_POINTS: usize = 4096;
 const MAX_PERFORMANCE_HISTORY_POINTS: usize = 4096;
-const DEFAULT_POPULATION_SIZE: usize = 40;
+const DEFAULT_POPULATION_SIZE: usize = 160;
 const MIN_POPULATION_SIZE: usize = 1;
-const MAX_POPULATION_SIZE: usize = 128;
+const MAX_POPULATION_SIZE: usize = 384;
 const ELITE_COUNT: usize = 2;
-const TRIALS_PER_CANDIDATE: usize = 5;
-const DEFAULT_GENERATION_SECONDS: f32 = 18.0;
+const TRIALS_PER_CANDIDATE: usize = 3;
+const DEFAULT_GENERATION_SECONDS: f32 = 16.0;
 const EVOLUTION_VIEW_FRAME_LIMIT: usize = 900;
 const CHECKPOINT_DIR: &str = "data/checkpoints";
 const AUTOSAVE_EVERY_GENERATIONS: usize = 5;
@@ -90,8 +83,8 @@ const DEFAULT_PERFORMANCE_WINDOW_GENERATIONS: usize = 120;
 const MAX_PERFORMANCE_WINDOW_GENERATIONS: usize = 400;
 const DEFAULT_PERFORMANCE_STRIDE: usize = 1;
 const MAX_PERFORMANCE_STRIDE: usize = 8;
-const MIN_BREEDING_MUTATION_RATE: f32 = 0.18;
-const MAX_BREEDING_MUTATION_RATE: f32 = 0.72;
+const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
+const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
 const MAX_GENERATION_TOPOLOGY_CANDIDATES: usize = 3;
 const SUMMARY_BEST_TOPOLOGY_COUNT: usize = 5;
@@ -108,9 +101,6 @@ const HOLDOUT_TRIAL_SEED_BANK_TAG: u32 = 0x7f4a_7c15;
 const HOLDOUT_TRIALS_PER_CANDIDATE: usize = 5;
 const TRIAL_DIVERGENCE_PENALTY_WEIGHT: f32 = 0.22;
 const TRIAL_DIVERGENCE_PENALTY_FLOOR: f32 = 0.68;
-const ANNEALING_TIME_CONSTANT_GENERATIONS: f32 = 140.0;
-const MUTATION_RATE_FINAL_FLOOR: f32 = 0.06;
-const MUTATION_RATE_FINAL_CEILING: f32 = 0.42;
 const ENV_EVOLUTION_MORPHOLOGY_MODE: &str = "EVOLUTION_MORPHOLOGY_MODE";
 const ENV_EVOLUTION_MORPHOLOGY_PRESET: &str = "EVOLUTION_MORPHOLOGY_PRESET";
 static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui");
@@ -151,6 +141,124 @@ enum JointTypeGene {
     Ball,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum NeuralActivationGene {
+    Tanh,
+    Sigmoid,
+    Sin,
+    Cos,
+    Identity,
+    Relu,
+    Softsign,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NeuralUnitGene {
+    #[serde(default = "default_neural_activation")]
+    activation: NeuralActivationGene,
+    #[serde(default)]
+    input_weights: Vec<f32>,
+    #[serde(default)]
+    recurrent_weights: Vec<f32>,
+    #[serde(default)]
+    global_weights: Vec<f32>,
+    #[serde(default)]
+    bias: f32,
+    #[serde(default = "default_neural_leak")]
+    leak: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JointEffectorGene {
+    #[serde(default)]
+    local_weights: Vec<f32>,
+    #[serde(default)]
+    global_weights: Vec<f32>,
+    #[serde(default)]
+    bias: f32,
+    #[serde(default = "default_effector_gain")]
+    gain: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBrainGene {
+    #[serde(default)]
+    neurons: Vec<NeuralUnitGene>,
+    #[serde(default = "default_joint_effector_gene")]
+    effector_x: JointEffectorGene,
+    #[serde(default = "default_joint_effector_gene")]
+    effector_y: JointEffectorGene,
+    #[serde(default = "default_joint_effector_gene")]
+    effector_z: JointEffectorGene,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalBrainGene {
+    #[serde(default)]
+    neurons: Vec<NeuralUnitGene>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphPartGene {
+    w: f32,
+    h: f32,
+    d: f32,
+    mass: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MorphEdgeGene {
+    to: usize,
+    anchor_x: f32,
+    anchor_y: f32,
+    anchor_z: f32,
+    axis_y: f32,
+    axis_z: f32,
+    dir_x: f32,
+    dir_y: f32,
+    dir_z: f32,
+    scale: f32,
+    reflect_x: bool,
+    recursive_limit: u32,
+    terminal_only: bool,
+    joint_type: JointTypeGene,
+    limit_x: f32,
+    limit_y: f32,
+    limit_z: f32,
+    motor_strength: f32,
+    joint_stiffness: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MorphNodeGene {
+    part: GraphPartGene,
+    #[serde(default)]
+    edges: Vec<MorphEdgeGene>,
+    #[serde(default = "default_local_brain_gene")]
+    brain: LocalBrainGene,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphGene {
+    #[serde(default)]
+    root: usize,
+    #[serde(default)]
+    nodes: Vec<MorphNodeGene>,
+    #[serde(default = "default_global_brain_gene")]
+    global_brain: GlobalBrainGene,
+    #[serde(default = "default_graph_max_parts")]
+    max_parts: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ControlGene {
@@ -180,23 +288,6 @@ struct ControlGene {
     bias_z: f32,
 }
 
-impl ControlGene {
-    fn signal_x(&self, sim_time: f32) -> f32 {
-        let theta = self.freq * sim_time + self.phase;
-        self.bias
-            + self.amp * theta.sin()
-            + self.harm2_amp * (2.0 * theta + self.harm2_phase).sin()
-    }
-
-    fn signal_y(&self, sim_time: f32) -> f32 {
-        self.bias_y + self.amp_y * (self.freq_y * sim_time + self.phase_y).sin()
-    }
-
-    fn signal_z(&self, sim_time: f32) -> f32 {
-        self.bias_z + self.amp_z * (self.freq_z * sim_time + self.phase_z).sin()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LimbGene {
@@ -220,6 +311,10 @@ struct LimbGene {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Genome {
+    #[serde(default = "default_genome_version")]
+    version: u32,
+    #[serde(default = "default_graph_gene")]
+    graph: GraphGene,
     torso: TorsoGene,
     limbs: Vec<LimbGene>,
     hue: f32,
@@ -342,6 +437,7 @@ struct TrialConfig {
     dt: f32,
     snapshot_hz: f32,
     motor_power_scale: f32,
+    fixed_startup: bool,
 }
 
 impl TrialConfig {
@@ -351,6 +447,7 @@ impl TrialConfig {
             dt: FIXED_SIM_DT,
             snapshot_hz: request.snapshot_hz.unwrap_or(30.0).clamp(1.0, 120.0),
             motor_power_scale: request.motor_power_scale.unwrap_or(1.0).clamp(0.35, 1.5),
+            fixed_startup: false,
         }
     }
 
@@ -360,6 +457,7 @@ impl TrialConfig {
             dt: FIXED_SIM_DT,
             snapshot_hz: 30.0,
             motor_power_scale: request.motor_power_scale.unwrap_or(1.0).clamp(0.35, 1.5),
+            fixed_startup: false,
         }
     }
 }
@@ -367,12 +465,17 @@ impl TrialConfig {
 struct SimPart {
     body: RigidBodyHandle,
     size: [f32; 3],
+    node_index: usize,
+    parent_part: Option<usize>,
+    child_parts: Vec<usize>,
 }
 
 struct SimController {
     joint: ImpulseJointHandle,
     joint_type: JointTypeGene,
-    control: ControlGene,
+    parent_part_index: usize,
+    child_part_index: usize,
+    node_index: usize,
     torque_x: f32,
     stiffness_x: f32,
     limit_x: f32,
@@ -382,6 +485,25 @@ struct SimController {
     torque_z: f32,
     stiffness_z: f32,
     limit_z: f32,
+}
+
+#[derive(Clone, Debug)]
+struct LocalBrainRuntime {
+    outputs_prev: Vec<f32>,
+    outputs_next: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct GlobalBrainRuntime {
+    outputs_prev: Vec<f32>,
+    outputs_next: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct ExpandedGraphPart {
+    node_index: usize,
+    parent_index: Option<usize>,
+    incoming_edge: Option<MorphEdgeGene>,
 }
 
 struct TrialAccumulator {
@@ -406,19 +528,18 @@ struct TrialAccumulator {
 
 impl TrialAccumulator {
     fn new(spawn: Vector3<f32>, genome: &Genome) -> Self {
-        let mut active_limb_count = 0usize;
-        let mut segment_total = 0usize;
-        for limb in &genome.limbs {
-            if !limb.enabled {
-                continue;
-            }
-            active_limb_count += 1;
-            segment_total += limb.segment_count.clamp(1, MAX_SEGMENTS_PER_LIMB as u32) as usize;
-        }
+        let edge_total = genome
+            .graph
+            .nodes
+            .iter()
+            .map(|node| node.edges.len())
+            .sum::<usize>();
+        let active_limb_count = edge_total.clamp(1, MAX_GRAPH_PARTS);
         let mean_segment_count = if active_limb_count > 0 {
-            segment_total as f32 / active_limb_count as f32
+            (genome.graph.max_parts as f32 / active_limb_count as f32)
+                .clamp(1.0, MAX_SEGMENTS_PER_LIMB as f32 * 2.0)
         } else {
-            0.0
+            1.0
         };
 
         Self {
@@ -529,7 +650,6 @@ impl TrialAccumulator {
     fn compute_metrics(&self, duration: f32) -> TrialMetrics {
         let effective_duration = (duration - SETTLE_SECONDS).max(1e-6);
         let sample_time = (self.sampled_time - SETTLE_SECONDS).max(1e-6);
-        let peak_distance = self.best_distance;
         let upright_avg = self.upright_integral / sample_time;
         let avg_height = self.height_integral / sample_time;
         let instability_norm = clamp(
@@ -552,51 +672,8 @@ impl TrialAccumulator {
         } else {
             0.0
         };
-        let distance_at_mid = self.distance_at_mid_phase.unwrap_or(net_distance);
-        let distance_at_late = self.distance_at_late_phase.unwrap_or(net_distance);
-        let gain_after_mid_ratio = clamp(
-            (net_distance - distance_at_mid).max(0.0)
-                / net_distance.max(FITNESS_THRASH_PROGRESS_EPS),
-            0.0,
-            1.0,
-        );
-        let gain_after_late_ratio = clamp(
-            (net_distance - distance_at_late).max(0.0)
-                / net_distance.max(FITNESS_THRASH_PROGRESS_EPS),
-            0.0,
-            1.0,
-        );
-        let sustain_factor = clamp(
-            FITNESS_SUSTAIN_BASE
-                + gain_after_mid_ratio * FITNESS_SUSTAIN_MID_GAIN_WEIGHT
-                + gain_after_late_ratio * FITNESS_SUSTAIN_LATE_GAIN_WEIGHT,
-            0.0,
-            1.0,
-        );
-        let raw_progress = net_distance * FITNESS_NET_PROGRESS_WEIGHT
-            + peak_distance * (1.0 - FITNESS_NET_PROGRESS_WEIGHT);
-        let straight_gate =
-            clamp(straightness, 0.0, 1.0).powf(FITNESS_PROGRESS_STRAIGHTNESS_GATE_EXPONENT);
-        let fallen_gate = (1.0 - fallen_ratio).powf(FITNESS_PROGRESS_FALLEN_GATE_EXPONENT);
-        let progress = raw_progress * straight_gate * fallen_gate * sustain_factor;
-
-        let mut quality = progress;
-        quality += upright_avg * FITNESS_UPRIGHT_BONUS;
-        quality += straightness * FITNESS_STRAIGHTNESS_BONUS;
-        quality += clamp(avg_height / 3.0, 0.0, 1.0) * FITNESS_HEIGHT_BONUS;
-        quality -= energy_norm * FITNESS_ENERGY_PENALTY;
-        quality -= instability_norm * FITNESS_INSTABILITY_PENALTY;
-        let progress_for_ratio = progress.max(FITNESS_THRASH_PROGRESS_EPS);
-        let energy_per_progress = energy_norm / progress_for_ratio;
-        let instability_per_progress = instability_norm / progress_for_ratio;
-        quality -= energy_per_progress * FITNESS_THRASH_ENERGY_RATIO_PENALTY;
-        quality -= instability_per_progress * FITNESS_THRASH_INSTABILITY_RATIO_PENALTY;
-        quality *= 1.0 - fallen_ratio.powf(1.5) * FALLEN_PENALTY_STRENGTH;
-        if upright_avg < UPRIGHT_FULL_SCORE_THRESHOLD {
-            let upright_factor = clamp(upright_avg / UPRIGHT_FULL_SCORE_THRESHOLD, 0.0, 1.0);
-            quality *= UPRIGHT_PENALTY_FLOOR + (1.0 - UPRIGHT_PENALTY_FLOOR) * upright_factor;
-        }
-        quality = quality.max(0.0);
+        let progress = net_distance;
+        let quality = (progress * (1.0 - 0.3 * fallen_ratio)).max(0.0);
 
         TrialMetrics {
             quality,
@@ -626,7 +703,12 @@ struct TrialSimulator {
     ccd_solver: CCDSolver,
     parts: Vec<SimPart>,
     controllers: Vec<SimController>,
+    child_controller_index: Vec<Option<usize>>,
+    local_brains: Vec<LocalBrainRuntime>,
+    global_brain: GlobalBrainRuntime,
+    ground_collider: ColliderHandle,
     torso_handle: RigidBodyHandle,
+    genome: Genome,
     metrics: TrialAccumulator,
     elapsed: f32,
     duration: f32,
@@ -668,10 +750,26 @@ impl TrialSimulator {
                 InteractionTestMode::And,
             ))
             .build();
-        colliders.insert_with_parent(ground_collider, ground_handle, &mut bodies);
+        let ground_collider =
+            colliders.insert_with_parent(ground_collider, ground_handle, &mut bodies);
 
-        let spawn = vector![0.0, 0.05, 0.0];
-        let torso_dims = &genome.torso;
+        let use_fixed_preset_startup = config.fixed_startup;
+        let spawn = if use_fixed_preset_startup {
+            vector![0.0, FIXED_PRESET_SPAWN_HEIGHT, 0.0]
+        } else {
+            vector![0.0, 0.05, 0.0]
+        };
+        let root_index = genome
+            .graph
+            .root
+            .min(genome.graph.nodes.len().saturating_sub(1));
+        let root_node = genome
+            .graph
+            .nodes
+            .get(root_index)
+            .cloned()
+            .unwrap_or_else(default_graph_node_gene);
+        let torso_dims = root_node.part;
         let torso_mass = (torso_dims.w
             * torso_dims.h
             * torso_dims.d
@@ -680,10 +778,8 @@ impl TrialSimulator {
             * MASS_DENSITY_MULTIPLIER)
             .max(0.7);
 
-        let fixed_preset = detect_morphology_preset(genome);
-        let use_fixed_preset_startup = fixed_preset.is_some();
         let drop_start = if use_fixed_preset_startup {
-            vector![spawn.x, FIXED_PRESET_SPAWN_HEIGHT, spawn.z]
+            spawn
         } else {
             vector![spawn.x, spawn.y + rng_range(&mut rng, 5.2, 7.7), spawn.z]
         };
@@ -699,7 +795,7 @@ impl TrialSimulator {
                 .get_mut(torso_handle)
                 .ok_or_else(|| "torso body missing".to_string())?;
             let rot = if use_fixed_preset_startup {
-                UnitQuaternion::identity()
+                UnitQuaternion::from_euler_angles(0.0, rng_range(&mut rng, 0.0, PI * 2.0), 0.0)
             } else {
                 UnitQuaternion::from_euler_angles(
                     rng_range(&mut rng, -0.36, 0.36),
@@ -731,208 +827,227 @@ impl TrialSimulator {
             }
         }
 
+        let expanded_graph = Self::expand_graph(&genome.graph);
         let mut parts = vec![SimPart {
             body: torso_handle,
             size: [torso_dims.w, torso_dims.h, torso_dims.d],
+            node_index: root_index,
+            parent_part: None,
+            child_parts: Vec::new(),
         }];
         let mut controllers = Vec::new();
 
-        for limb_index in 0..MAX_LIMBS {
-            let limb = match genome.limbs.get(limb_index) {
-                Some(limb) => limb,
-                None => continue,
+        for (expanded_index, expanded_part) in expanded_graph.iter().enumerate().skip(1) {
+            let Some(parent_index) = expanded_part.parent_index else {
+                continue;
             };
-            if !limb.enabled {
+            if parent_index >= parts.len() {
                 continue;
             }
+            let Some(edge) = expanded_part.incoming_edge.as_ref() else {
+                continue;
+            };
+            let node = genome
+                .graph
+                .nodes
+                .get(expanded_part.node_index)
+                .cloned()
+                .unwrap_or_else(default_graph_node_gene);
+            let Some(parent_body) = bodies.get(parts[parent_index].body) else {
+                continue;
+            };
+            let parent_translation = *parent_body.translation();
+            let parent_rotation = *parent_body.rotation();
+            let parent_size = parts[parent_index].size;
+            let reflect_sign = if edge.reflect_x { -1.0 } else { 1.0 };
+            let pivot_from_parent = vector![
+                edge.anchor_x * parent_size[0] * 0.5,
+                edge.anchor_y * parent_size[1] * 0.5,
+                edge.anchor_z * parent_size[2] * 0.5
+            ];
+            let axis_local = normalized_axis(edge.axis_y, edge.axis_z);
+            let local_growth = normalized_dir(
+                edge.dir_x * reflect_sign,
+                edge.dir_y,
+                edge.dir_z * reflect_sign,
+            );
+            let anchor_world = parent_translation + parent_rotation * pivot_from_parent;
+            let part_w = (node.part.w * edge.scale).abs().clamp(0.14, 2.8);
+            let part_h = (node.part.h * edge.scale).abs().clamp(0.22, 3.4);
+            let part_d = (node.part.d * edge.scale).abs().clamp(0.14, 2.8);
+            let growth_world = parent_rotation * local_growth;
+            let center = anchor_world + growth_world * (part_h * 0.5);
+            let seg_local_rot =
+                UnitQuaternion::rotation_between(&vector![0.0, -1.0, 0.0], &local_growth)
+                    .unwrap_or_else(UnitQuaternion::identity);
+            let child_rotation = parent_rotation * seg_local_rot;
+            let part_mass = (part_w
+                * part_h
+                * part_d
+                * node.part.mass
+                * genome.mass_scale
+                * MASS_DENSITY_MULTIPLIER)
+                .max(0.08);
+            let child = insert_box_body(
+                &mut bodies,
+                &mut colliders,
+                [part_w, part_h, part_d],
+                part_mass,
+                center,
+            );
+            if let Some(child_body) = bodies.get_mut(child) {
+                child_body.set_rotation(child_rotation, true);
+            }
+            let local_anchor2 = point![0.0, part_h * 0.5, 0.0];
+            let limit_x = clamp(edge.limit_x, 0.12, PI * 0.95);
+            let limit_y = clamp(edge.limit_y, 0.10, PI * 0.75);
+            let limit_z = clamp(edge.limit_z, 0.10, PI * 0.75);
+            let torque_x = MOTOR_TORQUE_HIP
+                * edge.motor_strength
+                * JOINT_MOTOR_FORCE_MULTIPLIER
+                * config.motor_power_scale;
+            let stiffness_x = edge.joint_stiffness * edge.motor_strength;
+            let torque_y = torque_x * BALL_AXIS_TORQUE_SCALE_Y;
+            let torque_z = torque_x * BALL_AXIS_TORQUE_SCALE_Z;
+            let stiffness_y = stiffness_x * BALL_AXIS_STIFFNESS_SCALE_Y;
+            let stiffness_z = stiffness_x * BALL_AXIS_STIFFNESS_SCALE_Z;
 
-            let segment_count = limb.segment_count.clamp(1, MAX_SEGMENTS_PER_LIMB as u32) as usize;
-            let axis_local = normalized_axis(limb.axis_y, limb.axis_z);
-            let first_growth_local = normalized_dir(limb.dir_x, limb.dir_y, limb.dir_z);
-            let mut parent = torso_handle;
-            let mut pivot_from_parent = vector![limb.anchor_x, limb.anchor_y, limb.anchor_z];
-
-            for seg_index in 0..segment_count {
-                let segment_gene = match limb.segments.get(seg_index) {
-                    Some(segment) => segment,
-                    None => break,
-                };
-                let control_gene = limb
-                    .controls
-                    .get(seg_index)
-                    .cloned()
-                    .unwrap_or_else(default_control_gene);
-
-                let parent_body = bodies
-                    .get(parent)
-                    .ok_or_else(|| "parent body missing".to_string())?;
-                let parent_translation = *parent_body.translation();
-                let parent_rotation = *parent_body.rotation();
-
-                let anchor_world = parent_translation + parent_rotation * pivot_from_parent;
-                let local_growth = if seg_index == 0 {
-                    first_growth_local
-                } else {
-                    vector![0.0, -1.0, 0.0]
-                };
-                let growth_world = parent_rotation * local_growth;
-                let center = anchor_world + growth_world * (segment_gene.length * 0.5);
-                let seg_local_rot =
-                    UnitQuaternion::rotation_between(&vector![0.0, -1.0, 0.0], &local_growth)
-                        .unwrap_or_else(UnitQuaternion::identity);
-                let child_rotation = parent_rotation * seg_local_rot;
-                let segment_mass = (segment_gene.thickness
-                    * segment_gene.length
-                    * segment_gene.thickness
-                    * segment_gene.mass
-                    * genome.mass_scale
-                    * MASS_DENSITY_MULTIPLIER)
-                    .max(0.08);
-
-                let child = insert_box_body(
-                    &mut bodies,
-                    &mut colliders,
-                    [
-                        segment_gene.thickness,
-                        segment_gene.length,
-                        segment_gene.thickness,
-                    ],
-                    segment_mass,
-                    center,
-                );
-                if let Some(child_body) = bodies.get_mut(child) {
-                    child_body.set_rotation(child_rotation, true);
-                }
-                let local_anchor2 = point![0.0, segment_gene.length * 0.5, 0.0];
-
-                let limit_x = clamp(segment_gene.limit_x, 0.12, PI * 0.95);
-                let limit_y = clamp(segment_gene.limit_y, 0.10, PI * 0.75);
-                let limit_z = clamp(segment_gene.limit_z, 0.10, PI * 0.75);
-                let torque_x = if seg_index == 0 {
-                    MOTOR_TORQUE_HIP
-                } else {
-                    MOTOR_TORQUE_KNEE
-                } * segment_gene.motor_strength
-                    * JOINT_MOTOR_FORCE_MULTIPLIER
-                    * config.motor_power_scale;
-                let stiffness_x = segment_gene.joint_stiffness * segment_gene.motor_strength;
-                let torque_y = torque_x * BALL_AXIS_TORQUE_SCALE_Y;
-                let torque_z = torque_x * BALL_AXIS_TORQUE_SCALE_Z;
-                let stiffness_y = stiffness_x * BALL_AXIS_STIFFNESS_SCALE_Y;
-                let stiffness_z = stiffness_x * BALL_AXIS_STIFFNESS_SCALE_Z;
-
-                let joint_handle = match segment_gene.joint_type {
-                    JointTypeGene::Hinge => {
-                        let mut joint = RevoluteJointBuilder::new(UnitVector::new_normalize(
-                            axis_local,
-                        ))
-                        .local_anchor1(point![
-                            pivot_from_parent.x,
-                            pivot_from_parent.y,
-                            pivot_from_parent.z
-                        ])
-                        .local_anchor2(local_anchor2)
-                        .contacts_enabled(false);
-                        joint = joint.limits([-limit_x, limit_x]);
-                        let handle = impulse_joints.insert(parent, child, joint, true);
-                        if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
-                            joint_ref
-                                .data
-                                .set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
-                            joint_ref.data.set_motor_position(
-                                JointAxis::AngX,
-                                0.0,
-                                stiffness_x,
-                                JOINT_MOTOR_RESPONSE,
-                            );
-                            joint_ref.data.set_motor_max_force(JointAxis::AngX, torque_x);
-                        }
-                        handle
-                    }
-                    JointTypeGene::Ball => {
-                        let local_frame1 = Isometry3::from_parts(
-                            Translation3::from(vector![
+            let joint_handle = match edge.joint_type {
+                JointTypeGene::Hinge => {
+                    let mut joint =
+                        RevoluteJointBuilder::new(UnitVector::new_normalize(axis_local))
+                            .local_anchor1(point![
                                 pivot_from_parent.x,
                                 pivot_from_parent.y,
                                 pivot_from_parent.z
-                            ]),
-                            seg_local_rot,
-                        );
-                        let local_frame2 = Isometry3::from_parts(
-                            Translation3::from(vector![
-                                local_anchor2.x,
-                                local_anchor2.y,
-                                local_anchor2.z
-                            ]),
-                            UnitQuaternion::identity(),
-                        );
-                        let joint = SphericalJointBuilder::new()
-                            .local_frame1(local_frame1)
-                            .local_frame2(local_frame2)
-                            .contacts_enabled(false)
-                            .limits(JointAxis::AngX, [-limit_x, limit_x])
-                            .limits(JointAxis::AngY, [-limit_y, limit_y])
-                            .limits(JointAxis::AngZ, [-limit_z, limit_z]);
-                        let handle = impulse_joints.insert(parent, child, joint, true);
-                        if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
-                            for (axis, stiffness, torque) in [
-                                (JointAxis::AngX, stiffness_x, torque_x),
-                                (JointAxis::AngY, stiffness_y, torque_y),
-                                (JointAxis::AngZ, stiffness_z, torque_z),
-                            ] {
-                                joint_ref.data.set_motor_model(axis, MotorModel::ForceBased);
-                                joint_ref.data.set_motor_position(
-                                    axis,
-                                    0.0,
-                                    stiffness,
-                                    JOINT_MOTOR_RESPONSE,
-                                );
-                                joint_ref.data.set_motor_max_force(axis, torque);
-                            }
-                        }
-                        handle
-                    }
-                };
-
-                if matches!(segment_gene.joint_type, JointTypeGene::Ball) && seg_index > 0 {
-                    // Keep distal joints a bit tighter for stability when spherical.
-                    if let Some(joint_ref) = impulse_joints.get_mut(joint_handle, false) {
+                            ])
+                            .local_anchor2(local_anchor2)
+                            .contacts_enabled(false);
+                    joint = joint.limits([-limit_x, limit_x]);
+                    let handle =
+                        impulse_joints.insert(parts[parent_index].body, child, joint, true);
+                    if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
                         joint_ref
                             .data
-                            .set_limits(JointAxis::AngY, [-limit_y * 0.85, limit_y * 0.85]);
+                            .set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
+                        joint_ref.data.set_motor_position(
+                            JointAxis::AngX,
+                            0.0,
+                            stiffness_x,
+                            JOINT_MOTOR_RESPONSE,
+                        );
                         joint_ref
                             .data
-                            .set_limits(JointAxis::AngZ, [-limit_z * 0.85, limit_z * 0.85]);
+                            .set_motor_max_force(JointAxis::AngX, torque_x);
                     }
+                    handle
                 }
-                controllers.push(SimController {
-                    joint: joint_handle,
-                    joint_type: segment_gene.joint_type,
-                    control: control_gene,
-                    torque_x,
-                    stiffness_x,
-                    limit_x,
-                    torque_y,
-                    stiffness_y,
-                    limit_y,
-                    torque_z,
-                    stiffness_z,
-                    limit_z,
-                });
+                JointTypeGene::Ball => {
+                    let local_frame1 = Isometry3::from_parts(
+                        Translation3::from(vector![
+                            pivot_from_parent.x,
+                            pivot_from_parent.y,
+                            pivot_from_parent.z
+                        ]),
+                        seg_local_rot,
+                    );
+                    let local_frame2 = Isometry3::from_parts(
+                        Translation3::from(vector![
+                            local_anchor2.x,
+                            local_anchor2.y,
+                            local_anchor2.z
+                        ]),
+                        UnitQuaternion::identity(),
+                    );
+                    let joint = SphericalJointBuilder::new()
+                        .local_frame1(local_frame1)
+                        .local_frame2(local_frame2)
+                        .contacts_enabled(false)
+                        .limits(JointAxis::AngX, [-limit_x, limit_x])
+                        .limits(JointAxis::AngY, [-limit_y, limit_y])
+                        .limits(JointAxis::AngZ, [-limit_z, limit_z]);
+                    let handle =
+                        impulse_joints.insert(parts[parent_index].body, child, joint, true);
+                    if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
+                        for (axis, stiffness, torque) in [
+                            (JointAxis::AngX, stiffness_x, torque_x),
+                            (JointAxis::AngY, stiffness_y, torque_y),
+                            (JointAxis::AngZ, stiffness_z, torque_z),
+                        ] {
+                            joint_ref.data.set_motor_model(axis, MotorModel::ForceBased);
+                            joint_ref.data.set_motor_position(
+                                axis,
+                                0.0,
+                                stiffness,
+                                JOINT_MOTOR_RESPONSE,
+                            );
+                            joint_ref.data.set_motor_max_force(axis, torque);
+                        }
+                    }
+                    handle
+                }
+            };
 
-                parts.push(SimPart {
-                    body: child,
-                    size: [
-                        segment_gene.thickness,
-                        segment_gene.length,
-                        segment_gene.thickness,
-                    ],
-                });
+            parts[parent_index].child_parts.push(expanded_index);
+            parts.push(SimPart {
+                body: child,
+                size: [part_w, part_h, part_d],
+                node_index: expanded_part.node_index,
+                parent_part: Some(parent_index),
+                child_parts: Vec::new(),
+            });
+            controllers.push(SimController {
+                joint: joint_handle,
+                joint_type: edge.joint_type,
+                parent_part_index: parent_index,
+                child_part_index: expanded_index,
+                node_index: expanded_part.node_index,
+                torque_x,
+                stiffness_x,
+                limit_x,
+                torque_y,
+                stiffness_y,
+                limit_y,
+                torque_z,
+                stiffness_z,
+                limit_z,
+            });
+        }
 
-                parent = child;
-                pivot_from_parent = vector![0.0, -segment_gene.length * 0.5, 0.0];
+        let mut child_controller_index = vec![None; parts.len()];
+        for (controller_index, controller) in controllers.iter().enumerate() {
+            if controller.child_part_index < child_controller_index.len() {
+                child_controller_index[controller.child_part_index] = Some(controller_index);
             }
         }
+
+        let mut local_brains = Vec::with_capacity(parts.len());
+        for part in &parts {
+            let local_count = genome
+                .graph
+                .nodes
+                .get(part.node_index)
+                .map(|node| node.brain.neurons.len())
+                .unwrap_or(MIN_LOCAL_NEURONS)
+                .clamp(MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
+            local_brains.push(LocalBrainRuntime {
+                outputs_prev: vec![0.0; local_count],
+                outputs_next: vec![0.0; local_count],
+            });
+        }
+        let global_count = genome
+            .graph
+            .global_brain
+            .neurons
+            .len()
+            .clamp(MIN_GLOBAL_NEURONS, MAX_GLOBAL_NEURONS);
+        let global_brain = GlobalBrainRuntime {
+            outputs_prev: vec![0.0; global_count],
+            outputs_next: vec![0.0; global_count],
+        };
+
+        // prevent dead-code warning on queue index generation variable
+        let _ = expanded_graph;
 
         // Advance one step so colliders settle into broadphase structures.
         pipeline.step(
@@ -964,14 +1079,84 @@ impl TrialSimulator {
             ccd_solver,
             parts,
             controllers,
+            child_controller_index,
+            local_brains,
+            global_brain,
+            ground_collider,
             torso_handle,
+            genome: genome.clone(),
             metrics: TrialAccumulator::new(spawn, genome),
             elapsed: 0.0,
             duration: config.duration_seconds,
             require_settled_before_actuation: use_fixed_preset_startup,
             settled_time_before_actuation: 0.0,
-            actuation_started: false,
+            actuation_started: !use_fixed_preset_startup,
         })
+    }
+
+    fn expand_graph(graph: &GraphGene) -> Vec<ExpandedGraphPart> {
+        if graph.nodes.is_empty() {
+            return vec![ExpandedGraphPart {
+                node_index: 0,
+                parent_index: None,
+                incoming_edge: None,
+            }];
+        }
+        let root = graph.root.min(graph.nodes.len().saturating_sub(1));
+        let max_parts = graph.max_parts.clamp(1, MAX_GRAPH_PARTS);
+        let mut expanded = vec![ExpandedGraphPart {
+            node_index: root,
+            parent_index: None,
+            incoming_edge: None,
+        }];
+        let mut queue: VecDeque<(usize, usize, Vec<usize>)> = VecDeque::new();
+        queue.push_back((0, root, vec![root]));
+        while let Some((expanded_index, node_index, ancestry)) = queue.pop_front() {
+            if expanded.len() >= max_parts {
+                break;
+            }
+            let Some(node) = graph.nodes.get(node_index) else {
+                continue;
+            };
+            for edge in node.edges.iter().take(MAX_GRAPH_EDGES_PER_NODE) {
+                if expanded.len() >= max_parts {
+                    break;
+                }
+                if edge.to >= graph.nodes.len() {
+                    continue;
+                }
+                let recursive_limit = edge.recursive_limit.max(1) as usize;
+                let occurrences = ancestry.iter().filter(|value| **value == edge.to).count();
+                let is_recursive = occurrences > 0;
+                if is_recursive && occurrences >= recursive_limit {
+                    continue;
+                }
+                if edge.terminal_only && (!is_recursive || occurrences + 1 < recursive_limit) {
+                    continue;
+                }
+                let mut child_ancestry = ancestry.clone();
+                child_ancestry.push(edge.to);
+                let child_index = expanded.len();
+                expanded.push(ExpandedGraphPart {
+                    node_index: edge.to,
+                    parent_index: Some(expanded_index),
+                    incoming_edge: Some(edge.clone()),
+                });
+                queue.push_back((child_index, edge.to, child_ancestry));
+            }
+        }
+        if expanded.len() == 1 {
+            let node = &graph.nodes[root];
+            if let Some(edge) = node.edges.first() {
+                let to = edge.to.min(graph.nodes.len().saturating_sub(1));
+                expanded.push(ExpandedGraphPart {
+                    node_index: to,
+                    parent_index: Some(0),
+                    incoming_edge: Some(edge.clone()),
+                });
+            }
+        }
+        expanded
     }
 
     fn part_sizes(&self) -> Vec<[f32; 3]> {
@@ -1007,6 +1192,213 @@ impl TrialSimulator {
         }
     }
 
+    fn part_contact_value(&self, part_index: usize) -> f32 {
+        let Some(part) = self.parts.get(part_index) else {
+            return -1.0;
+        };
+        let Some(body) = self.bodies.get(part.body) else {
+            return -1.0;
+        };
+        for collider in body.colliders() {
+            if let Some(pair) = self
+                .narrow_phase
+                .contact_pair(*collider, self.ground_collider)
+            {
+                if pair.has_any_active_contact {
+                    return 1.0;
+                }
+            }
+        }
+        -1.0
+    }
+
+    fn joint_state_for_child(&self, child_part_index: usize) -> ([f32; 3], [f32; 3]) {
+        let Some(controller_index) = self
+            .child_controller_index
+            .get(child_part_index)
+            .and_then(|value| *value)
+        else {
+            return ([0.0; 3], [0.0; 3]);
+        };
+        let Some(controller) = self.controllers.get(controller_index) else {
+            return ([0.0; 3], [0.0; 3]);
+        };
+        let Some(parent_body) = self
+            .bodies
+            .get(self.parts[controller.parent_part_index].body)
+        else {
+            return ([0.0; 3], [0.0; 3]);
+        };
+        let Some(child_body) = self
+            .bodies
+            .get(self.parts[controller.child_part_index].body)
+        else {
+            return ([0.0; 3], [0.0; 3]);
+        };
+        let rel_rot = parent_body.rotation().inverse() * child_body.rotation();
+        let (rx, ry, rz) = rel_rot.euler_angles();
+        let rel_angvel_world = child_body.angvel() - parent_body.angvel();
+        let rel_angvel_local = parent_body
+            .rotation()
+            .inverse_transform_vector(&rel_angvel_world);
+        let angle_x = clamp(rx / controller.limit_x.max(0.05), -1.0, 1.0);
+        let angle_y = clamp(ry / controller.limit_y.max(0.05), -1.0, 1.0);
+        let angle_z = clamp(rz / controller.limit_z.max(0.05), -1.0, 1.0);
+        let vel_x = clamp(rel_angvel_local.x / MAX_MOTOR_SPEED, -1.0, 1.0);
+        let vel_y = clamp(rel_angvel_local.y / MAX_MOTOR_SPEED, -1.0, 1.0);
+        let vel_z = clamp(rel_angvel_local.z / MAX_MOTOR_SPEED, -1.0, 1.0);
+        ([angle_x, angle_y, angle_z], [vel_x, vel_y, vel_z])
+    }
+
+    fn local_sensor_vector(&self, part_index: usize, sim_time: f32) -> [f32; LOCAL_SENSOR_DIM] {
+        let mut sensors = [0.0f32; LOCAL_SENSOR_DIM];
+        sensors[0] = sim_time.sin();
+        sensors[1] = sim_time.cos();
+        sensors[2] = self.part_contact_value(part_index);
+        let (joint_angles, joint_vels) = self.joint_state_for_child(part_index);
+        sensors[3] = joint_angles[0];
+        sensors[4] = joint_angles[1];
+        sensors[5] = joint_angles[2];
+        sensors[6] = joint_vels[0];
+        sensors[7] = joint_vels[1];
+        sensors[8] = joint_vels[2];
+        if let Some(torso) = self.bodies.get(self.torso_handle) {
+            let up = torso.rotation() * vector![0.0, 1.0, 0.0];
+            sensors[9] = clamp(up.y, -1.0, 1.0);
+            sensors[10] = clamp(torso.linvel().x / MAX_BODY_LINEAR_SPEED, -1.0, 1.0);
+            sensors[11] = clamp(torso.linvel().z / MAX_BODY_LINEAR_SPEED, -1.0, 1.0);
+        }
+        let parent_mean = self
+            .parts
+            .get(part_index)
+            .and_then(|part| part.parent_part)
+            .and_then(|parent_index| self.local_brains.get(parent_index))
+            .map(|brain| mean(&brain.outputs_prev))
+            .unwrap_or(0.0);
+        let child_mean = self
+            .parts
+            .get(part_index)
+            .map(|part| {
+                if part.child_parts.is_empty() {
+                    0.0
+                } else {
+                    let mut values = Vec::with_capacity(part.child_parts.len());
+                    for child_index in &part.child_parts {
+                        if let Some(brain) = self.local_brains.get(*child_index) {
+                            values.push(mean(&brain.outputs_prev));
+                        }
+                    }
+                    mean(&values)
+                }
+            })
+            .unwrap_or(0.0);
+        sensors[12] = parent_mean;
+        sensors[13] = child_mean;
+        sensors
+    }
+
+    fn global_sensor_vector(&self, sim_time: f32) -> [f32; GLOBAL_SENSOR_DIM] {
+        let mut sensors = [0.0f32; GLOBAL_SENSOR_DIM];
+        sensors[0] = sim_time.sin();
+        sensors[1] = sim_time.cos();
+        let mut contact_samples = Vec::with_capacity(self.parts.len());
+        for part_index in 0..self.parts.len() {
+            contact_samples.push((self.part_contact_value(part_index) + 1.0) * 0.5);
+        }
+        sensors[2] = mean(&contact_samples);
+        if let Some(torso) = self.bodies.get(self.torso_handle) {
+            let up = torso.rotation() * vector![0.0, 1.0, 0.0];
+            sensors[3] = clamp(up.y, -1.0, 1.0);
+            sensors[4] = clamp(torso.linvel().x / MAX_BODY_LINEAR_SPEED, -1.0, 1.0);
+            sensors[5] = clamp(torso.linvel().z / MAX_BODY_LINEAR_SPEED, -1.0, 1.0);
+            sensors[6] = clamp(torso.angvel().norm() / MAX_BODY_ANGULAR_SPEED, 0.0, 1.0);
+            sensors[7] = clamp(torso.linvel().norm() / MAX_BODY_LINEAR_SPEED, 0.0, 1.0);
+        }
+        sensors
+    }
+
+    fn update_brains(&mut self, sim_time: f32, dt: f32) {
+        for _ in 0..BRAIN_SUBSTEPS_PER_PHYSICS_STEP {
+            let global_sensors = self.global_sensor_vector(sim_time);
+            for global_index in 0..self.global_brain.outputs_prev.len() {
+                let Some(gene) = self
+                    .genome
+                    .graph
+                    .global_brain
+                    .neurons
+                    .get(global_index)
+                    .cloned()
+                else {
+                    self.global_brain.outputs_next[global_index] = 0.0;
+                    continue;
+                };
+                let mut signal = gene.bias;
+                signal += dot_weights(&gene.input_weights, &global_sensors);
+                signal += dot_weights(&gene.recurrent_weights, &self.global_brain.outputs_prev);
+                let activated = apply_neural_activation(gene.activation, signal);
+                let leak = clamp(gene.leak, 0.05, 1.0);
+                self.global_brain.outputs_next[global_index] = lerp(
+                    self.global_brain.outputs_prev[global_index],
+                    activated,
+                    leak * dt * 30.0,
+                );
+            }
+            std::mem::swap(
+                &mut self.global_brain.outputs_prev,
+                &mut self.global_brain.outputs_next,
+            );
+
+            for part_index in 0..self.parts.len() {
+                let node_index = self.parts[part_index].node_index;
+                let brain_gene = self
+                    .genome
+                    .graph
+                    .nodes
+                    .get(node_index)
+                    .map(|node| node.brain.clone())
+                    .unwrap_or_else(default_local_brain_gene);
+                let sensors = self.local_sensor_vector(part_index, sim_time);
+                if part_index >= self.local_brains.len() {
+                    continue;
+                }
+                let prev_outputs = self.local_brains[part_index].outputs_prev.clone();
+                let next_len = self.local_brains[part_index].outputs_next.len();
+                for neuron_index in 0..next_len {
+                    let Some(neuron_gene) = brain_gene.neurons.get(neuron_index).cloned() else {
+                        self.local_brains[part_index].outputs_next[neuron_index] = 0.0;
+                        continue;
+                    };
+                    let mut signal = neuron_gene.bias;
+                    signal += dot_weights(&neuron_gene.input_weights, &sensors);
+                    signal += dot_weights(&neuron_gene.recurrent_weights, &prev_outputs);
+                    signal +=
+                        dot_weights(&neuron_gene.global_weights, &self.global_brain.outputs_prev);
+                    let activated = apply_neural_activation(neuron_gene.activation, signal);
+                    let leak = clamp(neuron_gene.leak, 0.05, 1.0);
+                    self.local_brains[part_index].outputs_next[neuron_index] =
+                        lerp(prev_outputs[neuron_index], activated, leak * dt * 30.0);
+                }
+            }
+            for part_index in 0..self.local_brains.len() {
+                if let Some(brain) = self.local_brains.get_mut(part_index) {
+                    std::mem::swap(&mut brain.outputs_prev, &mut brain.outputs_next);
+                }
+            }
+        }
+    }
+
+    fn joint_axis_signal(
+        &self,
+        effector: &JointEffectorGene,
+        local_outputs: &[f32],
+        global_outputs: &[f32],
+    ) -> f32 {
+        let signal = effector.bias
+            + dot_weights(&effector.local_weights, local_outputs)
+            + dot_weights(&effector.global_weights, global_outputs);
+        clamp(signal.tanh() * effector.gain, -1.2, 1.2)
+    }
+
     fn step(&mut self) -> Result<(), String> {
         let dt = self.integration_parameters.dt;
         let sim_time = self.elapsed;
@@ -1038,11 +1430,44 @@ impl TrialSimulator {
         }
 
         if can_actuate {
+            self.update_brains(sim_time, dt);
             let mut energy_step = 0.0;
             for controller in &self.controllers {
-                let signal_x = clamp(controller.control.signal_x(sim_time), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
+                let brain_gene = self
+                    .genome
+                    .graph
+                    .nodes
+                    .get(controller.node_index)
+                    .map(|node| node.brain.clone())
+                    .unwrap_or_else(default_local_brain_gene);
+                let local_outputs = self
+                    .local_brains
+                    .get(controller.child_part_index)
+                    .map(|brain| brain.outputs_prev.as_slice())
+                    .unwrap_or(&[]);
+                let signal_x = self.joint_axis_signal(
+                    &brain_gene.effector_x,
+                    local_outputs,
+                    &self.global_brain.outputs_prev,
+                );
+                let (signal_y, signal_z) = if matches!(controller.joint_type, JointTypeGene::Ball) {
+                    (
+                        self.joint_axis_signal(
+                            &brain_gene.effector_y,
+                            local_outputs,
+                            &self.global_brain.outputs_prev,
+                        ),
+                        self.joint_axis_signal(
+                            &brain_gene.effector_z,
+                            local_outputs,
+                            &self.global_brain.outputs_prev,
+                        ),
+                    )
+                } else {
+                    (0.0, 0.0)
+                };
                 let target_x = clamp(
-                    signal_x / MAX_MOTOR_SPEED * controller.limit_x,
+                    signal_x * controller.limit_x,
                     -controller.limit_x,
                     controller.limit_x,
                 );
@@ -1060,17 +1485,13 @@ impl TrialSimulator {
                     energy_step +=
                         (target_x.abs() * controller.stiffness_x).min(controller.torque_x) * dt;
                     if matches!(controller.joint_type, JointTypeGene::Ball) {
-                        let signal_y =
-                            clamp(controller.control.signal_y(sim_time), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
-                        let signal_z =
-                            clamp(controller.control.signal_z(sim_time), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
                         let target_y = clamp(
-                            signal_y / MAX_MOTOR_SPEED * controller.limit_y,
+                            signal_y * controller.limit_y,
                             -controller.limit_y,
                             controller.limit_y,
                         );
                         let target_z = clamp(
-                            signal_z / MAX_MOTOR_SPEED * controller.limit_z,
+                            signal_z * controller.limit_z,
                             -controller.limit_z,
                             controller.limit_z,
                         );
@@ -1080,20 +1501,22 @@ impl TrialSimulator {
                             controller.stiffness_y,
                             JOINT_MOTOR_RESPONSE,
                         );
-                        joint.data.set_motor_max_force(JointAxis::AngY, controller.torque_y);
+                        joint
+                            .data
+                            .set_motor_max_force(JointAxis::AngY, controller.torque_y);
                         joint.data.set_motor_position(
                             JointAxis::AngZ,
                             target_z,
                             controller.stiffness_z,
                             JOINT_MOTOR_RESPONSE,
                         );
-                        joint.data.set_motor_max_force(JointAxis::AngZ, controller.torque_z);
+                        joint
+                            .data
+                            .set_motor_max_force(JointAxis::AngZ, controller.torque_z);
                         energy_step +=
-                            (target_y.abs() * controller.stiffness_y).min(controller.torque_y)
-                                * dt;
+                            (target_y.abs() * controller.stiffness_y).min(controller.torque_y) * dt;
                         energy_step +=
-                            (target_z.abs() * controller.stiffness_z).min(controller.torque_z)
-                                * dt;
+                            (target_z.abs() * controller.stiffness_z).min(controller.torque_z) * dt;
                     }
                 }
             }
@@ -1555,6 +1978,22 @@ struct EvolutionDiagnosisFinding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EvolutionStatus {
+    #[serde(default = "default_min_population_size")]
+    min_population_size: usize,
+    #[serde(default = "default_max_population_size")]
+    max_population_size: usize,
+    #[serde(default = "default_population_size")]
+    default_population_size: usize,
+    #[serde(default = "default_trials_per_candidate")]
+    default_trial_count: usize,
+    #[serde(default = "default_max_trial_count")]
+    max_trial_count: usize,
+    #[serde(default = "default_generation_seconds")]
+    default_generation_seconds: f32,
+    #[serde(default = "default_min_run_speed")]
+    min_run_speed: f32,
+    #[serde(default = "default_max_run_speed")]
+    max_run_speed: f32,
     generation: usize,
     population_size: usize,
     pending_population_size: usize,
@@ -1680,6 +2119,14 @@ impl EvolutionController {
         let (initial_morphology_mode, initial_morphology_preset) =
             resolve_initial_morphology_override();
         let initial_status = EvolutionStatus {
+            min_population_size: MIN_POPULATION_SIZE,
+            max_population_size: MAX_POPULATION_SIZE,
+            default_population_size: DEFAULT_POPULATION_SIZE,
+            default_trial_count: TRIALS_PER_CANDIDATE,
+            max_trial_count: TRIALS_PER_CANDIDATE,
+            default_generation_seconds: DEFAULT_GENERATION_SECONDS,
+            min_run_speed: default_min_run_speed(),
+            max_run_speed: default_max_run_speed(),
             generation: 1,
             population_size: initial_population_size,
             pending_population_size: initial_population_size,
@@ -1977,9 +2424,7 @@ impl EvolutionController {
             }
             "set_morphology_mode" => {
                 let Some(mode) = request.morphology_mode else {
-                    return Err(
-                        "morphologyMode is required for set_morphology_mode".to_string(),
-                    );
+                    return Err("morphologyMode is required for set_morphology_mode".to_string());
                 };
                 commands.morphology_mode = mode;
                 if let Some(preset) = request.morphology_preset {
@@ -2189,11 +2634,12 @@ fn start_evolution_worker(
 ) {
     std::thread::spawn(move || {
         let mut rng = SmallRng::seed_from_u64(rand::random::<u64>());
-        let config = TrialConfig {
+        let mut config = TrialConfig {
             duration_seconds: DEFAULT_GENERATION_SECONDS,
             dt: FIXED_SIM_DT,
             snapshot_hz: 30.0,
             motor_power_scale: 1.0,
+            fixed_startup: false,
         };
 
         let mut generation = 1usize;
@@ -2206,8 +2652,7 @@ fn start_evolution_worker(
         let mut batch_results: Vec<EvolutionCandidate> = Vec::new();
         let mut attempt_trials: Vec<Vec<TrialResult>> = Vec::new();
         let mut trial_seeds: Vec<u64> = Vec::new();
-        let holdout_trial_seeds =
-            build_holdout_trial_seed_set(HOLDOUT_TRIALS_PER_CANDIDATE);
+        let holdout_trial_seeds = build_holdout_trial_seed_set(HOLDOUT_TRIALS_PER_CANDIDATE);
         let mut current_attempt_index = 0usize;
         let mut current_trial_index = 0usize;
 
@@ -2284,6 +2729,7 @@ fn start_evolution_worker(
                 morphology_mode,
                 morphology_preset,
             ) = controller.command_snapshot();
+            config.fixed_startup = matches!(morphology_mode, EvolutionMorphologyMode::FixedPreset);
             if restart_requested {
                 info!(
                     "evolution restart requested; resetting to generation=1, population_size={}",
@@ -2723,22 +3169,34 @@ fn start_evolution_worker(
             let snapshot_every = ((1.0 / config.dt) / config.snapshot_hz).round().max(1.0) as usize;
             let steps = (config.duration_seconds / config.dt).ceil() as usize;
             let mut aborted = false;
+            let mut preempted_for_fast_forward = false;
             let wall_trial_start = Instant::now();
 
             for step in 0..steps {
-                let (paused_now, restart_now, _, _, _, _, _) = controller.command_snapshot();
+                let (paused_now, restart_now, _, _, fast_forward_now, _, _) =
+                    controller.command_snapshot();
                 if restart_now {
                     controller.force_restart();
+                    aborted = true;
+                    break;
+                }
+                if fast_forward_now > 0 {
+                    preempted_for_fast_forward = true;
                     aborted = true;
                     break;
                 }
                 if paused_now {
                     loop {
                         std::thread::sleep(Duration::from_millis(25));
-                        let (paused_loop, restart_loop, _, _, _, _, _) =
+                        let (paused_loop, restart_loop, _, _, fast_forward_loop, _, _) =
                             controller.command_snapshot();
                         if restart_loop {
                             controller.force_restart();
+                            aborted = true;
+                            break;
+                        }
+                        if fast_forward_loop > 0 {
+                            preempted_for_fast_forward = true;
                             aborted = true;
                             break;
                         }
@@ -2768,6 +3226,16 @@ fn start_evolution_worker(
             }
 
             if aborted {
+                if preempted_for_fast_forward {
+                    info!(
+                        "trial preempted for fast-forward: generation={}, attempt={}/{}, trial={}/{}",
+                        generation,
+                        current_attempt_index + 1,
+                        population_size,
+                        current_trial_index + 1,
+                        TRIALS_PER_CANDIDATE
+                    );
+                }
                 continue;
             }
 
@@ -3133,8 +3601,7 @@ fn finalize_generation(
     let holdout_best_fitness = if holdout_trial_seeds.is_empty() {
         train_best_fitness
     } else {
-        match evaluate_generation_attempt(0, &top.genome, holdout_trial_seeds, config, |_| Ok(()))
-        {
+        match evaluate_generation_attempt(0, &top.genome, holdout_trial_seeds, config, |_| Ok(())) {
             Ok(result) => finite_or_zero(result.fitness),
             Err(err) => {
                 warn!("holdout evaluation failed: {err}");
@@ -3199,41 +3666,30 @@ fn finalize_generation(
         let elite_scale = quantile(&elite_fitnesses, 0.5).abs().max(1.0);
         clamp(1.0 - elite_std / elite_scale, 0.0, 1.0)
     };
-    let stagnation_pressure =
-        clamp(stagnation_generations(performance_history) as f32 / 24.0, 0.0, 1.0);
-    let anneal_factor = clamp(
-        annealing_progress(*generation) * elite_consistency * (1.0 - 0.35 * stagnation_pressure),
+    let stagnation_pressure = clamp(
+        stagnation_generations(performance_history) as f32 / 24.0,
         0.0,
         1.0,
     );
     let base_mutation_rate = if ranked_for_breeding.len() == 1 {
-        0.65
+        0.62
     } else {
-        0.24
+        0.26
     };
     let raw_mutation_rate = base_mutation_rate
         + (1.0 - mean_novelty_norm) * 0.08
-        + stagnation_pressure * 0.08
+        + stagnation_pressure * 0.14
         + holdout_gap_norm * 0.08;
-    let min_mutation_rate = lerp(
-        MIN_BREEDING_MUTATION_RATE,
-        MUTATION_RATE_FINAL_FLOOR,
-        anneal_factor,
-    );
-    let max_mutation_rate = lerp(
-        MAX_BREEDING_MUTATION_RATE,
-        MUTATION_RATE_FINAL_CEILING,
-        anneal_factor,
-    )
-    .max(min_mutation_rate + 0.01);
+    let min_mutation_rate = MIN_BREEDING_MUTATION_RATE;
+    let max_mutation_rate = MAX_BREEDING_MUTATION_RATE.max(min_mutation_rate + 0.01);
     let mutation_rate = clamp(raw_mutation_rate, min_mutation_rate, max_mutation_rate);
     let random_inject_chance = if ranked_for_breeding.len() > 1 {
         clamp(
-            (0.04 + (1.0 - mean_novelty_norm) * 0.04) * lerp(1.0, 0.35, anneal_factor)
-                + stagnation_pressure * 0.015
+            (0.035 + (1.0 - mean_novelty_norm) * 0.05)
+                + stagnation_pressure * 0.08
                 + holdout_gap_norm * 0.01,
             0.0,
-            0.25,
+            0.3,
         )
     } else {
         0.0
@@ -3250,8 +3706,16 @@ fn finalize_generation(
         } else {
             parent_a.clone()
         };
-        let mut child = crossover_genome(&parent_a, &parent_b, rng);
-        child = mutate_genome(child, mutation_rate, rng);
+        let operation_roll = rng.random::<f32>();
+        let mut child = if operation_roll < 0.4 {
+            mutate_genome(parent_a.clone(), mutation_rate, rng)
+        } else if operation_roll < 0.7 {
+            let crossed = crossover_genome(&parent_a, &parent_b, rng);
+            mutate_genome(crossed, mutation_rate, rng)
+        } else {
+            let grafted = graft_genome(&parent_a, &parent_b, rng);
+            mutate_genome(grafted, mutation_rate, rng)
+        };
         if ranked_for_breeding.len() > 1 && rng.random::<f32>() < random_inject_chance {
             child = random_genome(rng);
         }
@@ -3272,7 +3736,7 @@ fn finalize_generation(
         elite_kept,
         holdout_best_fitness,
         holdout_gap,
-        anneal_factor,
+        0.0,
         elite_consistency,
     );
 
@@ -4029,66 +4493,31 @@ fn build_topology_profile(generation: usize, candidate: &EvolutionCandidate) -> 
 
 fn topology_fingerprint(genome: &Genome) -> String {
     let mut hash = 1469598103934665603u64;
-    stable_hash_mix(&mut hash, MAX_LIMBS as u64);
-    stable_hash_mix(&mut hash, MAX_SEGMENTS_PER_LIMB as u64);
-    stable_hash_mix(&mut hash, quantize_to_bucket(genome.torso.w, 0.05) as u64);
-    stable_hash_mix(&mut hash, quantize_to_bucket(genome.torso.h, 0.05) as u64);
-    stable_hash_mix(&mut hash, quantize_to_bucket(genome.torso.d, 0.05) as u64);
-    for limb in &genome.limbs {
-        stable_hash_mix(&mut hash, u64::from(limb.enabled));
-        let count = active_segment_count(limb).clamp(1, MAX_SEGMENTS_PER_LIMB);
-        stable_hash_mix(&mut hash, count as u64);
-        if !limb.enabled {
-            continue;
-        }
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.anchor_x, 0.05) as u64);
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.anchor_y, 0.05) as u64);
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.anchor_z, 0.05) as u64);
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.axis_y, 0.05) as u64);
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.axis_z, 0.05) as u64);
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.dir_x, 0.05) as u64);
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.dir_y, 0.05) as u64);
-        stable_hash_mix(&mut hash, quantize_to_bucket(limb.dir_z, 0.05) as u64);
-        for segment in limb.segments.iter().take(count.min(limb.segments.len())) {
-            stable_hash_mix(&mut hash, quantize_to_bucket(segment.length, 0.05) as u64);
+    stable_hash_mix(&mut hash, genome.graph.nodes.len() as u64);
+    stable_hash_mix(&mut hash, genome.graph.max_parts as u64);
+    stable_hash_mix(&mut hash, genome.graph.root as u64);
+    for node in &genome.graph.nodes {
+        stable_hash_mix(&mut hash, quantize_to_bucket(node.part.w, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(node.part.h, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(node.part.d, 0.05) as u64);
+        stable_hash_mix(&mut hash, quantize_to_bucket(node.part.mass, 0.05) as u64);
+        stable_hash_mix(&mut hash, node.brain.neurons.len() as u64);
+        stable_hash_mix(&mut hash, node.edges.len() as u64);
+        for edge in &node.edges {
+            stable_hash_mix(&mut hash, edge.to as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(edge.anchor_x, 0.05) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(edge.anchor_y, 0.05) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(edge.anchor_z, 0.05) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(edge.scale, 0.05) as u64);
+            stable_hash_mix(&mut hash, edge.recursive_limit as u64);
+            stable_hash_mix(&mut hash, u64::from(edge.terminal_only));
             stable_hash_mix(
                 &mut hash,
-                quantize_to_bucket(segment.thickness, 0.05) as u64,
-            );
-            stable_hash_mix(&mut hash, quantize_to_bucket(segment.mass, 0.05) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(segment.limit_x, 0.05) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(segment.limit_y, 0.05) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(segment.limit_z, 0.05) as u64);
-            stable_hash_mix(
-                &mut hash,
-                match segment.joint_type {
+                match edge.joint_type {
                     JointTypeGene::Hinge => 0,
                     JointTypeGene::Ball => 1,
                 },
             );
-        }
-        for (index, control) in limb.controls.iter().take(count.min(limb.controls.len())).enumerate() {
-            let joint_type = limb
-                .segments
-                .get(index)
-                .map(|segment| segment.joint_type)
-                .unwrap_or(JointTypeGene::Hinge);
-            stable_hash_mix(&mut hash, quantize_to_bucket(control.amp, 0.1) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(control.freq, 0.05) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(control.phase, 0.1) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(control.bias, 0.1) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(control.harm2_amp, 0.1) as u64);
-            stable_hash_mix(&mut hash, quantize_to_bucket(control.harm2_phase, 0.1) as u64);
-            if matches!(joint_type, JointTypeGene::Ball) {
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.amp_y, 0.1) as u64);
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.freq_y, 0.05) as u64);
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.phase_y, 0.1) as u64);
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.bias_y, 0.1) as u64);
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.amp_z, 0.1) as u64);
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.freq_z, 0.05) as u64);
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.phase_z, 0.1) as u64);
-                stable_hash_mix(&mut hash, quantize_to_bucket(control.bias_z, 0.1) as u64);
-            }
         }
     }
     format!("{hash:016x}")
@@ -4103,13 +4532,29 @@ fn coarse_topology_key(genome: &Genome) -> String {
     let mean_control_freq = feature_control_freq_mean(genome);
     let ball_ratio = feature_ball_joint_ratio(genome);
     let mean_segment_count = feature_segment_count_mean(genome);
-    let torso_wh = if genome.torso.h.abs() > 1e-5 {
-        genome.torso.w / genome.torso.h
+    let root = genome
+        .graph
+        .nodes
+        .get(
+            genome
+                .graph
+                .root
+                .min(genome.graph.nodes.len().saturating_sub(1)),
+        )
+        .map(|node| node.part.clone())
+        .unwrap_or(GraphPartGene {
+            w: 1.0,
+            h: 1.0,
+            d: 1.0,
+            mass: 1.0,
+        });
+    let torso_wh = if root.h.abs() > 1e-5 {
+        root.w / root.h
     } else {
         1.0
     };
-    let torso_dh = if genome.torso.h.abs() > 1e-5 {
-        genome.torso.d / genome.torso.h
+    let torso_dh = if root.h.abs() > 1e-5 {
+        root.d / root.h
     } else {
         1.0
     };
@@ -4146,74 +4591,107 @@ fn quantize_to_bucket(value: f32, step: f32) -> i64 {
 }
 
 fn enabled_limb_count(genome: &Genome) -> usize {
-    genome.limbs.iter().filter(|limb| limb.enabled).count()
+    if genome.graph.nodes.is_empty() {
+        return 0;
+    }
+    let root = genome
+        .graph
+        .root
+        .min(genome.graph.nodes.len().saturating_sub(1));
+    genome.graph.nodes[root].edges.len()
 }
 
 fn segment_count_histogram(genome: &Genome) -> [usize; MAX_SEGMENTS_PER_LIMB] {
     let mut histogram = [0usize; MAX_SEGMENTS_PER_LIMB];
-    for limb in &genome.limbs {
-        if !limb.enabled {
-            continue;
-        }
-        let segment_count = active_segment_count(limb).clamp(1, MAX_SEGMENTS_PER_LIMB);
-        histogram[segment_count - 1] += 1;
+    if genome.graph.nodes.is_empty() {
+        return histogram;
+    }
+    let root = genome
+        .graph
+        .root
+        .min(genome.graph.nodes.len().saturating_sub(1));
+    for edge in &genome.graph.nodes[root].edges {
+        let depth = graph_chain_length(&genome.graph, edge.to, MAX_SEGMENTS_PER_LIMB);
+        let clamped = depth.clamp(1, MAX_SEGMENTS_PER_LIMB);
+        histogram[clamped - 1] += 1;
     }
     histogram
 }
 
-fn active_segment_count(limb: &LimbGene) -> usize {
-    limb.segment_count.clamp(1, MAX_SEGMENTS_PER_LIMB as u32) as usize
-}
-
-fn for_each_active_segment<F>(genome: &Genome, mut f: F)
-where
-    F: FnMut(&SegmentGene),
-{
-    for limb in &genome.limbs {
-        if !limb.enabled {
-            continue;
-        }
-        let count = active_segment_count(limb).min(limb.segments.len());
-        for segment in limb.segments.iter().take(count) {
-            f(segment);
-        }
+fn graph_chain_length(graph: &GraphGene, start: usize, max_depth: usize) -> usize {
+    if graph.nodes.is_empty() {
+        return 0;
     }
-}
-
-fn for_each_active_control<F>(genome: &Genome, mut f: F)
-where
-    F: FnMut(&ControlGene, JointTypeGene),
-{
-    for limb in &genome.limbs {
-        if !limb.enabled {
-            continue;
+    let mut depth = 0usize;
+    let mut current = start.min(graph.nodes.len().saturating_sub(1));
+    let mut seen = std::collections::BTreeSet::new();
+    while depth < max_depth {
+        depth += 1;
+        if !seen.insert(current) {
+            break;
         }
-        let count = active_segment_count(limb).min(limb.controls.len());
-        for (index, control) in limb.controls.iter().take(count).enumerate() {
-            let joint_type = limb
-                .segments
-                .get(index)
-                .map(|segment| segment.joint_type)
-                .unwrap_or(JointTypeGene::Hinge);
-            f(control, joint_type);
-        }
+        let Some(next) = graph.nodes[current].edges.first() else {
+            break;
+        };
+        current = next.to.min(graph.nodes.len().saturating_sub(1));
     }
+    depth
 }
 
 fn feature_torso_w(genome: &Genome) -> f32 {
-    genome.torso.w
+    genome
+        .graph
+        .nodes
+        .get(
+            genome
+                .graph
+                .root
+                .min(genome.graph.nodes.len().saturating_sub(1)),
+        )
+        .map(|node| node.part.w)
+        .unwrap_or(genome.torso.w)
 }
 
 fn feature_torso_h(genome: &Genome) -> f32 {
-    genome.torso.h
+    genome
+        .graph
+        .nodes
+        .get(
+            genome
+                .graph
+                .root
+                .min(genome.graph.nodes.len().saturating_sub(1)),
+        )
+        .map(|node| node.part.h)
+        .unwrap_or(genome.torso.h)
 }
 
 fn feature_torso_d(genome: &Genome) -> f32 {
-    genome.torso.d
+    genome
+        .graph
+        .nodes
+        .get(
+            genome
+                .graph
+                .root
+                .min(genome.graph.nodes.len().saturating_sub(1)),
+        )
+        .map(|node| node.part.d)
+        .unwrap_or(genome.torso.d)
 }
 
 fn feature_torso_mass(genome: &Genome) -> f32 {
-    genome.torso.mass
+    genome
+        .graph
+        .nodes
+        .get(
+            genome
+                .graph
+                .root
+                .min(genome.graph.nodes.len().saturating_sub(1)),
+        )
+        .map(|node| node.part.mass)
+        .unwrap_or(genome.torso.mass)
 }
 
 fn feature_mass_scale(genome: &Genome) -> f32 {
@@ -4221,19 +4699,17 @@ fn feature_mass_scale(genome: &Genome) -> f32 {
 }
 
 fn feature_enabled_limb_ratio(genome: &Genome) -> f32 {
-    let enabled = genome.limbs.iter().filter(|limb| limb.enabled).count();
+    let enabled = enabled_limb_count(genome);
     enabled as f32 / MAX_LIMBS as f32
 }
 
 fn feature_segment_count_mean(genome: &Genome) -> f32 {
-    let mut count = 0usize;
+    let hist = segment_count_histogram(genome);
     let mut total = 0.0f32;
-    for limb in &genome.limbs {
-        if !limb.enabled {
-            continue;
-        }
-        total += active_segment_count(limb) as f32;
-        count += 1;
+    let mut count = 0usize;
+    for (index, bucket) in hist.iter().enumerate() {
+        total += (index + 1) as f32 * *bucket as f32;
+        count += *bucket;
     }
     if count == 0 {
         0.0
@@ -4245,10 +4721,18 @@ fn feature_segment_count_mean(genome: &Genome) -> f32 {
 fn feature_segment_length_mean(genome: &Genome) -> f32 {
     let mut count = 0usize;
     let mut total = 0.0f32;
-    for_each_active_segment(genome, |segment| {
-        total += segment.length;
+    for (index, node) in genome.graph.nodes.iter().enumerate() {
+        if index
+            == genome
+                .graph
+                .root
+                .min(genome.graph.nodes.len().saturating_sub(1))
+        {
+            continue;
+        }
+        total += node.part.h;
         count += 1;
-    });
+    }
     if count == 0 {
         0.0
     } else {
@@ -4259,10 +4743,18 @@ fn feature_segment_length_mean(genome: &Genome) -> f32 {
 fn feature_segment_mass_mean(genome: &Genome) -> f32 {
     let mut count = 0usize;
     let mut total = 0.0f32;
-    for_each_active_segment(genome, |segment| {
-        total += segment.mass;
+    for (index, node) in genome.graph.nodes.iter().enumerate() {
+        if index
+            == genome
+                .graph
+                .root
+                .min(genome.graph.nodes.len().saturating_sub(1))
+        {
+            continue;
+        }
+        total += node.part.mass;
         count += 1;
-    });
+    }
     if count == 0 {
         0.0
     } else {
@@ -4273,14 +4765,20 @@ fn feature_segment_mass_mean(genome: &Genome) -> f32 {
 fn feature_control_amp_mean(genome: &Genome) -> f32 {
     let mut count = 0usize;
     let mut total = 0.0f32;
-    for_each_active_control(genome, |control, joint_type| {
-        total += control.amp + control.harm2_amp;
-        count += 2;
-        if matches!(joint_type, JointTypeGene::Ball) {
-            total += control.amp_y + control.amp_z;
-            count += 2;
+    for node in &genome.graph.nodes {
+        for weight in &node.brain.effector_x.local_weights {
+            total += weight.abs();
+            count += 1;
         }
-    });
+        for weight in &node.brain.effector_y.local_weights {
+            total += weight.abs();
+            count += 1;
+        }
+        for weight in &node.brain.effector_z.local_weights {
+            total += weight.abs();
+            count += 1;
+        }
+    }
     if count == 0 {
         0.0
     } else {
@@ -4291,14 +4789,14 @@ fn feature_control_amp_mean(genome: &Genome) -> f32 {
 fn feature_control_freq_mean(genome: &Genome) -> f32 {
     let mut count = 0usize;
     let mut total = 0.0f32;
-    for_each_active_control(genome, |control, joint_type| {
-        total += control.freq;
-        count += 1;
-        if matches!(joint_type, JointTypeGene::Ball) {
-            total += control.freq_y + control.freq_z;
-            count += 2;
+    for node in &genome.graph.nodes {
+        for neuron in &node.brain.neurons {
+            for value in &neuron.recurrent_weights {
+                total += value.abs();
+                count += 1;
+            }
         }
-    });
+    }
     if count == 0 {
         0.0
     } else {
@@ -4309,14 +4807,10 @@ fn feature_control_freq_mean(genome: &Genome) -> f32 {
 fn feature_ball_joint_ratio(genome: &Genome) -> f32 {
     let mut total = 0usize;
     let mut ball = 0usize;
-    for limb in &genome.limbs {
-        if !limb.enabled {
-            continue;
-        }
-        let count = active_segment_count(limb).min(limb.segments.len());
-        for segment in limb.segments.iter().take(count) {
+    for node in &genome.graph.nodes {
+        for edge in &node.edges {
             total += 1;
-            if matches!(segment.joint_type, JointTypeGene::Ball) {
+            if matches!(edge.joint_type, JointTypeGene::Ball) {
                 ball += 1;
             }
         }
@@ -4974,15 +5468,12 @@ fn run_generation_stream(
                     }
                     let job = pending.lock().unwrap().pop();
                     if let Some((a, t)) = job {
-                        let outcome = TrialSimulator::new(&genomes[a], seeds[t], config_ref)
-                            .and_then(|mut sim| {
-                                let steps =
-                                    (config_ref.duration_seconds / config_ref.dt).ceil() as usize;
-                                for _ in 0..steps {
-                                    sim.step()?;
-                                }
-                                Ok(sim.final_result())
-                            });
+                        let outcome = run_trial_unpaced_with_wall_limit(
+                            &genomes[a],
+                            seeds[t],
+                            config_ref,
+                            FAST_EVAL_TRIAL_WALLTIME_LIMIT,
+                        );
                         match outcome {
                             Ok(res) => {
                                 if res_tx.send(Ok((a, t, res))).is_err() {
@@ -5267,6 +5758,24 @@ fn resolve_generation_worker_count(max_workers: usize, attempt_count: usize) -> 
     max_workers.max(1).min(attempt_count.max(1))
 }
 
+fn run_trial_unpaced_with_wall_limit(
+    genome: &Genome,
+    seed: u64,
+    config: &TrialConfig,
+    walltime_limit: Duration,
+) -> Result<TrialResult, String> {
+    let mut sim = TrialSimulator::new(genome, seed, config)?;
+    let steps = (config.duration_seconds / config.dt).ceil() as usize;
+    let started_at = Instant::now();
+    for _ in 0..steps {
+        if started_at.elapsed() >= walltime_limit {
+            break;
+        }
+        sim.step()?;
+    }
+    Ok(sim.final_result())
+}
+
 fn evaluate_generation_attempt<F>(
     _attempt_index: usize,
     genome: &Genome,
@@ -5278,14 +5787,15 @@ where
     F: FnMut(usize) -> Result<(), String>,
 {
     let mut trials = Vec::with_capacity(seeds.len());
-    let steps = (config.duration_seconds / config.dt).ceil() as usize;
     for (trial_index, &seed) in seeds.iter().enumerate() {
         on_trial_started(trial_index)?;
-        let mut sim = TrialSimulator::new(genome, seed, config)?;
-        for _ in 0..steps {
-            sim.step()?;
-        }
-        trials.push(sim.final_result());
+        let result = run_trial_unpaced_with_wall_limit(
+            genome,
+            seed,
+            config,
+            FAST_EVAL_TRIAL_WALLTIME_LIMIT,
+        )?;
+        trials.push(result);
     }
     Ok(summarize_trials(genome, &trials))
 }
@@ -5330,27 +5840,19 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     let median_upright = quantile(&uprights, 0.5);
     let median_straightness = quantile(&straightnesses, 0.5);
 
-    let mut active_limbs = 0usize;
-    let mut segment_total = 0usize;
-    for limb in &genome.limbs {
-        if !limb.enabled {
-            continue;
-        }
-        active_limbs += 1;
-        segment_total += limb.segment_count.clamp(1, MAX_SEGMENTS_PER_LIMB as u32) as usize;
-    }
-    let mean_segment_count = if active_limbs > 0 {
-        segment_total as f32 / active_limbs as f32
-    } else {
-        0.0
-    };
+    let active_limbs = enabled_limb_count(genome);
+    let mean_segment_count = feature_segment_count_mean(genome);
 
     let descriptor = [
         clamp(median_progress / 28.0, 0.0, 1.0),
         clamp(median_upright, 0.0, 1.0),
         clamp(median_straightness, 0.0, 1.0),
-        clamp(active_limbs as f32 / MAX_LIMBS as f32, 0.0, 1.0),
-        clamp(mean_segment_count / MAX_SEGMENTS_PER_LIMB as f32, 0.0, 1.0),
+        clamp(active_limbs as f32 / MAX_LIMBS.max(1) as f32, 0.0, 1.0),
+        clamp(
+            mean_segment_count / MAX_SEGMENTS_PER_LIMB.max(1) as f32,
+            0.0,
+            1.0,
+        ),
     ];
 
     GenerationEvalResult {
@@ -5676,8 +6178,12 @@ fn tournament_select<'a>(
 }
 
 fn build_trial_seed_set(generation_index: usize, count: usize) -> Vec<u64> {
-    let _ = generation_index;
-    build_seed_bank(TRAIN_TRIAL_SEED_BANK_TAG, count)
+    let generation_tag = hash_uint32(
+        TRAIN_TRIAL_SEED_BANK_TAG,
+        generation_index.max(1) as u32,
+        0xa511_e9b3,
+    );
+    build_seed_bank(generation_tag, count)
 }
 
 fn build_holdout_trial_seed_set(count: usize) -> Vec<u64> {
@@ -5785,70 +6291,6 @@ fn morphology_preset_label(preset: MorphologyPreset) -> &'static str {
     }
 }
 
-fn detect_morphology_preset(genome: &Genome) -> Option<MorphologyPreset> {
-    if matches_spider4x2_preset(genome) {
-        Some(MorphologyPreset::Spider4x2)
-    } else {
-        None
-    }
-}
-
-fn approx_eq(a: f32, b: f32, tolerance: f32) -> bool {
-    (a - b).abs() <= tolerance
-}
-
-fn matches_spider4x2_preset(genome: &Genome) -> bool {
-    if genome.limbs.len() < MAX_LIMBS {
-        return false;
-    }
-    if !approx_eq(genome.torso.w, 1.68, 0.02)
-        || !approx_eq(genome.torso.h, 0.66, 0.02)
-        || !approx_eq(genome.torso.d, 1.22, 0.02)
-        || !approx_eq(genome.torso.mass, 1.08, 0.04)
-        || !approx_eq(genome.mass_scale, 1.0, 0.05)
-    {
-        return false;
-    }
-    let expected_anchors = [
-        (0.72, -0.18, 0.46),
-        (-0.72, -0.18, 0.46),
-        (0.72, -0.18, -0.46),
-        (-0.72, -0.18, -0.46),
-    ];
-    for (limb_index, expected) in expected_anchors.iter().enumerate() {
-        let limb = &genome.limbs[limb_index];
-        if !limb.enabled || limb.segment_count != 2 {
-            return false;
-        }
-        if !approx_eq(limb.anchor_x, expected.0, 0.05)
-            || !approx_eq(limb.anchor_y, expected.1, 0.05)
-            || !approx_eq(limb.anchor_z, expected.2, 0.05)
-        {
-            return false;
-        }
-        if let Some(shoulder) = limb.segments.first() {
-            if !matches!(shoulder.joint_type, JointTypeGene::Ball) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-        if let Some(distal) = limb.segments.get(1) {
-            if !matches!(distal.joint_type, JointTypeGene::Hinge) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    for limb in genome.limbs.iter().skip(4).take(MAX_LIMBS.saturating_sub(4)) {
-        if limb.enabled {
-            return false;
-        }
-    }
-    true
-}
-
 fn apply_morphology_mode(
     genome: Genome,
     mode: EvolutionMorphologyMode,
@@ -5893,6 +6335,23 @@ fn constrain_genome_to_morphology_preset(
     if !profile.lock_visual_hue {
         constrained.hue = source.hue;
     }
+    constrained.version = default_genome_version();
+    constrained.graph = if profile.lock_topology {
+        let mut graph = morphology_preset_template_genome(preset).graph;
+        if !profile.lock_controls {
+            graph.global_brain = source.graph.global_brain.clone();
+            let copy_count = graph.nodes.len().min(source.graph.nodes.len());
+            for index in 0..copy_count {
+                graph.nodes[index].brain = source.graph.nodes[index].brain.clone();
+            }
+        }
+        graph.max_parts = graph.max_parts.clamp(6, MAX_GRAPH_PARTS);
+        graph
+    } else {
+        source.graph.clone()
+    };
+    ensure_graph_valid(&mut constrained.graph, rng);
+    project_graph_to_legacy(&mut constrained);
     ensure_active_body_plan(&mut constrained, rng);
     constrained
 }
@@ -6022,6 +6481,365 @@ fn default_control_gene() -> ControlGene {
     }
 }
 
+fn random_neural_activation(rng: &mut SmallRng) -> NeuralActivationGene {
+    match rng.random_range(0..7) {
+        0 => NeuralActivationGene::Tanh,
+        1 => NeuralActivationGene::Sigmoid,
+        2 => NeuralActivationGene::Sin,
+        3 => NeuralActivationGene::Cos,
+        4 => NeuralActivationGene::Identity,
+        5 => NeuralActivationGene::Relu,
+        _ => NeuralActivationGene::Softsign,
+    }
+}
+
+fn random_neural_unit_gene(
+    rng: &mut SmallRng,
+    input_dim: usize,
+    recurrent_dim: usize,
+    global_dim: usize,
+) -> NeuralUnitGene {
+    NeuralUnitGene {
+        activation: random_neural_activation(rng),
+        input_weights: (0..input_dim).map(|_| rng_range(rng, -1.0, 1.0)).collect(),
+        recurrent_weights: (0..recurrent_dim)
+            .map(|_| rng_range(rng, -0.7, 0.7))
+            .collect(),
+        global_weights: (0..global_dim).map(|_| rng_range(rng, -0.9, 0.9)).collect(),
+        bias: rng_range(rng, -0.8, 0.8),
+        leak: rng_range(rng, 0.15, 0.95),
+    }
+}
+
+fn random_effector_gene(
+    rng: &mut SmallRng,
+    local_dim: usize,
+    global_dim: usize,
+) -> JointEffectorGene {
+    JointEffectorGene {
+        local_weights: (0..local_dim).map(|_| rng_range(rng, -1.4, 1.4)).collect(),
+        global_weights: (0..global_dim).map(|_| rng_range(rng, -1.0, 1.0)).collect(),
+        bias: rng_range(rng, -0.6, 0.6),
+        gain: rng_range(rng, 0.55, 1.45),
+    }
+}
+
+fn random_global_brain_gene(rng: &mut SmallRng) -> GlobalBrainGene {
+    let count = rng.random_range(MIN_GLOBAL_NEURONS..=MAX_GLOBAL_NEURONS.min(9));
+    let neurons = (0..count)
+        .map(|_| random_neural_unit_gene(rng, GLOBAL_SENSOR_DIM, count, 0))
+        .collect::<Vec<_>>();
+    GlobalBrainGene { neurons }
+}
+
+fn random_local_brain_gene(rng: &mut SmallRng, global_dim: usize) -> LocalBrainGene {
+    let count = rng.random_range(MIN_LOCAL_NEURONS..=MAX_LOCAL_NEURONS.min(8));
+    let neurons = (0..count)
+        .map(|_| random_neural_unit_gene(rng, LOCAL_SENSOR_DIM, count, global_dim))
+        .collect::<Vec<_>>();
+    LocalBrainGene {
+        neurons,
+        effector_x: random_effector_gene(rng, count, global_dim),
+        effector_y: random_effector_gene(rng, count, global_dim),
+        effector_z: random_effector_gene(rng, count, global_dim),
+    }
+}
+
+fn random_graph_edge_gene(rng: &mut SmallRng, to: usize) -> MorphEdgeGene {
+    MorphEdgeGene {
+        to,
+        anchor_x: rng_range(rng, -0.95, 0.95),
+        anchor_y: rng_range(rng, -0.95, 0.95),
+        anchor_z: rng_range(rng, -0.95, 0.95),
+        axis_y: rng_range(rng, -0.55, 0.55),
+        axis_z: rng_range(rng, -0.55, 0.55),
+        dir_x: rng_range(rng, -1.0, 1.0),
+        dir_y: rng_range(rng, -1.0, 0.2),
+        dir_z: rng_range(rng, -1.0, 1.0),
+        scale: rng_range(rng, 0.65, 1.25),
+        reflect_x: rng.random::<f32>() < 0.28,
+        recursive_limit: rng.random_range(1..=3),
+        terminal_only: rng.random::<f32>() < 0.2,
+        joint_type: if rng.random::<f32>() < 0.35 {
+            JointTypeGene::Ball
+        } else {
+            JointTypeGene::Hinge
+        },
+        limit_x: rng_range(rng, 0.4, 2.15),
+        limit_y: rng_range(rng, 0.25, 1.35),
+        limit_z: rng_range(rng, 0.25, 1.35),
+        motor_strength: rng_range(rng, 0.65, 2.8),
+        joint_stiffness: rng_range(rng, 24.0, 95.0),
+    }
+}
+
+fn random_graph_gene(rng: &mut SmallRng) -> GraphGene {
+    let global_brain = random_global_brain_gene(rng);
+    let global_dim = global_brain.neurons.len();
+    let node_count = rng.random_range(3..=7);
+    let mut nodes = Vec::with_capacity(node_count);
+    for _ in 0..node_count {
+        nodes.push(MorphNodeGene {
+            part: GraphPartGene {
+                w: rng_range(rng, 0.28, 1.45),
+                h: rng_range(rng, 0.34, 1.9),
+                d: rng_range(rng, 0.28, 1.45),
+                mass: rng_range(rng, 0.32, 1.45),
+            },
+            edges: Vec::new(),
+            brain: random_local_brain_gene(rng, global_dim),
+        });
+    }
+    for index in 0..node_count.saturating_sub(1) {
+        nodes[index]
+            .edges
+            .push(random_graph_edge_gene(rng, index + 1));
+    }
+    for index in 0..node_count {
+        let extra_edges = rng.random_range(0..=MAX_GRAPH_EDGES_PER_NODE.min(3));
+        for _ in 0..extra_edges {
+            if nodes[index].edges.len() >= MAX_GRAPH_EDGES_PER_NODE {
+                break;
+            }
+            let to = rng.random_range(0..node_count);
+            nodes[index].edges.push(random_graph_edge_gene(rng, to));
+        }
+    }
+    GraphGene {
+        root: 0,
+        nodes,
+        global_brain,
+        max_parts: rng.random_range(18..=MAX_GRAPH_PARTS.min(56)),
+    }
+}
+
+fn spider_graph_gene_template() -> GraphGene {
+    let global_brain = default_global_brain_gene();
+    let global_dim = global_brain.neurons.len();
+    let torso_brain = LocalBrainGene {
+        neurons: vec![
+            random_neural_unit_gene(
+                &mut SmallRng::seed_from_u64(11),
+                LOCAL_SENSOR_DIM,
+                4,
+                global_dim,
+            ),
+            random_neural_unit_gene(
+                &mut SmallRng::seed_from_u64(12),
+                LOCAL_SENSOR_DIM,
+                4,
+                global_dim,
+            ),
+            random_neural_unit_gene(
+                &mut SmallRng::seed_from_u64(13),
+                LOCAL_SENSOR_DIM,
+                4,
+                global_dim,
+            ),
+            random_neural_unit_gene(
+                &mut SmallRng::seed_from_u64(14),
+                LOCAL_SENSOR_DIM,
+                4,
+                global_dim,
+            ),
+        ],
+        effector_x: default_joint_effector_gene(),
+        effector_y: default_joint_effector_gene(),
+        effector_z: default_joint_effector_gene(),
+    };
+    let leg_brain = LocalBrainGene {
+        neurons: (0..5)
+            .map(|offset| {
+                random_neural_unit_gene(
+                    &mut SmallRng::seed_from_u64(100 + offset as u64),
+                    LOCAL_SENSOR_DIM,
+                    5,
+                    global_dim,
+                )
+            })
+            .collect(),
+        effector_x: JointEffectorGene {
+            local_weights: vec![1.1, -0.6, 0.8, 0.0, 0.0],
+            global_weights: vec![0.35; global_dim],
+            bias: 0.0,
+            gain: 1.25,
+        },
+        effector_y: JointEffectorGene {
+            local_weights: vec![0.6, 0.3, -0.4, 0.2, 0.0],
+            global_weights: vec![0.1; global_dim],
+            bias: 0.0,
+            gain: 0.85,
+        },
+        effector_z: JointEffectorGene {
+            local_weights: vec![-0.5, 0.7, 0.2, -0.3, 0.0],
+            global_weights: vec![0.08; global_dim],
+            bias: 0.0,
+            gain: 0.85,
+        },
+    };
+    let tip_brain = LocalBrainGene {
+        neurons: (0..4)
+            .map(|offset| {
+                random_neural_unit_gene(
+                    &mut SmallRng::seed_from_u64(200 + offset as u64),
+                    LOCAL_SENSOR_DIM,
+                    4,
+                    global_dim,
+                )
+            })
+            .collect(),
+        effector_x: JointEffectorGene {
+            local_weights: vec![1.0, -0.2, 0.4, 0.3],
+            global_weights: vec![0.1; global_dim],
+            bias: -0.1,
+            gain: 1.1,
+        },
+        effector_y: default_joint_effector_gene(),
+        effector_z: default_joint_effector_gene(),
+    };
+    let root = MorphNodeGene {
+        part: GraphPartGene {
+            w: 1.68,
+            h: 0.66,
+            d: 1.22,
+            mass: 1.08,
+        },
+        edges: vec![
+            MorphEdgeGene {
+                to: 1,
+                anchor_x: 0.72,
+                anchor_y: -0.18,
+                anchor_z: 0.46,
+                axis_y: 0.14,
+                axis_z: 0.16,
+                dir_x: 0.92,
+                dir_y: 0.0,
+                dir_z: 0.38,
+                scale: 1.0,
+                reflect_x: false,
+                recursive_limit: 1,
+                terminal_only: false,
+                joint_type: JointTypeGene::Ball,
+                limit_x: 1.57,
+                limit_y: 1.08,
+                limit_z: 1.08,
+                motor_strength: 1.0,
+                joint_stiffness: 48.0,
+            },
+            MorphEdgeGene {
+                to: 1,
+                anchor_x: -0.72,
+                anchor_y: -0.18,
+                anchor_z: 0.46,
+                axis_y: 0.14,
+                axis_z: -0.16,
+                dir_x: -0.92,
+                dir_y: 0.0,
+                dir_z: 0.38,
+                scale: 1.0,
+                reflect_x: false,
+                recursive_limit: 1,
+                terminal_only: false,
+                joint_type: JointTypeGene::Ball,
+                limit_x: 1.57,
+                limit_y: 1.08,
+                limit_z: 1.08,
+                motor_strength: 1.0,
+                joint_stiffness: 48.0,
+            },
+            MorphEdgeGene {
+                to: 1,
+                anchor_x: 0.72,
+                anchor_y: -0.18,
+                anchor_z: -0.46,
+                axis_y: -0.14,
+                axis_z: 0.16,
+                dir_x: 0.92,
+                dir_y: 0.0,
+                dir_z: -0.38,
+                scale: 1.0,
+                reflect_x: false,
+                recursive_limit: 1,
+                terminal_only: false,
+                joint_type: JointTypeGene::Ball,
+                limit_x: 1.57,
+                limit_y: 1.08,
+                limit_z: 1.08,
+                motor_strength: 1.0,
+                joint_stiffness: 48.0,
+            },
+            MorphEdgeGene {
+                to: 1,
+                anchor_x: -0.72,
+                anchor_y: -0.18,
+                anchor_z: -0.46,
+                axis_y: -0.14,
+                axis_z: -0.16,
+                dir_x: -0.92,
+                dir_y: 0.0,
+                dir_z: -0.38,
+                scale: 1.0,
+                reflect_x: false,
+                recursive_limit: 1,
+                terminal_only: false,
+                joint_type: JointTypeGene::Ball,
+                limit_x: 1.57,
+                limit_y: 1.08,
+                limit_z: 1.08,
+                motor_strength: 1.0,
+                joint_stiffness: 48.0,
+            },
+        ],
+        brain: torso_brain,
+    };
+    let leg = MorphNodeGene {
+        part: GraphPartGene {
+            w: 0.24,
+            h: 1.33,
+            d: 0.24,
+            mass: 0.8,
+        },
+        edges: vec![MorphEdgeGene {
+            to: 2,
+            anchor_x: 0.0,
+            anchor_y: -0.48,
+            anchor_z: 0.0,
+            axis_y: 0.0,
+            axis_z: 0.0,
+            dir_x: 0.0,
+            dir_y: -1.0,
+            dir_z: 0.0,
+            scale: 1.0,
+            reflect_x: false,
+            recursive_limit: 1,
+            terminal_only: false,
+            joint_type: JointTypeGene::Hinge,
+            limit_x: 2.09,
+            limit_y: 1.22,
+            limit_z: 1.22,
+            motor_strength: 0.9,
+            joint_stiffness: 44.0,
+        }],
+        brain: leg_brain,
+    };
+    let tip = MorphNodeGene {
+        part: GraphPartGene {
+            w: 0.21,
+            h: 1.33,
+            d: 0.21,
+            mass: 0.58,
+        },
+        edges: Vec::new(),
+        brain: tip_brain,
+    };
+    GraphGene {
+        root: 0,
+        nodes: vec![root, leg, tip],
+        global_brain,
+        max_parts: 16,
+    }
+}
+
 fn spider4x2_template_genome() -> Genome {
     let torso = TorsoGene {
         w: 1.68,
@@ -6072,7 +6890,10 @@ fn spider4x2_template_genome() -> Genome {
         0.0,
         freq,
     );
+    let graph = spider_graph_gene_template();
     Genome {
+        version: default_genome_version(),
+        graph,
         torso,
         limbs,
         hue: 0.0,
@@ -6335,13 +7156,545 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
         .collect::<Vec<_>>();
 
     let mut genome = Genome {
+        version: default_genome_version(),
+        graph: random_graph_gene(rng),
         torso,
         limbs,
         hue: rng.random::<f32>(),
         mass_scale: rng_range(rng, 0.78, 1.3),
     };
+    project_graph_to_legacy(&mut genome);
     ensure_active_body_plan(&mut genome, rng);
     genome
+}
+
+fn mutate_weight_vector(weights: &mut Vec<f32>, chance: f32, scale: f32, rng: &mut SmallRng) {
+    for weight in weights {
+        if rng.random::<f32>() < chance {
+            *weight = clamp(*weight + rand_normal(rng) * scale, -3.5, 3.5);
+        }
+    }
+}
+
+fn blend_weight_vectors(a: &[f32], b: &[f32], rng: &mut SmallRng) -> Vec<f32> {
+    let len = a.len().max(b.len());
+    let mut result = Vec::with_capacity(len);
+    for i in 0..len {
+        let av = a.get(i).copied().unwrap_or(0.0);
+        let bv = b.get(i).copied().unwrap_or(0.0);
+        let t = rng_range(rng, 0.15, 0.85);
+        result.push(lerp(av, bv, t));
+    }
+    result
+}
+
+fn resize_neural_gene(
+    neuron: &mut NeuralUnitGene,
+    input_dim: usize,
+    recurrent_dim: usize,
+    global_dim: usize,
+) {
+    neuron.input_weights.resize(input_dim, 0.0);
+    neuron.recurrent_weights.resize(recurrent_dim, 0.0);
+    neuron.global_weights.resize(global_dim, 0.0);
+    neuron.leak = clamp(neuron.leak, 0.05, 1.0);
+}
+
+fn resize_local_brain(brain: &mut LocalBrainGene, global_dim: usize) {
+    if brain.neurons.is_empty() {
+        brain.neurons.push(NeuralUnitGene {
+            activation: NeuralActivationGene::Tanh,
+            input_weights: vec![0.0; LOCAL_SENSOR_DIM],
+            recurrent_weights: vec![0.0; MIN_LOCAL_NEURONS],
+            global_weights: vec![0.0; global_dim],
+            bias: 0.0,
+            leak: default_neural_leak(),
+        });
+    }
+    let neuron_count = brain
+        .neurons
+        .len()
+        .clamp(MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
+    brain.neurons.truncate(neuron_count);
+    while brain.neurons.len() < neuron_count {
+        brain.neurons.push(NeuralUnitGene {
+            activation: NeuralActivationGene::Tanh,
+            input_weights: vec![0.0; LOCAL_SENSOR_DIM],
+            recurrent_weights: vec![0.0; neuron_count],
+            global_weights: vec![0.0; global_dim],
+            bias: 0.0,
+            leak: default_neural_leak(),
+        });
+    }
+    for neuron in &mut brain.neurons {
+        resize_neural_gene(neuron, LOCAL_SENSOR_DIM, neuron_count, global_dim);
+    }
+    brain.effector_x.local_weights.resize(neuron_count, 0.0);
+    brain.effector_y.local_weights.resize(neuron_count, 0.0);
+    brain.effector_z.local_weights.resize(neuron_count, 0.0);
+    brain.effector_x.global_weights.resize(global_dim, 0.0);
+    brain.effector_y.global_weights.resize(global_dim, 0.0);
+    brain.effector_z.global_weights.resize(global_dim, 0.0);
+    brain.effector_x.gain = clamp(brain.effector_x.gain, 0.2, 2.0);
+    brain.effector_y.gain = clamp(brain.effector_y.gain, 0.2, 2.0);
+    brain.effector_z.gain = clamp(brain.effector_z.gain, 0.2, 2.0);
+}
+
+fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng) {
+    if graph.nodes.is_empty() {
+        *graph = random_graph_gene(rng);
+        return;
+    }
+    graph.max_parts = graph.max_parts.clamp(6, MAX_GRAPH_PARTS);
+    graph.root = graph.root.min(graph.nodes.len().saturating_sub(1));
+    let global_count = graph
+        .global_brain
+        .neurons
+        .len()
+        .clamp(MIN_GLOBAL_NEURONS, MAX_GLOBAL_NEURONS);
+    graph.global_brain.neurons.truncate(global_count);
+    while graph.global_brain.neurons.len() < global_count {
+        graph.global_brain.neurons.push(random_neural_unit_gene(
+            rng,
+            GLOBAL_SENSOR_DIM,
+            global_count,
+            0,
+        ));
+    }
+    for neuron in &mut graph.global_brain.neurons {
+        resize_neural_gene(neuron, GLOBAL_SENSOR_DIM, global_count, 0);
+    }
+    let node_len = graph.nodes.len().max(1);
+    for node in &mut graph.nodes {
+        resize_local_brain(&mut node.brain, global_count);
+        node.part.w = clamp(node.part.w, 0.14, 2.8);
+        node.part.h = clamp(node.part.h, 0.2, 3.4);
+        node.part.d = clamp(node.part.d, 0.14, 2.8);
+        node.part.mass = clamp(node.part.mass, 0.08, 3.4);
+        node.edges.truncate(MAX_GRAPH_EDGES_PER_NODE);
+        for edge in &mut node.edges {
+            edge.to = edge.to.min(node_len.saturating_sub(1));
+            edge.anchor_x = clamp(edge.anchor_x, -0.98, 0.98);
+            edge.anchor_y = clamp(edge.anchor_y, -0.98, 0.98);
+            edge.anchor_z = clamp(edge.anchor_z, -0.98, 0.98);
+            edge.axis_y = clamp(edge.axis_y, -0.75, 0.75);
+            edge.axis_z = clamp(edge.axis_z, -0.75, 0.75);
+            edge.dir_x = clamp(edge.dir_x, -1.4, 1.4);
+            edge.dir_y = clamp(edge.dir_y, -1.4, 1.0);
+            edge.dir_z = clamp(edge.dir_z, -1.4, 1.4);
+            edge.scale = clamp(edge.scale, 0.3, 1.8);
+            edge.recursive_limit = edge.recursive_limit.max(1).min(5);
+            edge.limit_x = clamp(edge.limit_x, 0.12, PI * 0.95);
+            edge.limit_y = clamp(edge.limit_y, 0.10, PI * 0.75);
+            edge.limit_z = clamp(edge.limit_z, 0.10, PI * 0.75);
+            edge.motor_strength = clamp(edge.motor_strength, 0.3, 4.5);
+            edge.joint_stiffness = clamp(edge.joint_stiffness, 12.0, 160.0);
+        }
+        if node.edges.is_empty() {
+            let to = rng.random_range(0..node_len);
+            node.edges.push(random_graph_edge_gene(rng, to));
+        }
+    }
+}
+
+fn crossover_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> GraphGene {
+    let mut child = if rng.random::<f32>() < 0.5 {
+        a.clone()
+    } else {
+        b.clone()
+    };
+    let node_count = a.nodes.len().max(b.nodes.len()).clamp(1, MAX_GRAPH_NODES);
+    child.nodes.clear();
+    for i in 0..node_count {
+        let node = match (a.nodes.get(i), b.nodes.get(i)) {
+            (Some(na), Some(nb)) => {
+                let mut blended = if rng.random::<f32>() < 0.5 {
+                    na.clone()
+                } else {
+                    nb.clone()
+                };
+                let t = rng_range(rng, 0.2, 0.8);
+                blended.part.w = lerp(na.part.w, nb.part.w, t);
+                blended.part.h = lerp(na.part.h, nb.part.h, t);
+                blended.part.d = lerp(na.part.d, nb.part.d, t);
+                blended.part.mass = lerp(na.part.mass, nb.part.mass, t);
+                if rng.random::<f32>() < 0.5 {
+                    blended.edges = na.edges.clone();
+                } else {
+                    blended.edges = nb.edges.clone();
+                }
+                let local_count = na
+                    .brain
+                    .neurons
+                    .len()
+                    .max(nb.brain.neurons.len())
+                    .clamp(MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
+                blended.brain.neurons.truncate(local_count);
+                while blended.brain.neurons.len() < local_count {
+                    blended.brain.neurons.push(random_neural_unit_gene(
+                        rng,
+                        LOCAL_SENSOR_DIM,
+                        local_count,
+                        child.global_brain.neurons.len(),
+                    ));
+                }
+                for neuron_index in 0..local_count {
+                    let an = na.brain.neurons.get(neuron_index);
+                    let bn = nb.brain.neurons.get(neuron_index);
+                    if let (Some(an), Some(bn), Some(target)) =
+                        (an, bn, blended.brain.neurons.get_mut(neuron_index))
+                    {
+                        target.activation = if rng.random::<f32>() < 0.5 {
+                            an.activation
+                        } else {
+                            bn.activation
+                        };
+                        target.input_weights =
+                            blend_weight_vectors(&an.input_weights, &bn.input_weights, rng);
+                        target.recurrent_weights =
+                            blend_weight_vectors(&an.recurrent_weights, &bn.recurrent_weights, rng);
+                        target.global_weights =
+                            blend_weight_vectors(&an.global_weights, &bn.global_weights, rng);
+                        target.bias = lerp(an.bias, bn.bias, rng.random::<f32>());
+                        target.leak = lerp(an.leak, bn.leak, rng.random::<f32>());
+                    }
+                }
+                blended.brain.effector_x.local_weights = blend_weight_vectors(
+                    &na.brain.effector_x.local_weights,
+                    &nb.brain.effector_x.local_weights,
+                    rng,
+                );
+                blended.brain.effector_y.local_weights = blend_weight_vectors(
+                    &na.brain.effector_y.local_weights,
+                    &nb.brain.effector_y.local_weights,
+                    rng,
+                );
+                blended.brain.effector_z.local_weights = blend_weight_vectors(
+                    &na.brain.effector_z.local_weights,
+                    &nb.brain.effector_z.local_weights,
+                    rng,
+                );
+                blended
+            }
+            (Some(na), None) => na.clone(),
+            (None, Some(nb)) => nb.clone(),
+            (None, None) => random_graph_gene(rng).nodes[0].clone(),
+        };
+        child.nodes.push(node);
+    }
+    if !a.global_brain.neurons.is_empty() && !b.global_brain.neurons.is_empty() {
+        let global_count = a
+            .global_brain
+            .neurons
+            .len()
+            .max(b.global_brain.neurons.len())
+            .clamp(MIN_GLOBAL_NEURONS, MAX_GLOBAL_NEURONS);
+        child.global_brain.neurons.truncate(global_count);
+        while child.global_brain.neurons.len() < global_count {
+            child.global_brain.neurons.push(random_neural_unit_gene(
+                rng,
+                GLOBAL_SENSOR_DIM,
+                global_count,
+                0,
+            ));
+        }
+        for index in 0..global_count {
+            if let (Some(ga), Some(gb), Some(target)) = (
+                a.global_brain.neurons.get(index),
+                b.global_brain.neurons.get(index),
+                child.global_brain.neurons.get_mut(index),
+            ) {
+                target.activation = if rng.random::<f32>() < 0.5 {
+                    ga.activation
+                } else {
+                    gb.activation
+                };
+                target.input_weights =
+                    blend_weight_vectors(&ga.input_weights, &gb.input_weights, rng);
+                target.recurrent_weights =
+                    blend_weight_vectors(&ga.recurrent_weights, &gb.recurrent_weights, rng);
+                target.bias = lerp(ga.bias, gb.bias, rng.random::<f32>());
+                target.leak = lerp(ga.leak, gb.leak, rng.random::<f32>());
+            }
+        }
+    }
+    child.max_parts = ((a.max_parts + b.max_parts) / 2).clamp(6, MAX_GRAPH_PARTS);
+    child.root = child.root.min(child.nodes.len().saturating_sub(1));
+    ensure_graph_valid(&mut child, rng);
+    child
+}
+
+fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
+    if graph.nodes.is_empty() {
+        *graph = random_graph_gene(rng);
+        return;
+    }
+    let mut local_chance = chance;
+    if rng.random::<f32>() < chance * 0.28 && graph.nodes.len() < MAX_GRAPH_NODES {
+        let current_node_len = graph.nodes.len().max(1);
+        let to = rng.random_range(0..current_node_len);
+        graph.nodes.push(MorphNodeGene {
+            part: GraphPartGene {
+                w: rng_range(rng, 0.2, 1.4),
+                h: rng_range(rng, 0.3, 1.8),
+                d: rng_range(rng, 0.2, 1.4),
+                mass: rng_range(rng, 0.22, 1.7),
+            },
+            edges: vec![random_graph_edge_gene(rng, to)],
+            brain: random_local_brain_gene(rng, graph.global_brain.neurons.len()),
+        });
+        local_chance = (local_chance + 0.05).min(1.0);
+    }
+    if rng.random::<f32>() < chance * 0.18 && graph.nodes.len() > 3 {
+        let remove_index = rng.random_range(1..graph.nodes.len());
+        graph.nodes.remove(remove_index);
+        let fallback_to = graph.root.min(graph.nodes.len().saturating_sub(1));
+        for node in &mut graph.nodes {
+            for edge in &mut node.edges {
+                if edge.to == remove_index {
+                    edge.to = fallback_to;
+                } else if edge.to > remove_index {
+                    edge.to -= 1;
+                }
+            }
+        }
+    }
+    if rng.random::<f32>() < chance * 0.4 {
+        graph.max_parts = (graph.max_parts as i32 + if rng.random::<f32>() < 0.5 { -3 } else { 3 })
+            .clamp(6, MAX_GRAPH_PARTS as i32) as usize;
+    }
+    for neuron in &mut graph.global_brain.neurons {
+        mutate_weight_vector(&mut neuron.input_weights, local_chance * 0.7, 0.22, rng);
+        mutate_weight_vector(&mut neuron.recurrent_weights, local_chance * 0.7, 0.18, rng);
+        if rng.random::<f32>() < local_chance * 0.35 {
+            neuron.bias = clamp(neuron.bias + rand_normal(rng) * 0.22, -2.0, 2.0);
+        }
+        if rng.random::<f32>() < local_chance * 0.25 {
+            neuron.leak = clamp(neuron.leak + rand_normal(rng) * 0.14, 0.05, 1.0);
+        }
+        if rng.random::<f32>() < local_chance * 0.08 {
+            neuron.activation = random_neural_activation(rng);
+        }
+    }
+    let global_dim = graph.global_brain.neurons.len();
+    let node_len = graph.nodes.len().max(1);
+    for node in &mut graph.nodes {
+        node.part.w = mutate_number(node.part.w, 0.14, 2.8, local_chance, 0.14, rng);
+        node.part.h = mutate_number(node.part.h, 0.2, 3.4, local_chance, 0.14, rng);
+        node.part.d = mutate_number(node.part.d, 0.14, 2.8, local_chance, 0.14, rng);
+        node.part.mass = mutate_number(node.part.mass, 0.08, 3.4, local_chance, 0.18, rng);
+        resize_local_brain(&mut node.brain, global_dim);
+        for neuron in &mut node.brain.neurons {
+            mutate_weight_vector(&mut neuron.input_weights, local_chance * 0.75, 0.24, rng);
+            mutate_weight_vector(
+                &mut neuron.recurrent_weights,
+                local_chance * 0.75,
+                0.18,
+                rng,
+            );
+            mutate_weight_vector(&mut neuron.global_weights, local_chance * 0.75, 0.18, rng);
+            if rng.random::<f32>() < local_chance * 0.35 {
+                neuron.bias = clamp(neuron.bias + rand_normal(rng) * 0.3, -2.5, 2.5);
+            }
+            if rng.random::<f32>() < local_chance * 0.25 {
+                neuron.leak = clamp(neuron.leak + rand_normal(rng) * 0.16, 0.05, 1.0);
+            }
+            if rng.random::<f32>() < local_chance * 0.1 {
+                neuron.activation = random_neural_activation(rng);
+            }
+        }
+        mutate_weight_vector(
+            &mut node.brain.effector_x.local_weights,
+            local_chance * 0.7,
+            0.28,
+            rng,
+        );
+        mutate_weight_vector(
+            &mut node.brain.effector_y.local_weights,
+            local_chance * 0.7,
+            0.28,
+            rng,
+        );
+        mutate_weight_vector(
+            &mut node.brain.effector_z.local_weights,
+            local_chance * 0.7,
+            0.28,
+            rng,
+        );
+        mutate_weight_vector(
+            &mut node.brain.effector_x.global_weights,
+            local_chance * 0.7,
+            0.24,
+            rng,
+        );
+        mutate_weight_vector(
+            &mut node.brain.effector_y.global_weights,
+            local_chance * 0.7,
+            0.24,
+            rng,
+        );
+        mutate_weight_vector(
+            &mut node.brain.effector_z.global_weights,
+            local_chance * 0.7,
+            0.24,
+            rng,
+        );
+        if rng.random::<f32>() < local_chance * 0.25 {
+            node.brain.effector_x.bias += rand_normal(rng) * 0.16;
+            node.brain.effector_y.bias += rand_normal(rng) * 0.16;
+            node.brain.effector_z.bias += rand_normal(rng) * 0.16;
+        }
+        if rng.random::<f32>() < local_chance * 0.25 {
+            node.brain.effector_x.gain = clamp(
+                node.brain.effector_x.gain + rand_normal(rng) * 0.12,
+                0.2,
+                2.0,
+            );
+            node.brain.effector_y.gain = clamp(
+                node.brain.effector_y.gain + rand_normal(rng) * 0.12,
+                0.2,
+                2.0,
+            );
+            node.brain.effector_z.gain = clamp(
+                node.brain.effector_z.gain + rand_normal(rng) * 0.12,
+                0.2,
+                2.0,
+            );
+        }
+        for edge in &mut node.edges {
+            edge.anchor_x = mutate_number(edge.anchor_x, -0.98, 0.98, local_chance, 0.18, rng);
+            edge.anchor_y = mutate_number(edge.anchor_y, -0.98, 0.98, local_chance, 0.18, rng);
+            edge.anchor_z = mutate_number(edge.anchor_z, -0.98, 0.98, local_chance, 0.18, rng);
+            edge.axis_y = mutate_number(edge.axis_y, -0.75, 0.75, local_chance, 0.18, rng);
+            edge.axis_z = mutate_number(edge.axis_z, -0.75, 0.75, local_chance, 0.18, rng);
+            edge.dir_x = mutate_number(edge.dir_x, -1.4, 1.4, local_chance, 0.2, rng);
+            edge.dir_y = mutate_number(edge.dir_y, -1.4, 1.0, local_chance, 0.2, rng);
+            edge.dir_z = mutate_number(edge.dir_z, -1.4, 1.4, local_chance, 0.2, rng);
+            edge.scale = mutate_number(edge.scale, 0.3, 1.8, local_chance, 0.16, rng);
+            edge.limit_x = mutate_number(edge.limit_x, 0.12, PI * 0.95, local_chance, 0.14, rng);
+            edge.limit_y = mutate_number(edge.limit_y, 0.10, PI * 0.75, local_chance, 0.14, rng);
+            edge.limit_z = mutate_number(edge.limit_z, 0.10, PI * 0.75, local_chance, 0.14, rng);
+            edge.motor_strength =
+                mutate_number(edge.motor_strength, 0.3, 4.5, local_chance, 0.2, rng);
+            edge.joint_stiffness =
+                mutate_number(edge.joint_stiffness, 12.0, 160.0, local_chance, 0.16, rng);
+            if rng.random::<f32>() < local_chance * 0.18 {
+                edge.reflect_x = !edge.reflect_x;
+            }
+            if rng.random::<f32>() < local_chance * 0.12 {
+                edge.terminal_only = !edge.terminal_only;
+            }
+            if rng.random::<f32>() < local_chance * 0.16 {
+                edge.joint_type = match edge.joint_type {
+                    JointTypeGene::Hinge => JointTypeGene::Ball,
+                    JointTypeGene::Ball => JointTypeGene::Hinge,
+                };
+            }
+            if rng.random::<f32>() < local_chance * 0.15 {
+                let delta = if rng.random::<f32>() < 0.5 {
+                    -1i32
+                } else {
+                    1i32
+                };
+                edge.recursive_limit = (edge.recursive_limit as i32 + delta).clamp(1, 5) as u32;
+            }
+            if rng.random::<f32>() < local_chance * 0.2 {
+                edge.to = rng.random_range(0..node_len);
+            }
+        }
+        if node.edges.len() < MAX_GRAPH_EDGES_PER_NODE && rng.random::<f32>() < local_chance * 0.32
+        {
+            let to = rng.random_range(0..node_len);
+            node.edges.push(random_graph_edge_gene(rng, to));
+        }
+        if node.edges.len() > 1 && rng.random::<f32>() < local_chance * 0.18 {
+            let remove = rng.random_range(0..node.edges.len());
+            node.edges.remove(remove);
+        }
+    }
+    ensure_graph_valid(graph, rng);
+}
+
+fn graft_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> GraphGene {
+    let mut child = a.clone();
+    if child.nodes.is_empty() {
+        return b.clone();
+    }
+    if b.nodes.is_empty() {
+        return child;
+    }
+    let replace_index = rng.random_range(0..child.nodes.len());
+    let donor_index = rng.random_range(0..b.nodes.len());
+    child.nodes[replace_index] = b.nodes[donor_index].clone();
+    if rng.random::<f32>() < 0.5 {
+        child.global_brain = b.global_brain.clone();
+    }
+    child.max_parts = ((child.max_parts + b.max_parts) / 2).clamp(6, MAX_GRAPH_PARTS);
+    ensure_graph_valid(&mut child, rng);
+    child
+}
+
+fn project_graph_to_legacy(genome: &mut Genome) {
+    if genome.graph.nodes.is_empty() {
+        return;
+    }
+    let root_index = genome
+        .graph
+        .root
+        .min(genome.graph.nodes.len().saturating_sub(1));
+    let root = &genome.graph.nodes[root_index];
+    genome.torso.w = root.part.w;
+    genome.torso.h = root.part.h;
+    genome.torso.d = root.part.d;
+    genome.torso.mass = root.part.mass;
+    let mut limbs = vec![disabled_limb_template(); MAX_LIMBS];
+    for (limb_index, edge) in root.edges.iter().take(MAX_LIMBS).enumerate() {
+        let node = genome
+            .graph
+            .nodes
+            .get(edge.to.min(genome.graph.nodes.len().saturating_sub(1)))
+            .cloned()
+            .unwrap_or_else(default_graph_node_gene);
+        let mut limb = disabled_limb_template();
+        limb.enabled = true;
+        limb.segment_count = 1;
+        limb.anchor_x = edge.anchor_x * root.part.w * 0.5;
+        limb.anchor_y = edge.anchor_y * root.part.h * 0.5;
+        limb.anchor_z = edge.anchor_z * root.part.d * 0.5;
+        limb.axis_y = edge.axis_y;
+        limb.axis_z = edge.axis_z;
+        limb.dir_x = edge.dir_x;
+        limb.dir_y = edge.dir_y;
+        limb.dir_z = edge.dir_z;
+        if let Some(segment) = limb.segments.get_mut(0) {
+            segment.length = node.part.h;
+            segment.thickness = (node.part.w + node.part.d) * 0.25;
+            segment.mass = node.part.mass;
+            segment.limit_x = edge.limit_x;
+            segment.limit_y = edge.limit_y;
+            segment.limit_z = edge.limit_z;
+            segment.joint_type = edge.joint_type;
+            segment.motor_strength = edge.motor_strength;
+            segment.joint_stiffness = edge.joint_stiffness;
+        }
+        limbs[limb_index] = limb;
+    }
+    genome.limbs = limbs;
+}
+
+fn graft_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
+    let mut child = a.clone();
+    child.version = default_genome_version();
+    child.graph = graft_graph_gene(&a.graph, &b.graph, rng);
+    child.mass_scale = lerp(a.mass_scale, b.mass_scale, rng.random::<f32>());
+    child.hue = if rng.random::<f32>() < 0.5 {
+        a.hue
+    } else {
+        b.hue
+    };
+    project_graph_to_legacy(&mut child);
+    ensure_active_body_plan(&mut child, rng);
+    child
 }
 
 fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
@@ -6427,6 +7780,9 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
         b.hue
     };
     child.mass_scale = lerp(a.mass_scale, b.mass_scale, rng.random::<f32>());
+    child.version = default_genome_version();
+    child.graph = crossover_graph_gene(&a.graph, &b.graph, rng);
+    project_graph_to_legacy(&mut child);
     ensure_active_body_plan(&mut child, rng);
     child
 }
@@ -6554,6 +7910,9 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
     if rng.random::<f32>() < chance {
         genome.mass_scale = mutate_number(genome.mass_scale, 0.7, 1.36, 1.0, 0.18, rng);
     }
+    genome.version = default_genome_version();
+    mutate_graph_gene(&mut genome.graph, chance, rng);
+    project_graph_to_legacy(&mut genome);
     ensure_active_body_plan(&mut genome, rng);
     genome
 }
@@ -6662,6 +8021,26 @@ fn wrap_phase(phase: f32) -> f32 {
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
+}
+
+fn dot_weights(weights: &[f32], values: &[f32]) -> f32 {
+    let mut sum = 0.0;
+    for (w, v) in weights.iter().zip(values.iter()) {
+        sum += *w * *v;
+    }
+    sum
+}
+
+fn apply_neural_activation(kind: NeuralActivationGene, value: f32) -> f32 {
+    match kind {
+        NeuralActivationGene::Tanh => value.tanh(),
+        NeuralActivationGene::Sigmoid => 2.0 / (1.0 + (-value).exp()) - 1.0,
+        NeuralActivationGene::Sin => value.sin(),
+        NeuralActivationGene::Cos => value.cos(),
+        NeuralActivationGene::Identity => value,
+        NeuralActivationGene::Relu => value.max(0.0),
+        NeuralActivationGene::Softsign => value / (1.0 + value.abs()),
+    }
 }
 
 fn internal_err(message: String) -> (StatusCode, String) {
@@ -6787,6 +8166,7 @@ enum SatelliteMessage {
         duration_seconds: f32,
         dt: f32,
         motor_power_scale: f32,
+        fixed_startup: bool,
     },
     TrialResult {
         trial_id: u64,
@@ -6911,6 +8291,7 @@ impl SatellitePool {
                     duration_seconds: config.duration_seconds,
                     dt: config.dt,
                     motor_power_scale: config.motor_power_scale,
+                    fixed_startup: config.fixed_startup,
                 };
                 if conn.tx.send(msg).is_ok() {
                     conn.available_slots -= 1;
@@ -7176,6 +8557,7 @@ async fn run_satellite_session(
                                 duration_seconds,
                                 dt,
                                 motor_power_scale,
+                                fixed_startup,
                             }) => {
                                 let jobs = active_jobs.load(Ordering::Relaxed);
                                 if jobs >= worker_limit {
@@ -7197,6 +8579,7 @@ async fn run_satellite_session(
                                         dt,
                                         snapshot_hz: 0.0, // no snapshots needed
                                         motor_power_scale: motor_power_scale.clamp(0.35, 1.5),
+                                        fixed_startup,
                                     };
                                     let result = run_satellite_trial(trial_id, &genome, seed, &config);
                                     let _ = result_tx.blocking_send(result);
@@ -7327,6 +8710,112 @@ fn normalized_dir(x: f32, y: f32, z: f32) -> Vector3<f32> {
     dir.try_normalize(1e-6).unwrap_or(vector![0.0, -1.0, 0.0])
 }
 
+fn default_genome_version() -> u32 {
+    2
+}
+
+fn default_graph_max_parts() -> usize {
+    32
+}
+
+fn default_neural_activation() -> NeuralActivationGene {
+    NeuralActivationGene::Tanh
+}
+
+fn default_neural_leak() -> f32 {
+    0.32
+}
+
+fn default_effector_gain() -> f32 {
+    1.0
+}
+
+fn default_joint_effector_gene() -> JointEffectorGene {
+    JointEffectorGene {
+        local_weights: vec![0.0; MIN_LOCAL_NEURONS],
+        global_weights: vec![0.0; MIN_GLOBAL_NEURONS],
+        bias: 0.0,
+        gain: 1.0,
+    }
+}
+
+fn default_local_brain_gene() -> LocalBrainGene {
+    let neurons = (0..MIN_LOCAL_NEURONS)
+        .map(|_| NeuralUnitGene {
+            activation: default_neural_activation(),
+            input_weights: vec![0.0; LOCAL_SENSOR_DIM],
+            recurrent_weights: vec![0.0; MIN_LOCAL_NEURONS],
+            global_weights: vec![0.0; MIN_GLOBAL_NEURONS],
+            bias: 0.0,
+            leak: default_neural_leak(),
+        })
+        .collect::<Vec<_>>();
+    LocalBrainGene {
+        neurons,
+        effector_x: default_joint_effector_gene(),
+        effector_y: default_joint_effector_gene(),
+        effector_z: default_joint_effector_gene(),
+    }
+}
+
+fn default_global_brain_gene() -> GlobalBrainGene {
+    let neurons = (0..MIN_GLOBAL_NEURONS)
+        .map(|_| NeuralUnitGene {
+            activation: default_neural_activation(),
+            input_weights: vec![0.0; GLOBAL_SENSOR_DIM],
+            recurrent_weights: vec![0.0; MIN_GLOBAL_NEURONS],
+            global_weights: Vec::new(),
+            bias: 0.0,
+            leak: default_neural_leak(),
+        })
+        .collect::<Vec<_>>();
+    GlobalBrainGene { neurons }
+}
+
+fn default_graph_node_gene() -> MorphNodeGene {
+    MorphNodeGene {
+        part: GraphPartGene {
+            w: 0.7,
+            h: 1.0,
+            d: 0.7,
+            mass: 0.8,
+        },
+        edges: Vec::new(),
+        brain: default_local_brain_gene(),
+    }
+}
+
+fn default_graph_gene() -> GraphGene {
+    let mut node = default_graph_node_gene();
+    node.edges.push(MorphEdgeGene {
+        to: 0,
+        anchor_x: 0.0,
+        anchor_y: -0.48,
+        anchor_z: 0.0,
+        axis_y: 0.0,
+        axis_z: 0.0,
+        dir_x: 0.0,
+        dir_y: -1.0,
+        dir_z: 0.0,
+        scale: 1.0,
+        reflect_x: false,
+        recursive_limit: 2,
+        terminal_only: false,
+        joint_type: JointTypeGene::Hinge,
+        limit_x: 1.2,
+        limit_y: 0.9,
+        limit_z: 0.9,
+        motor_strength: 1.0,
+        joint_stiffness: 48.0,
+    });
+    GraphGene {
+        root: 0,
+        nodes: vec![node],
+        global_brain: default_global_brain_gene(),
+        max_parts: default_graph_max_parts(),
+    }
+}
+
 fn default_limb_dir_x() -> f32 {
     0.0
 }
@@ -7391,6 +8880,38 @@ fn default_run_speed() -> f32 {
     1.0
 }
 
+fn default_min_population_size() -> usize {
+    MIN_POPULATION_SIZE
+}
+
+fn default_max_population_size() -> usize {
+    MAX_POPULATION_SIZE
+}
+
+fn default_population_size() -> usize {
+    DEFAULT_POPULATION_SIZE
+}
+
+fn default_trials_per_candidate() -> usize {
+    TRIALS_PER_CANDIDATE
+}
+
+fn default_max_trial_count() -> usize {
+    TRIALS_PER_CANDIDATE
+}
+
+fn default_generation_seconds() -> f32 {
+    DEFAULT_GENERATION_SECONDS
+}
+
+fn default_min_run_speed() -> f32 {
+    0.5
+}
+
+fn default_max_run_speed() -> f32 {
+    8.0
+}
+
 fn rng_range(rng: &mut SmallRng, min: f32, max: f32) -> f32 {
     min + rng.random::<f32>() * (max - min)
 }
@@ -7413,13 +8934,4 @@ fn quantile(values: &[f32], q: f32) -> f32 {
     let upper = t.ceil() as usize;
     let frac = t - lower as f32;
     sorted[lower] + (sorted[upper] - sorted[lower]) * frac
-}
-
-fn annealing_progress(generation: usize) -> f32 {
-    let generation_f = generation.max(1) as f32;
-    clamp(
-        1.0 - (-generation_f / ANNEALING_TIME_CONSTANT_GENERATIONS).exp(),
-        0.0,
-        1.0,
-    )
 }
