@@ -103,6 +103,14 @@ const FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS: f32 = 0.45;
 const FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS: f32 = 1.8;
 const FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX: f32 = 0.65;
 const FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX: f32 = 1.45;
+const TRAIN_TRIAL_SEED_BANK_TAG: u32 = 0x9e37_79b9;
+const HOLDOUT_TRIAL_SEED_BANK_TAG: u32 = 0x7f4a_7c15;
+const HOLDOUT_TRIALS_PER_CANDIDATE: usize = 5;
+const TRIAL_DIVERGENCE_PENALTY_WEIGHT: f32 = 0.22;
+const TRIAL_DIVERGENCE_PENALTY_FLOOR: f32 = 0.68;
+const ANNEALING_TIME_CONSTANT_GENERATIONS: f32 = 140.0;
+const MUTATION_RATE_FINAL_FLOOR: f32 = 0.06;
+const MUTATION_RATE_FINAL_CEILING: f32 = 0.42;
 const ENV_EVOLUTION_MORPHOLOGY_MODE: &str = "EVOLUTION_MORPHOLOGY_MODE";
 const ENV_EVOLUTION_MORPHOLOGY_PRESET: &str = "EVOLUTION_MORPHOLOGY_PRESET";
 static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui");
@@ -122,6 +130,12 @@ struct SegmentGene {
     length: f32,
     thickness: f32,
     mass: f32,
+    #[serde(default = "default_joint_limit_x")]
+    limit_x: f32,
+    #[serde(default = "default_joint_limit_y")]
+    limit_y: f32,
+    #[serde(default = "default_joint_limit_z")]
+    limit_z: f32,
     #[serde(default = "default_joint_type")]
     joint_type: JointTypeGene,
     #[serde(default = "default_motor_strength")]
@@ -144,6 +158,10 @@ struct ControlGene {
     freq: f32,
     phase: f32,
     bias: f32,
+    #[serde(default = "default_second_harmonic_amp")]
+    harm2_amp: f32,
+    #[serde(default = "default_second_harmonic_phase")]
+    harm2_phase: f32,
     #[serde(default = "default_secondary_control_amp")]
     amp_y: f32,
     #[serde(default = "default_secondary_control_freq")]
@@ -164,7 +182,10 @@ struct ControlGene {
 
 impl ControlGene {
     fn signal_x(&self, sim_time: f32) -> f32 {
-        self.bias + self.amp * (self.freq * sim_time + self.phase).sin()
+        let theta = self.freq * sim_time + self.phase;
+        self.bias
+            + self.amp * theta.sin()
+            + self.harm2_amp * (2.0 * theta + self.harm2_phase).sin()
     }
 
     fn signal_y(&self, sim_time: f32) -> f32 {
@@ -784,9 +805,9 @@ impl TrialSimulator {
                 }
                 let local_anchor2 = point![0.0, segment_gene.length * 0.5, 0.0];
 
-                let limit_x = if seg_index == 0 { 1.57 } else { 2.09 };
-                let limit_y = if seg_index == 0 { 1.08 } else { 1.22 };
-                let limit_z = if seg_index == 0 { 1.08 } else { 1.22 };
+                let limit_x = clamp(segment_gene.limit_x, 0.12, PI * 0.95);
+                let limit_y = clamp(segment_gene.limit_y, 0.10, PI * 0.75);
+                let limit_z = clamp(segment_gene.limit_z, 0.10, PI * 0.75);
                 let torque_x = if seg_index == 0 {
                     MOTOR_TORQUE_HIP
                 } else {
@@ -1180,6 +1201,16 @@ enum MorphologyPreset {
     Spider4x2,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PresetConstraintProfile {
+    lock_topology: bool,
+    lock_joint_types: bool,
+    lock_joint_limits: bool,
+    lock_segment_dynamics: bool,
+    lock_controls: bool,
+    lock_visual_hue: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum InjectMutationMode {
@@ -1305,6 +1336,14 @@ struct GenerationBreedingStats {
     random_inject_chance: f32,
     injected_genomes: usize,
     elite_kept: usize,
+    #[serde(default)]
+    holdout_best_fitness: f32,
+    #[serde(default)]
+    holdout_gap: f32,
+    #[serde(default)]
+    anneal_factor: f32,
+    #[serde(default)]
+    elite_consistency: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2167,6 +2206,8 @@ fn start_evolution_worker(
         let mut batch_results: Vec<EvolutionCandidate> = Vec::new();
         let mut attempt_trials: Vec<Vec<TrialResult>> = Vec::new();
         let mut trial_seeds: Vec<u64> = Vec::new();
+        let holdout_trial_seeds =
+            build_holdout_trial_seed_set(HOLDOUT_TRIALS_PER_CANDIDATE);
         let mut current_attempt_index = 0usize;
         let mut current_trial_index = 0usize;
 
@@ -2188,6 +2229,9 @@ fn start_evolution_worker(
                 batch_results = loaded.batch_results.clone();
                 attempt_trials = loaded.attempt_trials.clone();
                 trial_seeds = loaded.trial_seeds.clone();
+                if trial_seeds.len() != TRIALS_PER_CANDIDATE {
+                    trial_seeds = build_trial_seed_set(generation, TRIALS_PER_CANDIDATE);
+                }
                 current_attempt_index = loaded.current_attempt_index.min(batch_genomes.len());
                 current_trial_index = loaded
                     .current_trial_index
@@ -2397,6 +2441,7 @@ fn start_evolution_worker(
                 {
                     controller.emit_generation_summary(summary);
                 }
+                let performance_history = controller.snapshot_performance_history();
                 let performance = finalize_generation(
                     &mut rng,
                     &mut batch_genomes,
@@ -2412,6 +2457,9 @@ fn start_evolution_worker(
                     &mut best_genome,
                     pending_population_size,
                     injected_genomes,
+                    &holdout_trial_seeds,
+                    &config,
+                    &performance_history,
                     morphology_mode,
                     morphology_preset,
                 );
@@ -2561,6 +2609,7 @@ fn start_evolution_worker(
                             morphology_mode,
                             morphology_preset,
                         );
+                        let performance_history = controller.snapshot_performance_history();
                         let performance = finalize_generation(
                             &mut rng,
                             &mut batch_genomes,
@@ -2576,6 +2625,9 @@ fn start_evolution_worker(
                             &mut best_genome,
                             pending_population_size,
                             injected_genomes,
+                            &holdout_trial_seeds,
+                            &config,
+                            &performance_history,
                             morphology_mode,
                             morphology_preset,
                         );
@@ -2630,7 +2682,11 @@ fn start_evolution_worker(
                 .get(current_trial_index)
                 .copied()
                 .unwrap_or_else(|| {
-                    hash_uint32(generation as u32, current_trial_index as u32, 0x9e3779b9) as u64
+                    hash_uint32(
+                        TRAIN_TRIAL_SEED_BANK_TAG,
+                        (current_trial_index + 1) as u32,
+                        0x85eb_ca6b,
+                    ) as u64
                 });
             let mut sim = match TrialSimulator::new(&genome, seed, &config) {
                 Ok(sim) => sim,
@@ -2925,6 +2981,10 @@ fn build_generation_performance_summary(
     random_inject_chance: f32,
     injected_genomes: usize,
     elite_kept: usize,
+    holdout_best_fitness: f32,
+    holdout_gap: f32,
+    anneal_factor: f32,
+    elite_consistency: f32,
 ) -> Option<GenerationPerformanceSummary> {
     if batch_results.is_empty() {
         return None;
@@ -2981,6 +3041,10 @@ fn build_generation_performance_summary(
             random_inject_chance,
             injected_genomes,
             elite_kept,
+            holdout_best_fitness,
+            holdout_gap,
+            anneal_factor,
+            elite_consistency,
         },
     })
 }
@@ -3037,6 +3101,9 @@ fn finalize_generation(
     best_genome: &mut Option<Genome>,
     pending_population_size: usize,
     injected_genomes: Vec<Genome>,
+    holdout_trial_seeds: &[u64],
+    config: &TrialConfig,
+    performance_history: &[GenerationPerformanceSummary],
     morphology_mode: EvolutionMorphologyMode,
     morphology_preset: MorphologyPreset,
 ) -> Option<GenerationPerformanceSummary> {
@@ -3062,6 +3129,21 @@ fn finalize_generation(
         *best_ever_score = top.fitness;
         *best_genome = Some(top.genome.clone());
     }
+    let train_best_fitness = finite_or_zero(top.fitness);
+    let holdout_best_fitness = if holdout_trial_seeds.is_empty() {
+        train_best_fitness
+    } else {
+        match evaluate_generation_attempt(0, &top.genome, holdout_trial_seeds, config, |_| Ok(()))
+        {
+            Ok(result) => finite_or_zero(result.fitness),
+            Err(err) => {
+                warn!("holdout evaluation failed: {err}");
+                train_best_fitness
+            }
+        }
+    };
+    let holdout_gap = (train_best_fitness - holdout_best_fitness).max(0.0);
+    let holdout_gap_norm = holdout_gap / train_best_fitness.abs().max(1.0);
 
     let target_population_size =
         pending_population_size.clamp(MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
@@ -3105,18 +3187,54 @@ fn finalize_generation(
             .sum::<f32>()
             / ranked_for_breeding.len() as f32
     };
+    let elite_fitnesses: Vec<f32> = ranked_by_fitness
+        .iter()
+        .take(ranked_by_fitness.len().min(8))
+        .map(|candidate| finite_or_zero(candidate.fitness))
+        .collect();
+    let elite_consistency = if elite_fitnesses.len() < 2 {
+        1.0
+    } else {
+        let elite_std = std_dev(&elite_fitnesses);
+        let elite_scale = quantile(&elite_fitnesses, 0.5).abs().max(1.0);
+        clamp(1.0 - elite_std / elite_scale, 0.0, 1.0)
+    };
+    let stagnation_pressure =
+        clamp(stagnation_generations(performance_history) as f32 / 24.0, 0.0, 1.0);
+    let anneal_factor = clamp(
+        annealing_progress(*generation) * elite_consistency * (1.0 - 0.35 * stagnation_pressure),
+        0.0,
+        1.0,
+    );
     let base_mutation_rate = if ranked_for_breeding.len() == 1 {
         0.65
     } else {
         0.24
     };
-    let mutation_rate = clamp(
-        base_mutation_rate + (1.0 - mean_novelty_norm) * 0.08,
+    let raw_mutation_rate = base_mutation_rate
+        + (1.0 - mean_novelty_norm) * 0.08
+        + stagnation_pressure * 0.08
+        + holdout_gap_norm * 0.08;
+    let min_mutation_rate = lerp(
         MIN_BREEDING_MUTATION_RATE,
-        MAX_BREEDING_MUTATION_RATE,
+        MUTATION_RATE_FINAL_FLOOR,
+        anneal_factor,
     );
+    let max_mutation_rate = lerp(
+        MAX_BREEDING_MUTATION_RATE,
+        MUTATION_RATE_FINAL_CEILING,
+        anneal_factor,
+    )
+    .max(min_mutation_rate + 0.01);
+    let mutation_rate = clamp(raw_mutation_rate, min_mutation_rate, max_mutation_rate);
     let random_inject_chance = if ranked_for_breeding.len() > 1 {
-        0.04 + (1.0 - mean_novelty_norm) * 0.04
+        clamp(
+            (0.04 + (1.0 - mean_novelty_norm) * 0.04) * lerp(1.0, 0.35, anneal_factor)
+                + stagnation_pressure * 0.015
+                + holdout_gap_norm * 0.01,
+            0.0,
+            0.25,
+        )
     } else {
         0.0
     };
@@ -3152,6 +3270,10 @@ fn finalize_generation(
         random_inject_chance,
         injected_used,
         elite_kept,
+        holdout_best_fitness,
+        holdout_gap,
+        anneal_factor,
+        elite_consistency,
     );
 
     *generation += 1;
@@ -3934,6 +4056,9 @@ fn topology_fingerprint(genome: &Genome) -> String {
                 quantize_to_bucket(segment.thickness, 0.05) as u64,
             );
             stable_hash_mix(&mut hash, quantize_to_bucket(segment.mass, 0.05) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(segment.limit_x, 0.05) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(segment.limit_y, 0.05) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(segment.limit_z, 0.05) as u64);
             stable_hash_mix(
                 &mut hash,
                 match segment.joint_type {
@@ -3952,6 +4077,8 @@ fn topology_fingerprint(genome: &Genome) -> String {
             stable_hash_mix(&mut hash, quantize_to_bucket(control.freq, 0.05) as u64);
             stable_hash_mix(&mut hash, quantize_to_bucket(control.phase, 0.1) as u64);
             stable_hash_mix(&mut hash, quantize_to_bucket(control.bias, 0.1) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(control.harm2_amp, 0.1) as u64);
+            stable_hash_mix(&mut hash, quantize_to_bucket(control.harm2_phase, 0.1) as u64);
             if matches!(joint_type, JointTypeGene::Ball) {
                 stable_hash_mix(&mut hash, quantize_to_bucket(control.amp_y, 0.1) as u64);
                 stable_hash_mix(&mut hash, quantize_to_bucket(control.freq_y, 0.05) as u64);
@@ -4147,8 +4274,8 @@ fn feature_control_amp_mean(genome: &Genome) -> f32 {
     let mut count = 0usize;
     let mut total = 0.0f32;
     for_each_active_control(genome, |control, joint_type| {
-        total += control.amp;
-        count += 1;
+        total += control.amp + control.harm2_amp;
+        count += 2;
         if matches!(joint_type, JointTypeGene::Ball) {
             total += control.amp_y + control.amp_z;
             count += 2;
@@ -5187,6 +5314,18 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         .collect();
 
     let robust_quality = 0.7 * quantile(&qualities, 0.5) + 0.3 * quantile(&qualities, 0.25);
+    let consistency_gate = if qualities.len() < 2 {
+        1.0
+    } else {
+        let quality_std = std_dev(&qualities);
+        let quality_scale = quantile(&qualities, 0.5).abs().max(1.0);
+        let divergence_ratio = quality_std / quality_scale;
+        clamp(
+            1.0 - divergence_ratio * TRIAL_DIVERGENCE_PENALTY_WEIGHT,
+            TRIAL_DIVERGENCE_PENALTY_FLOOR,
+            1.0,
+        )
+    };
     let median_progress = quantile(&progresses, 0.5);
     let median_upright = quantile(&uprights, 0.5);
     let median_straightness = quantile(&straightnesses, 0.5);
@@ -5215,7 +5354,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     ];
 
     GenerationEvalResult {
-        fitness: robust_quality.max(0.0),
+        fitness: (robust_quality * consistency_gate).max(0.0),
         descriptor,
         trial_count: trials.len(),
         median_progress,
@@ -5537,8 +5676,17 @@ fn tournament_select<'a>(
 }
 
 fn build_trial_seed_set(generation_index: usize, count: usize) -> Vec<u64> {
+    let _ = generation_index;
+    build_seed_bank(TRAIN_TRIAL_SEED_BANK_TAG, count)
+}
+
+fn build_holdout_trial_seed_set(count: usize) -> Vec<u64> {
+    build_seed_bank(HOLDOUT_TRIAL_SEED_BANK_TAG, count)
+}
+
+fn build_seed_bank(tag: u32, count: usize) -> Vec<u64> {
     (0..count)
-        .map(|i| hash_uint32(generation_index as u32, (i + 1) as u32, 0x9e3779b9) as u64)
+        .map(|i| hash_uint32(tag, (i + 1) as u32, 0x85eb_ca6b) as u64)
         .collect()
 }
 
@@ -5725,8 +5873,26 @@ fn constrain_genome_to_morphology_preset(
     rng: &mut SmallRng,
 ) -> Genome {
     let mut constrained = morphology_preset_template_genome(preset);
-    constrained.hue = source.hue;
-    copy_control_genes(&source, &mut constrained);
+    let profile = morphology_preset_constraint_profile(preset);
+
+    if !profile.lock_topology {
+        copy_topology_genes(&source, &mut constrained);
+    }
+    if !profile.lock_joint_types {
+        copy_joint_type_genes(&source, &mut constrained);
+    }
+    if !profile.lock_joint_limits {
+        copy_joint_limit_genes(&source, &mut constrained);
+    }
+    if !profile.lock_segment_dynamics {
+        copy_segment_dynamics_genes(&source, &mut constrained);
+    }
+    if !profile.lock_controls {
+        copy_control_genes(&source, &mut constrained);
+    }
+    if !profile.lock_visual_hue {
+        constrained.hue = source.hue;
+    }
     ensure_active_body_plan(&mut constrained, rng);
     constrained
 }
@@ -5734,6 +5900,92 @@ fn constrain_genome_to_morphology_preset(
 fn morphology_preset_template_genome(preset: MorphologyPreset) -> Genome {
     match preset {
         MorphologyPreset::Spider4x2 => spider4x2_template_genome(),
+    }
+}
+
+fn morphology_preset_constraint_profile(preset: MorphologyPreset) -> PresetConstraintProfile {
+    match preset {
+        MorphologyPreset::Spider4x2 => PresetConstraintProfile {
+            lock_topology: true,
+            lock_joint_types: true,
+            lock_joint_limits: false,
+            lock_segment_dynamics: true,
+            lock_controls: false,
+            lock_visual_hue: false,
+        },
+    }
+}
+
+fn copy_topology_genes(source: &Genome, target: &mut Genome) {
+    target.torso = source.torso.clone();
+    target.mass_scale = source.mass_scale;
+    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
+        let Some(source_limb) = source.limbs.get(limb_index) else {
+            continue;
+        };
+        target_limb.enabled = source_limb.enabled;
+        target_limb.segment_count = source_limb.segment_count;
+        target_limb.anchor_x = source_limb.anchor_x;
+        target_limb.anchor_y = source_limb.anchor_y;
+        target_limb.anchor_z = source_limb.anchor_z;
+        target_limb.axis_y = source_limb.axis_y;
+        target_limb.axis_z = source_limb.axis_z;
+        target_limb.dir_x = source_limb.dir_x;
+        target_limb.dir_y = source_limb.dir_y;
+        target_limb.dir_z = source_limb.dir_z;
+        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
+            let Some(source_segment) = source_limb.segments.get(segment_index) else {
+                continue;
+            };
+            target_segment.length = source_segment.length;
+            target_segment.thickness = source_segment.thickness;
+            target_segment.mass = source_segment.mass;
+        }
+    }
+}
+
+fn copy_joint_type_genes(source: &Genome, target: &mut Genome) {
+    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
+        let Some(source_limb) = source.limbs.get(limb_index) else {
+            continue;
+        };
+        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
+            let Some(source_segment) = source_limb.segments.get(segment_index) else {
+                continue;
+            };
+            target_segment.joint_type = source_segment.joint_type;
+        }
+    }
+}
+
+fn copy_joint_limit_genes(source: &Genome, target: &mut Genome) {
+    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
+        let Some(source_limb) = source.limbs.get(limb_index) else {
+            continue;
+        };
+        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
+            let Some(source_segment) = source_limb.segments.get(segment_index) else {
+                continue;
+            };
+            target_segment.limit_x = source_segment.limit_x;
+            target_segment.limit_y = source_segment.limit_y;
+            target_segment.limit_z = source_segment.limit_z;
+        }
+    }
+}
+
+fn copy_segment_dynamics_genes(source: &Genome, target: &mut Genome) {
+    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
+        let Some(source_limb) = source.limbs.get(limb_index) else {
+            continue;
+        };
+        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
+            let Some(source_segment) = source_limb.segments.get(segment_index) else {
+                continue;
+            };
+            target_segment.motor_strength = source_segment.motor_strength;
+            target_segment.joint_stiffness = source_segment.joint_stiffness;
+        }
     }
 }
 
@@ -5757,6 +6009,8 @@ fn default_control_gene() -> ControlGene {
         freq: 1.0,
         phase: 0.0,
         bias: 0.0,
+        harm2_amp: default_second_harmonic_amp(),
+        harm2_phase: default_second_harmonic_phase(),
         amp_y: default_secondary_control_amp(),
         freq_y: default_secondary_control_freq(),
         phase_y: default_secondary_control_phase(),
@@ -5843,6 +6097,9 @@ fn disabled_limb_template() -> LimbGene {
                 length: 0.9,
                 thickness: 0.2,
                 mass: 0.45,
+                limit_x: 1.57,
+                limit_y: 1.08,
+                limit_z: 1.08,
                 joint_type: JointTypeGene::Hinge,
                 motor_strength: 1.0,
                 joint_stiffness: 45.0,
@@ -5869,6 +6126,9 @@ fn spider_leg_template(
             length: 1.33,
             thickness: 0.24,
             mass: 0.8,
+            limit_x: 1.57,
+            limit_y: 1.08,
+            limit_z: 1.08,
             joint_type: JointTypeGene::Ball,
             motor_strength: 1.0,
             joint_stiffness: 48.0,
@@ -5877,6 +6137,9 @@ fn spider_leg_template(
             length: 1.33,
             thickness: 0.21,
             mass: 0.58,
+            limit_x: 2.09,
+            limit_y: 1.22,
+            limit_z: 1.22,
             joint_type: JointTypeGene::Hinge,
             motor_strength: 0.9,
             joint_stiffness: 44.0,
@@ -5887,6 +6150,9 @@ fn spider_leg_template(
             length: 0.56,
             thickness: 0.20,
             mass: 0.52,
+            limit_x: 2.09,
+            limit_y: 1.22,
+            limit_z: 1.22,
             joint_type: JointTypeGene::Hinge,
             motor_strength: 0.88,
             joint_stiffness: 40.0,
@@ -5899,6 +6165,8 @@ fn spider_leg_template(
             freq,
             phase,
             bias: 0.0,
+            harm2_amp: 0.8,
+            harm2_phase: wrap_phase(phase + PI * 0.5),
             amp_y: 2.1,
             freq_y: freq * 0.92,
             phase_y: wrap_phase(phase + PI * 0.28),
@@ -5913,6 +6181,8 @@ fn spider_leg_template(
             freq,
             phase: wrap_phase(phase + PI * 0.45),
             bias: -0.16,
+            harm2_amp: 0.45,
+            harm2_phase: wrap_phase(phase + PI * 0.8),
             amp_y: 0.0,
             freq_y: default_secondary_control_freq(),
             phase_y: default_secondary_control_phase(),
@@ -5977,30 +6247,74 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
                         length: clamp(rng_range(rng, 0.5, 2.25) * hierarchy_scale, 0.45, 2.5),
                         thickness: clamp(rng_range(rng, 0.16, 0.95) * hierarchy_scale, 0.14, 1.05),
                         mass: clamp(rng_range(rng, 0.24, 1.75) * hierarchy_scale, 0.14, 2.0),
-                        joint_type: JointTypeGene::Hinge,
+                        limit_x: if seg_index == 0 {
+                            rng_range(rng, 0.7, 1.85)
+                        } else {
+                            rng_range(rng, 1.0, 2.35)
+                        },
+                        limit_y: if seg_index == 0 {
+                            rng_range(rng, 0.45, 1.25)
+                        } else {
+                            rng_range(rng, 0.35, 1.4)
+                        },
+                        limit_z: if seg_index == 0 {
+                            rng_range(rng, 0.45, 1.25)
+                        } else {
+                            rng_range(rng, 0.35, 1.4)
+                        },
+                        joint_type: if seg_index == 0 {
+                            if rng.random::<f32>() < 0.45 {
+                                JointTypeGene::Ball
+                            } else {
+                                JointTypeGene::Hinge
+                            }
+                        } else if rng.random::<f32>() < 0.18 {
+                            JointTypeGene::Ball
+                        } else {
+                            JointTypeGene::Hinge
+                        },
                         motor_strength: rng_range(rng, 0.5, 5.0),
                         joint_stiffness: rng_range(rng, 15.0, 120.0),
                     }
                 })
                 .collect::<Vec<_>>();
             let controls = (0..MAX_SEGMENTS_PER_LIMB)
-                .map(|seg_index| ControlGene {
-                    amp: if seg_index == 0 {
-                        rng_range(rng, 1.7, 10.3)
-                    } else {
-                        rng_range(rng, 1.05, 9.1)
-                    },
-                    freq: rng_range(rng, 0.55, 4.4),
-                    phase: rng_range(rng, 0.0, PI * 2.0),
-                    bias: rng_range(rng, -1.6, 1.6),
-                    amp_y: default_secondary_control_amp(),
-                    freq_y: default_secondary_control_freq(),
-                    phase_y: default_secondary_control_phase(),
-                    bias_y: default_secondary_control_bias(),
-                    amp_z: default_secondary_control_amp(),
-                    freq_z: default_secondary_control_freq(),
-                    phase_z: default_secondary_control_phase(),
-                    bias_z: default_secondary_control_bias(),
+                .map(|seg_index| {
+                    let joint_type = segments
+                        .get(seg_index)
+                        .map(|segment| segment.joint_type)
+                        .unwrap_or(JointTypeGene::Hinge);
+                    let mut control = ControlGene {
+                        amp: if seg_index == 0 {
+                            rng_range(rng, 1.7, 10.3)
+                        } else {
+                            rng_range(rng, 1.05, 9.1)
+                        },
+                        freq: rng_range(rng, 0.55, 4.4),
+                        phase: rng_range(rng, 0.0, PI * 2.0),
+                        bias: rng_range(rng, -1.6, 1.6),
+                        harm2_amp: rng_range(rng, 0.0, 2.4),
+                        harm2_phase: rng_range(rng, 0.0, PI * 2.0),
+                        amp_y: default_secondary_control_amp(),
+                        freq_y: default_secondary_control_freq(),
+                        phase_y: default_secondary_control_phase(),
+                        bias_y: default_secondary_control_bias(),
+                        amp_z: default_secondary_control_amp(),
+                        freq_z: default_secondary_control_freq(),
+                        phase_z: default_secondary_control_phase(),
+                        bias_z: default_secondary_control_bias(),
+                    };
+                    if matches!(joint_type, JointTypeGene::Ball) {
+                        control.amp_y = rng_range(rng, 0.0, 4.4);
+                        control.freq_y = rng_range(rng, 0.55, 4.4);
+                        control.phase_y = rng_range(rng, 0.0, PI * 2.0);
+                        control.bias_y = rng_range(rng, -1.6, 1.6);
+                        control.amp_z = rng_range(rng, 0.0, 4.4);
+                        control.freq_z = rng_range(rng, 0.55, 4.4);
+                        control.phase_z = rng_range(rng, 0.0, PI * 2.0);
+                        control.bias_z = rng_range(rng, -1.6, 1.6);
+                    }
+                    control
                 })
                 .collect::<Vec<_>>();
             LimbGene {
@@ -6079,6 +6393,9 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             sg.length = lerp(sa.length, sb.length, seg_blend);
             sg.thickness = lerp(sa.thickness, sb.thickness, seg_blend);
             sg.mass = lerp(sa.mass, sb.mass, seg_blend);
+            sg.limit_x = lerp(sa.limit_x, sb.limit_x, seg_blend);
+            sg.limit_y = lerp(sa.limit_y, sb.limit_y, seg_blend);
+            sg.limit_z = lerp(sa.limit_z, sb.limit_z, seg_blend);
             sg.joint_type = if rng.random::<f32>() < 0.5 {
                 sa.joint_type
             } else {
@@ -6092,6 +6409,8 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             cg.freq = lerp(ca.freq, cb.freq, ctrl_blend);
             cg.phase = wrap_phase(lerp(ca.phase, cb.phase, ctrl_blend));
             cg.bias = lerp(ca.bias, cb.bias, ctrl_blend);
+            cg.harm2_amp = lerp(ca.harm2_amp, cb.harm2_amp, ctrl_blend);
+            cg.harm2_phase = wrap_phase(lerp(ca.harm2_phase, cb.harm2_phase, ctrl_blend));
             cg.amp_y = lerp(ca.amp_y, cb.amp_y, ctrl_blend);
             cg.freq_y = lerp(ca.freq_y, cb.freq_y, ctrl_blend);
             cg.phase_y = wrap_phase(lerp(ca.phase_y, cb.phase_y, ctrl_blend));
@@ -6169,13 +6488,22 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
             segment.length = mutate_number(segment.length, 0.4, 2.6, chance, 0.21, rng);
             segment.thickness = mutate_number(segment.thickness, 0.12, 1.1, chance, 0.24, rng);
             segment.mass = mutate_number(segment.mass, 0.1, 2.25, chance, 0.24, rng);
+            segment.limit_x = mutate_number(segment.limit_x, 0.12, PI * 0.95, chance, 0.14, rng);
+            segment.limit_y = mutate_number(segment.limit_y, 0.10, PI * 0.75, chance, 0.16, rng);
+            segment.limit_z = mutate_number(segment.limit_z, 0.10, PI * 0.75, chance, 0.16, rng);
+            if rng.random::<f32>() < chance * 0.26 {
+                segment.joint_type = match segment.joint_type {
+                    JointTypeGene::Hinge => JointTypeGene::Ball,
+                    JointTypeGene::Ball => JointTypeGene::Hinge,
+                };
+            }
             segment.motor_strength =
                 mutate_number(segment.motor_strength, 0.5, 5.0, chance, 0.2, rng);
             segment.joint_stiffness =
                 mutate_number(segment.joint_stiffness, 15.0, 120.0, chance, 0.2, rng);
         }
         for control in &mut limb.controls {
-            control.amp = mutate_number(control.amp, 0.35, 11.6, chance, 0.18, rng);
+            control.amp = mutate_number(control.amp, 0.0, 11.6, chance, 0.18, rng);
             control.freq = mutate_number(control.freq, 0.3, 4.9, chance, 0.14, rng);
             control.phase = wrap_phase(mutate_number(
                 control.phase,
@@ -6186,6 +6514,15 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
                 rng,
             ));
             control.bias = mutate_number(control.bias, -2.35, 2.35, chance, 0.16, rng);
+            control.harm2_amp = mutate_number(control.harm2_amp, 0.0, 6.5, chance, 0.18, rng);
+            control.harm2_phase = wrap_phase(mutate_number(
+                control.harm2_phase,
+                0.0,
+                PI * 2.0,
+                chance,
+                0.28,
+                rng,
+            ));
             control.amp_y = mutate_number(control.amp_y, 0.0, 11.6, chance, 0.18, rng);
             control.freq_y = mutate_number(control.freq_y, 0.3, 4.9, chance, 0.14, rng);
             control.phase_y = wrap_phase(mutate_number(
@@ -7006,6 +7343,18 @@ fn default_joint_type() -> JointTypeGene {
     JointTypeGene::Hinge
 }
 
+fn default_joint_limit_x() -> f32 {
+    1.57
+}
+
+fn default_joint_limit_y() -> f32 {
+    1.08
+}
+
+fn default_joint_limit_z() -> f32 {
+    1.08
+}
+
 fn default_motor_strength() -> f32 {
     1.0
 }
@@ -7027,6 +7376,14 @@ fn default_secondary_control_phase() -> f32 {
 }
 
 fn default_secondary_control_bias() -> f32 {
+    0.0
+}
+
+fn default_second_harmonic_amp() -> f32 {
+    0.0
+}
+
+fn default_second_harmonic_phase() -> f32 {
     0.0
 }
 
@@ -7056,4 +7413,13 @@ fn quantile(values: &[f32], q: f32) -> f32 {
     let upper = t.ceil() as usize;
     let frac = t - lower as f32;
     sorted[lower] + (sorted[upper] - sorted[lower]) * frac
+}
+
+fn annealing_progress(generation: usize) -> f32 {
+    let generation_f = generation.max(1) as f32;
+    clamp(
+        1.0 - (-generation_f / ANNEALING_TIME_CONSTANT_GENERATIONS).exp(),
+        0.0,
+        1.0,
+    )
 }
