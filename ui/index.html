@@ -355,14 +355,15 @@
     import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
     import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js";
 
-    const DEFAULT_POPULATION_SIZE = 80;
+    const DEFAULT_POPULATION_SIZE = 40;
     const MIN_POPULATION_SIZE = 1;
     const MAX_POPULATION_SIZE = 128;
     const ELITE_COUNT = 2;
     const MAX_LIMBS = 6;
     const MAX_SEGMENTS_PER_LIMB = 5;
     const GENERATION_SECONDS = 18;
-    const TRIALS_PER_CANDIDATE = 3;
+    const DEFAULT_TRIALS_PER_CANDIDATE = 5;
+    const MAX_TRIALS_PER_CANDIDATE = 16;
     const FIXED_TIME_STEP = 1 / 120;
     const MAX_FRAME_DELTA = 0.05;
     const MAX_PHYSICS_STEPS_PER_FRAME = 20;
@@ -373,7 +374,6 @@
     const FAST_BACKEND_SNAPSHOT_HZ = 12;
     const BACKEND_FAST_FORWARD_DT = FIXED_TIME_STEP;
     const FAST_FORWARD_DURATION_SECONDS = GENERATION_SECONDS;
-    const FAST_FORWARD_TRIAL_COUNT = TRIALS_PER_CANDIDATE;
     const FAST_FORWARD_REQUEST_TIMEOUT_MS = 180000;
     const MASS_DENSITY_MULTIPLIER = 1.4;
     const MAX_MOTOR_SPEED = 6.8;
@@ -413,6 +413,7 @@
     const BACKEND_EVOLUTION_GENOME_IMPORT_URL = `${BACKEND_HTTP_URL}/api/evolution/genome/import`;
     const BACKEND_EVOLUTION_CHECKPOINT_SAVE_URL = `${BACKEND_HTTP_URL}/api/evolution/checkpoint/save`;
     const BACKEND_EVOLUTION_CHECKPOINT_LOAD_URL = `${BACKEND_HTTP_URL}/api/evolution/checkpoint/load`;
+    const BACKEND_EVOLUTION_STATE_URL = `${BACKEND_HTTP_URL}/api/evolution/state`;
     const BACKEND_EVOLUTION_HISTORY_URL = `${BACKEND_HTTP_URL}/api/evolution/history`;
 
     const GROUND_GROUP = 1;
@@ -529,7 +530,7 @@
     queuedPopLabel.textContent = "none";
     fastSkipStatusLabel.textContent = "off";
     satellitesLabel.textContent = "none";
-    trialInfoLabel.textContent = `1/${TRIALS_PER_CANDIDATE}`;
+    trialInfoLabel.textContent = `1/${DEFAULT_TRIALS_PER_CANDIDATE}`;
 
     let population = [];
     let batchGenomes = [];
@@ -541,6 +542,7 @@
     let populationSize = DEFAULT_POPULATION_SIZE;
     let pendingPopulationSize = DEFAULT_POPULATION_SIZE;
     let generation = 1;
+    let trialsPerCandidate = DEFAULT_TRIALS_PER_CANDIDATE;
     let generationClock = 0;
     let simClock = 0;
     let bestEverScore = 0;
@@ -953,6 +955,22 @@
       }
     }
 
+    async function hydrateEvolutionStateFromBackend() {
+      if (!backendEnabled) return;
+      try {
+        const response = await fetch(BACKEND_EVOLUTION_STATE_URL, { method: "GET" });
+        if (!response.ok) {
+          throw new Error(`state request failed (${response.status})`);
+        }
+        const payload = await response.json();
+        if (payload && typeof payload === "object") {
+          applyEvolutionStatus(payload);
+        }
+      } catch (error) {
+        console.warn("evolution state hydrate failed", error);
+      }
+    }
+
     function connectEvolutionSocket() {
       if (evolutionSocket && (evolutionSocket.readyState === WebSocket.CONNECTING || evolutionSocket.readyState === WebSocket.OPEN)) {
         return;
@@ -1041,8 +1059,16 @@
       lastKnownGeneration = generation;
       populationSize = clamp((status.populationSize ?? status.population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
       pendingPopulationSize = clamp((status.pendingPopulationSize ?? status.pending_population_size ?? populationSize) | 0, MIN_POPULATION_SIZE, MAX_POPULATION_SIZE);
+      const nextTrialCountRaw = status.trialCount ?? status.trial_count;
+      if (Number.isFinite(nextTrialCountRaw)) {
+        trialsPerCandidate = clamp((nextTrialCountRaw | 0) || trialsPerCandidate, 1, MAX_TRIALS_PER_CANDIDATE);
+      }
       currentAttemptIndex = Math.max(0, (status.currentAttemptIndex ?? status.current_attempt_index ?? 0) | 0);
-      currentTrialIndex = Math.max(0, (status.currentTrialIndex ?? status.current_trial_index ?? 0) | 0);
+      currentTrialIndex = clamp(
+        (status.currentTrialIndex ?? status.current_trial_index ?? 0) | 0,
+        0,
+        Math.max(0, trialsPerCandidate - 1)
+      );
       bestEverScore = Number.isFinite(status.bestEverScore) ? status.bestEverScore : (Number.isFinite(status.best_ever_score) ? status.best_ever_score : bestEverScore);
       paused = Boolean(status.paused);
       const runSpeedRaw = status.runSpeed ?? status.run_speed;
@@ -1104,7 +1130,7 @@
       batchGenomes = Array.from({ length: populationSize }, () => randomGenome());
       batchResults = [];
       attemptTrialMetrics = Array.from({ length: populationSize }, () => []);
-      trialSeeds = buildTrialSeedSet(generation, TRIALS_PER_CANDIDATE);
+      trialSeeds = buildTrialSeedSet(generation, trialsPerCandidate);
       currentAttemptIndex = 0;
       currentTrialIndex = 0;
       startAttempt(currentAttemptIndex, currentTrialIndex);
@@ -1130,7 +1156,7 @@
       }
       attemptTrialMetrics[currentAttemptIndex].push(creature.getTrialSummary(GENERATION_SECONDS));
 
-      if (currentTrialIndex + 1 < TRIALS_PER_CANDIDATE) {
+      if (currentTrialIndex + 1 < trialsPerCandidate) {
         currentTrialIndex += 1;
         startAttempt(currentAttemptIndex, currentTrialIndex);
         return;
@@ -1223,7 +1249,7 @@
       batchGenomes = nextGenomes;
       batchResults = [];
       attemptTrialMetrics = Array.from({ length: populationSize }, () => []);
-      trialSeeds = buildTrialSeedSet(generation, TRIALS_PER_CANDIDATE);
+      trialSeeds = buildTrialSeedSet(generation, trialsPerCandidate);
       currentAttemptIndex = 0;
       currentTrialIndex = 0;
       if (startNextAttempt) {
@@ -1406,7 +1432,7 @@
       };
       attemptTrialMetrics[currentAttemptIndex].push(metrics);
 
-      if (currentTrialIndex + 1 < TRIALS_PER_CANDIDATE) {
+      if (currentTrialIndex + 1 < trialsPerCandidate) {
         currentTrialIndex += 1;
         startAttempt(currentAttemptIndex, currentTrialIndex);
         return;
@@ -1534,7 +1560,8 @@
           const type = msg?.type;
           if (type === "generation_started") {
             const nextTrialCount = msg.trialCount ?? msg.trial_count;
-            trialCount = clamp((nextTrialCount | 0) || trialCount, 1, TRIALS_PER_CANDIDATE);
+            trialCount = clamp((nextTrialCount | 0) || trialCount, 1, MAX_TRIALS_PER_CANDIDATE);
+            trialsPerCandidate = trialCount;
             if (options.onGenerationStarted) {
               options.onGenerationStarted({
                 attemptCount: (msg.attemptCount ?? msg.attempt_count ?? genomes.length) | 0,
@@ -1547,7 +1574,8 @@
             const attemptIndex = (msg.attemptIndex ?? msg.attempt_index ?? 0) | 0;
             const trialIndex = (msg.trialIndex ?? msg.trial_index ?? 0) | 0;
             const eventTrialCount = (msg.trialCount ?? msg.trial_count ?? trialCount) | 0;
-            trialCount = clamp(eventTrialCount || trialCount, 1, TRIALS_PER_CANDIDATE);
+            trialCount = clamp(eventTrialCount || trialCount, 1, MAX_TRIALS_PER_CANDIDATE);
+            trialsPerCandidate = trialCount;
             if (options.onAttemptTrialStarted) {
               options.onAttemptTrialStarted({
                 attemptIndex,
@@ -1620,7 +1648,7 @@
       }
       try {
         while (fastForwardGenerationsRemaining > 0) {
-          const seeds = trialSeeds.slice(0, Math.max(1, FAST_FORWARD_TRIAL_COUNT));
+          const seeds = trialSeeds.slice(0, Math.max(1, trialsPerCandidate));
           const abortController = new AbortController();
           const timeoutId = setTimeout(() => {
             abortController.abort();
@@ -1639,11 +1667,11 @@
               },
               onAttemptTrialStarted: ({ attemptIndex, trialIndex, trialCount }) => {
                 currentAttemptIndex = clamp(attemptIndex | 0, 0, Math.max(0, batchGenomes.length - 1));
-                currentTrialIndex = clamp(trialIndex | 0, 0, Math.max(0, Math.min(TRIALS_PER_CANDIDATE, trialCount | 0) - 1));
+                currentTrialIndex = clamp(trialIndex | 0, 0, Math.max(0, Math.min(trialsPerCandidate, trialCount | 0) - 1));
               },
               onAttemptComplete: ({ attemptIndex, trialCount }) => {
                 currentAttemptIndex = clamp(attemptIndex | 0, 0, Math.max(0, batchGenomes.length - 1));
-                currentTrialIndex = clamp((trialCount | 0) - 1, 0, Math.max(0, TRIALS_PER_CANDIDATE - 1));
+                currentTrialIndex = clamp((trialCount | 0) - 1, 0, Math.max(0, trialsPerCandidate - 1));
               },
             });
           } finally {
@@ -1666,7 +1694,7 @@
             localCompetition: 0,
             attempt,
             metrics: {
-              trialCount: result.trialCount || TRIALS_PER_CANDIDATE,
+              trialCount: result.trialCount || trialsPerCandidate,
               medianProgress: result.medianProgress || 0,
               medianUpright: result.medianUpright || 0,
               medianStraightness: result.medianStraightness || 0,
@@ -1719,7 +1747,7 @@
       bestEverLabel.textContent = bestEverScore.toFixed(2);
       bestNowLabel.textContent = champion ? champion.fitness.toFixed(2) : "0.00";
       championLabel.textContent = String(Math.min(currentAttemptIndex + 1, populationSize));
-      trialInfoLabel.textContent = `${Math.min(currentTrialIndex + 1, TRIALS_PER_CANDIDATE)}/${TRIALS_PER_CANDIDATE}`;
+      trialInfoLabel.textContent = `${Math.min(currentTrialIndex + 1, trialsPerCandidate)}/${trialsPerCandidate}`;
       simRateLabel.textContent = evolutionConnected
         ? `${effectiveSimSpeed.toFixed(2)}x (viewer)`
         : "0.00x (disconnected)";
@@ -3840,7 +3868,10 @@
       return p;
     }
 
-    connectEvolutionSocket();
+    void (async () => {
+      await hydrateEvolutionStateFromBackend();
+      connectEvolutionSocket();
+    })();
   </script>
 </body>
 
