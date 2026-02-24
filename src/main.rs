@@ -45,6 +45,8 @@ const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
 const MAX_MOTOR_SPEED: f32 = 6.8;
 const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
+const EMERGENCY_MAX_BODY_ANGULAR_SPEED: f32 = 80.0;
+const EMERGENCY_MAX_BODY_LINEAR_SPEED: f32 = 120.0;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
 const BALL_AXIS_TORQUE_SCALE_Y: f32 = 0.7;
 const BALL_AXIS_TORQUE_SCALE_Z: f32 = 0.7;
@@ -56,7 +58,13 @@ const AXIS_TILT_GAIN: f32 = 1.9;
 const FALLEN_HEIGHT_THRESHOLD: f32 = 0.35;
 const FITNESS_PROGRESS_MIDPOINT_FRACTION: f32 = 0.5;
 const FITNESS_PROGRESS_LATE_FRACTION: f32 = 0.85;
+const FITNESS_PROGRESS_MID_WEIGHT: f32 = 1.35;
+const FITNESS_PROGRESS_LATE_WEIGHT: f32 = 2.0;
 const SETTLE_SECONDS: f32 = 2.25;
+const PASSIVE_SETTLE_FRICTION: f32 = 0.0;
+const ACTIVE_SURFACE_FRICTION: f32 = 1.08;
+const JOINT_AREA_STRENGTH_MIN_SCALE: f32 = 0.12;
+const JOINT_AREA_STRENGTH_MAX_SCALE: f32 = 5.5;
 const GROUND_COLLISION_GROUP: Group = Group::GROUP_1;
 const CREATURE_COLLISION_GROUP: Group = Group::GROUP_2;
 const DEFAULT_BIND_HOST: &str = "0.0.0.0";
@@ -585,14 +593,9 @@ impl TrialAccumulator {
         };
         let raw_step = (raw_dx * raw_dx + raw_dz * raw_dz).sqrt();
         if raw_step.is_finite() && raw_step > 1e-6 {
-            // Keep progress physically consistent with the configured max body speed.
-            let step_cap = (MAX_BODY_LINEAR_SPEED * dt).max(1e-6);
-            let scale = (step_cap / raw_step).min(1.0);
-            let credited_dx = raw_dx * scale;
-            let credited_dz = raw_dz * scale;
-            self.net_dx += credited_dx;
-            self.net_dz += credited_dz;
-            self.path_length += (credited_dx * credited_dx + credited_dz * credited_dz).sqrt();
+            self.net_dx += raw_dx;
+            self.net_dz += raw_dz;
+            self.path_length += raw_step;
         }
 
         let current_distance = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
@@ -666,8 +669,21 @@ impl TrialAccumulator {
         } else {
             0.0
         };
+        let mid_distance = self
+            .distance_at_mid_phase
+            .unwrap_or(net_distance)
+            .clamp(0.0, net_distance);
+        let late_distance = self
+            .distance_at_late_phase
+            .unwrap_or(net_distance)
+            .clamp(mid_distance, net_distance);
+        let early_gain = mid_distance;
+        let mid_gain = (late_distance - mid_distance).max(0.0);
+        let late_gain = (net_distance - late_distance).max(0.0);
+        let sustained_progress =
+            early_gain + mid_gain * FITNESS_PROGRESS_MID_WEIGHT + late_gain * FITNESS_PROGRESS_LATE_WEIGHT;
         let progress = net_distance;
-        let quality = (progress * (1.0 - 0.3 * fallen_ratio)).max(0.0);
+        let quality = (sustained_progress * (1.0 - 0.3 * fallen_ratio)).max(0.0);
 
         TrialMetrics {
             quality,
@@ -709,6 +725,7 @@ struct TrialSimulator {
     require_settled_before_actuation: bool,
     settled_time_before_actuation: f32,
     actuation_started: bool,
+    surface_friction_is_passive: bool,
 }
 
 impl TrialSimulator {
@@ -736,7 +753,7 @@ impl TrialSimulator {
         let ground_handle = bodies.insert(RigidBodyBuilder::fixed().build());
         let ground_collider = ColliderBuilder::cuboid(420.0, 5.0, 420.0)
             .translation(vector![0.0, -5.0, 0.0])
-            .friction(1.08)
+            .friction(ACTIVE_SURFACE_FRICTION)
             .restitution(0.015)
             .collision_groups(InteractionGroups::new(
                 GROUND_COLLISION_GROUP,
@@ -798,27 +815,8 @@ impl TrialSimulator {
                 )
             };
             torso_body.set_rotation(rot, true);
-            if use_fixed_preset_startup {
-                torso_body.set_linvel(vector![0.0, 0.0, 0.0], true);
-                torso_body.set_angvel(vector![0.0, 0.0, 0.0], true);
-            } else {
-                torso_body.set_linvel(
-                    vector![
-                        rng_range(&mut rng, -0.8, 0.8),
-                        rng_range(&mut rng, -0.6, 0.3),
-                        rng_range(&mut rng, -0.8, 0.8)
-                    ],
-                    true,
-                );
-                torso_body.set_angvel(
-                    vector![
-                        rng_range(&mut rng, -1.8, 1.8),
-                        rng_range(&mut rng, -2.2, 2.2),
-                        rng_range(&mut rng, -1.8, 1.8)
-                    ],
-                    true,
-                );
-            }
+            torso_body.set_linvel(vector![0.0, 0.0, 0.0], true);
+            torso_body.set_angvel(vector![0.0, 0.0, 0.0], true);
         }
 
         let expanded_graph = Self::expand_graph(&genome.graph);
@@ -896,11 +894,13 @@ impl TrialSimulator {
             let limit_x = clamp(edge.limit_x, 0.12, PI * 0.95);
             let limit_y = clamp(edge.limit_y, 0.10, PI * 0.75);
             let limit_z = clamp(edge.limit_z, 0.10, PI * 0.75);
+            let parent_joint_area = joint_area_strength_scale(parent_size, [part_w, part_h, part_d]);
             let torque_x = MOTOR_TORQUE_HIP
                 * edge.motor_strength
                 * JOINT_MOTOR_FORCE_MULTIPLIER
-                * config.motor_power_scale;
-            let stiffness_x = edge.joint_stiffness * edge.motor_strength;
+                * config.motor_power_scale
+                * parent_joint_area;
+            let stiffness_x = edge.joint_stiffness * edge.motor_strength * parent_joint_area;
             let torque_y = torque_x * BALL_AXIS_TORQUE_SCALE_Y;
             let torque_z = torque_x * BALL_AXIS_TORQUE_SCALE_Z;
             let stiffness_y = stiffness_x * BALL_AXIS_STIFFNESS_SCALE_Y;
@@ -932,7 +932,7 @@ impl TrialSimulator {
                         );
                         joint_ref
                             .data
-                            .set_motor_max_force(JointAxis::AngX, torque_x);
+                            .set_motor_max_force(JointAxis::AngX, 0.0);
                     }
                     handle
                 }
@@ -963,7 +963,7 @@ impl TrialSimulator {
                     let handle =
                         impulse_joints.insert(parts[parent_index].body, child, joint, true);
                     if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
-                        for (axis, stiffness, torque) in [
+                        for (axis, stiffness, _torque) in [
                             (JointAxis::AngX, stiffness_x, torque_x),
                             (JointAxis::AngY, stiffness_y, torque_y),
                             (JointAxis::AngZ, stiffness_z, torque_z),
@@ -975,7 +975,7 @@ impl TrialSimulator {
                                 stiffness,
                                 JOINT_MOTOR_RESPONSE,
                             );
-                            joint_ref.data.set_motor_max_force(axis, torque);
+                            joint_ref.data.set_motor_max_force(axis, 0.0);
                         }
                     }
                     handle
@@ -1059,7 +1059,7 @@ impl TrialSimulator {
             &(),
         );
 
-        Ok(Self {
+        let mut sim = Self {
             pipeline,
             gravity,
             integration_parameters,
@@ -1085,7 +1085,10 @@ impl TrialSimulator {
             require_settled_before_actuation: use_fixed_preset_startup,
             settled_time_before_actuation: 0.0,
             actuation_started: !use_fixed_preset_startup,
-        })
+            surface_friction_is_passive: true,
+        };
+        sim.set_surface_friction(PASSIVE_SETTLE_FRICTION);
+        Ok(sim)
     }
 
     fn expand_graph(graph: &GraphGene) -> Vec<ExpandedGraphPart> {
@@ -1381,6 +1384,22 @@ impl TrialSimulator {
         }
     }
 
+    fn set_surface_friction(&mut self, friction: f32) {
+        if let Some(ground) = self.colliders.get_mut(self.ground_collider) {
+            ground.set_friction(friction);
+        }
+        for part in &self.parts {
+            let Some(body) = self.bodies.get(part.body) else {
+                continue;
+            };
+            for collider_handle in body.colliders() {
+                if let Some(collider) = self.colliders.get_mut(*collider_handle) {
+                    collider.set_friction(friction);
+                }
+            }
+        }
+    }
+
     fn joint_axis_signal(
         &self,
         effector: &JointEffectorGene,
@@ -1421,6 +1440,10 @@ impl TrialSimulator {
                 self.actuation_started = true;
             }
             can_actuate = self.actuation_started;
+        }
+        if can_actuate && self.surface_friction_is_passive {
+            self.set_surface_friction(ACTIVE_SURFACE_FRICTION);
+            self.surface_friction_is_passive = false;
         }
 
         if can_actuate {
@@ -1536,13 +1559,13 @@ impl TrialSimulator {
             if let Some(body) = self.bodies.get_mut(part.body) {
                 let av = *body.angvel();
                 let av_len = av.norm();
-                if av_len > MAX_BODY_ANGULAR_SPEED {
-                    body.set_angvel(av * (MAX_BODY_ANGULAR_SPEED / av_len), true);
+                if av_len > EMERGENCY_MAX_BODY_ANGULAR_SPEED {
+                    body.set_angvel(av * (EMERGENCY_MAX_BODY_ANGULAR_SPEED / av_len), true);
                 }
                 let lv = *body.linvel();
                 let lv_len = lv.norm();
-                if lv_len > MAX_BODY_LINEAR_SPEED {
-                    body.set_linvel(lv * (MAX_BODY_LINEAR_SPEED / lv_len), true);
+                if lv_len > EMERGENCY_MAX_BODY_LINEAR_SPEED {
+                    body.set_linvel(lv * (EMERGENCY_MAX_BODY_LINEAR_SPEED / lv_len), true);
                 }
             }
         }
@@ -8765,7 +8788,7 @@ fn insert_box_body(
     let handle = bodies.insert(body);
     let collider = ColliderBuilder::cuboid(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
         .mass(mass)
-        .friction(1.08)
+        .friction(ACTIVE_SURFACE_FRICTION)
         .restitution(0.015)
         .collision_groups(InteractionGroups::new(
             CREATURE_COLLISION_GROUP,
@@ -8782,6 +8805,23 @@ fn normalized_axis(axis_y: f32, axis_z: f32) -> Vector3<f32> {
     // substantial variation per limb from the two axis genes.
     let axis = vector![1.0, axis_y * AXIS_TILT_GAIN, axis_z * AXIS_TILT_GAIN];
     axis.try_normalize(1e-6).unwrap_or(vector![1.0, 0.0, 0.0])
+}
+
+fn max_box_cross_section(size: [f32; 3]) -> f32 {
+    let wxh = (size[0] * size[1]).abs();
+    let wxd = (size[0] * size[2]).abs();
+    let hxd = (size[1] * size[2]).abs();
+    wxh.max(wxd).max(hxd).max(1e-4)
+}
+
+fn joint_area_strength_scale(parent_size: [f32; 3], child_size: [f32; 3]) -> f32 {
+    let parent_area = max_box_cross_section(parent_size);
+    let child_area = max_box_cross_section(child_size);
+    clamp(
+        parent_area.min(child_area),
+        JOINT_AREA_STRENGTH_MIN_SCALE,
+        JOINT_AREA_STRENGTH_MAX_SCALE,
+    )
 }
 
 fn normalized_dir(x: f32, y: f32, z: f32) -> Vector3<f32> {
