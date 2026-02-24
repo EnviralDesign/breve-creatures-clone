@@ -24,6 +24,7 @@ tools/processes.json
 # Local/debug artifacts
 *.log
 *.tmp
+.tmp/
 *.7z
 error.png
 data/checkpoints/
