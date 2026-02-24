@@ -21,7 +21,7 @@ use futures::{SinkExt, StreamExt};
 use include_dir::{Dir, include_dir};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use rapier3d::na::{UnitQuaternion, Vector3, point, vector};
+use rapier3d::na::{Isometry3, Translation3, UnitQuaternion, Vector3, point, vector};
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc};
@@ -37,6 +37,10 @@ const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
 const MOTOR_TORQUE_KNEE: f32 = 68.0;
+const BALL_AXIS_TORQUE_SCALE_Y: f32 = 0.7;
+const BALL_AXIS_TORQUE_SCALE_Z: f32 = 0.7;
+const BALL_AXIS_STIFFNESS_SCALE_Y: f32 = 0.75;
+const BALL_AXIS_STIFFNESS_SCALE_Z: f32 = 0.75;
 const JOINT_MOTOR_RESPONSE: f32 = 12.0;
 const JOINT_MOTOR_FORCE_MULTIPLIER: f32 = 1.0;
 const AXIS_TILT_GAIN: f32 = 1.9;
@@ -94,7 +98,7 @@ const SUMMARY_BEST_TOPOLOGY_COUNT: usize = 5;
 const DIAG_RECENT_WINDOW: usize = 20;
 const DIAG_PLATEAU_STAGNATION_GENERATIONS: usize = 20;
 const DIAG_WATCH_STAGNATION_GENERATIONS: usize = 10;
-const FIXED_PRESET_SPAWN_HEIGHT: f32 = 2.05;
+const FIXED_PRESET_SPAWN_HEIGHT: f32 = 0.58;
 const FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS: f32 = 0.45;
 const FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS: f32 = 1.8;
 const FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX: f32 = 0.65;
@@ -118,10 +122,19 @@ struct SegmentGene {
     length: f32,
     thickness: f32,
     mass: f32,
+    #[serde(default = "default_joint_type")]
+    joint_type: JointTypeGene,
     #[serde(default = "default_motor_strength")]
     motor_strength: f32,
     #[serde(default = "default_joint_stiffness")]
     joint_stiffness: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum JointTypeGene {
+    Hinge,
+    Ball,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -131,6 +144,36 @@ struct ControlGene {
     freq: f32,
     phase: f32,
     bias: f32,
+    #[serde(default = "default_secondary_control_amp")]
+    amp_y: f32,
+    #[serde(default = "default_secondary_control_freq")]
+    freq_y: f32,
+    #[serde(default = "default_secondary_control_phase")]
+    phase_y: f32,
+    #[serde(default = "default_secondary_control_bias")]
+    bias_y: f32,
+    #[serde(default = "default_secondary_control_amp")]
+    amp_z: f32,
+    #[serde(default = "default_secondary_control_freq")]
+    freq_z: f32,
+    #[serde(default = "default_secondary_control_phase")]
+    phase_z: f32,
+    #[serde(default = "default_secondary_control_bias")]
+    bias_z: f32,
+}
+
+impl ControlGene {
+    fn signal_x(&self, sim_time: f32) -> f32 {
+        self.bias + self.amp * (self.freq * sim_time + self.phase).sin()
+    }
+
+    fn signal_y(&self, sim_time: f32) -> f32 {
+        self.bias_y + self.amp_y * (self.freq_y * sim_time + self.phase_y).sin()
+    }
+
+    fn signal_z(&self, sim_time: f32) -> f32 {
+        self.bias_z + self.amp_z * (self.freq_z * sim_time + self.phase_z).sin()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -307,10 +350,17 @@ struct SimPart {
 
 struct SimController {
     joint: ImpulseJointHandle,
+    joint_type: JointTypeGene,
     control: ControlGene,
-    torque: f32,
-    stiffness: f32,
-    limit: f32,
+    torque_x: f32,
+    stiffness_x: f32,
+    limit_x: f32,
+    torque_y: f32,
+    stiffness_y: f32,
+    limit_y: f32,
+    torque_z: f32,
+    stiffness_z: f32,
+    limit_z: f32,
 }
 
 struct TrialAccumulator {
@@ -690,12 +740,7 @@ impl TrialSimulator {
                     .controls
                     .get(seg_index)
                     .cloned()
-                    .unwrap_or(ControlGene {
-                        amp: 1.0,
-                        freq: 1.0,
-                        phase: 0.0,
-                        bias: 0.0,
-                    });
+                    .unwrap_or_else(default_control_gene);
 
                 let parent_body = bodies
                     .get(parent)
@@ -711,6 +756,10 @@ impl TrialSimulator {
                 };
                 let growth_world = parent_rotation * local_growth;
                 let center = anchor_world + growth_world * (segment_gene.length * 0.5);
+                let seg_local_rot =
+                    UnitQuaternion::rotation_between(&vector![0.0, -1.0, 0.0], &local_growth)
+                        .unwrap_or_else(UnitQuaternion::identity);
+                let child_rotation = parent_rotation * seg_local_rot;
                 let segment_mass = (segment_gene.thickness
                     * segment_gene.length
                     * segment_gene.thickness
@@ -731,56 +780,123 @@ impl TrialSimulator {
                     center,
                 );
                 if let Some(child_body) = bodies.get_mut(child) {
-                    child_body.set_rotation(parent_rotation, true);
+                    child_body.set_rotation(child_rotation, true);
                 }
-                let local_anchor2 = point![
-                    -local_growth.x * segment_gene.length * 0.5,
-                    -local_growth.y * segment_gene.length * 0.5,
-                    -local_growth.z * segment_gene.length * 0.5
-                ];
+                let local_anchor2 = point![0.0, segment_gene.length * 0.5, 0.0];
 
-                let mut joint = RevoluteJointBuilder::new(UnitVector::new_normalize(axis_local))
-                    .local_anchor1(point![
-                        pivot_from_parent.x,
-                        pivot_from_parent.y,
-                        pivot_from_parent.z
-                    ])
-                    .local_anchor2(local_anchor2)
-                    .contacts_enabled(false);
-                let limit = if seg_index == 0 { 1.57 } else { 2.09 };
-                joint = if seg_index == 0 {
-                    joint.limits([-1.57, 1.57])
-                } else {
-                    joint.limits([-2.09, 2.09])
-                };
-                let joint_handle = impulse_joints.insert(parent, child, joint, true);
-
-                let torque = if seg_index == 0 {
+                let limit_x = if seg_index == 0 { 1.57 } else { 2.09 };
+                let limit_y = if seg_index == 0 { 1.08 } else { 1.22 };
+                let limit_z = if seg_index == 0 { 1.08 } else { 1.22 };
+                let torque_x = if seg_index == 0 {
                     MOTOR_TORQUE_HIP
                 } else {
                     MOTOR_TORQUE_KNEE
                 } * segment_gene.motor_strength
                     * JOINT_MOTOR_FORCE_MULTIPLIER
                     * config.motor_power_scale;
-                let stiffness = segment_gene.joint_stiffness * segment_gene.motor_strength;
-                if let Some(joint_ref) = impulse_joints.get_mut(joint_handle, false) {
-                    joint_ref
-                        .data
-                        .set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
-                    joint_ref.data.set_motor_position(
-                        JointAxis::AngX,
-                        0.0,
-                        stiffness,
-                        JOINT_MOTOR_RESPONSE,
-                    );
-                    joint_ref.data.set_motor_max_force(JointAxis::AngX, torque);
+                let stiffness_x = segment_gene.joint_stiffness * segment_gene.motor_strength;
+                let torque_y = torque_x * BALL_AXIS_TORQUE_SCALE_Y;
+                let torque_z = torque_x * BALL_AXIS_TORQUE_SCALE_Z;
+                let stiffness_y = stiffness_x * BALL_AXIS_STIFFNESS_SCALE_Y;
+                let stiffness_z = stiffness_x * BALL_AXIS_STIFFNESS_SCALE_Z;
+
+                let joint_handle = match segment_gene.joint_type {
+                    JointTypeGene::Hinge => {
+                        let mut joint = RevoluteJointBuilder::new(UnitVector::new_normalize(
+                            axis_local,
+                        ))
+                        .local_anchor1(point![
+                            pivot_from_parent.x,
+                            pivot_from_parent.y,
+                            pivot_from_parent.z
+                        ])
+                        .local_anchor2(local_anchor2)
+                        .contacts_enabled(false);
+                        joint = joint.limits([-limit_x, limit_x]);
+                        let handle = impulse_joints.insert(parent, child, joint, true);
+                        if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
+                            joint_ref
+                                .data
+                                .set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
+                            joint_ref.data.set_motor_position(
+                                JointAxis::AngX,
+                                0.0,
+                                stiffness_x,
+                                JOINT_MOTOR_RESPONSE,
+                            );
+                            joint_ref.data.set_motor_max_force(JointAxis::AngX, torque_x);
+                        }
+                        handle
+                    }
+                    JointTypeGene::Ball => {
+                        let local_frame1 = Isometry3::from_parts(
+                            Translation3::from(vector![
+                                pivot_from_parent.x,
+                                pivot_from_parent.y,
+                                pivot_from_parent.z
+                            ]),
+                            seg_local_rot,
+                        );
+                        let local_frame2 = Isometry3::from_parts(
+                            Translation3::from(vector![
+                                local_anchor2.x,
+                                local_anchor2.y,
+                                local_anchor2.z
+                            ]),
+                            UnitQuaternion::identity(),
+                        );
+                        let joint = SphericalJointBuilder::new()
+                            .local_frame1(local_frame1)
+                            .local_frame2(local_frame2)
+                            .contacts_enabled(false)
+                            .limits(JointAxis::AngX, [-limit_x, limit_x])
+                            .limits(JointAxis::AngY, [-limit_y, limit_y])
+                            .limits(JointAxis::AngZ, [-limit_z, limit_z]);
+                        let handle = impulse_joints.insert(parent, child, joint, true);
+                        if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
+                            for (axis, stiffness, torque) in [
+                                (JointAxis::AngX, stiffness_x, torque_x),
+                                (JointAxis::AngY, stiffness_y, torque_y),
+                                (JointAxis::AngZ, stiffness_z, torque_z),
+                            ] {
+                                joint_ref.data.set_motor_model(axis, MotorModel::ForceBased);
+                                joint_ref.data.set_motor_position(
+                                    axis,
+                                    0.0,
+                                    stiffness,
+                                    JOINT_MOTOR_RESPONSE,
+                                );
+                                joint_ref.data.set_motor_max_force(axis, torque);
+                            }
+                        }
+                        handle
+                    }
+                };
+
+                if matches!(segment_gene.joint_type, JointTypeGene::Ball) && seg_index > 0 {
+                    // Keep distal joints a bit tighter for stability when spherical.
+                    if let Some(joint_ref) = impulse_joints.get_mut(joint_handle, false) {
+                        joint_ref
+                            .data
+                            .set_limits(JointAxis::AngY, [-limit_y * 0.85, limit_y * 0.85]);
+                        joint_ref
+                            .data
+                            .set_limits(JointAxis::AngZ, [-limit_z * 0.85, limit_z * 0.85]);
+                    }
                 }
                 controllers.push(SimController {
                     joint: joint_handle,
+                    joint_type: segment_gene.joint_type,
                     control: control_gene,
-                    torque,
-                    stiffness,
-                    limit,
+                    torque_x,
+                    stiffness_x,
+                    limit_x,
+                    torque_y,
+                    stiffness_y,
+                    limit_y,
+                    torque_z,
+                    stiffness_z,
+                    limit_z,
                 });
 
                 parts.push(SimPart {
@@ -903,31 +1019,62 @@ impl TrialSimulator {
         if can_actuate {
             let mut energy_step = 0.0;
             for controller in &self.controllers {
-                let signal = clamp(
-                    controller.control.bias
-                        + controller.control.amp
-                            * (controller.control.freq * sim_time + controller.control.phase).sin(),
-                    -MAX_MOTOR_SPEED,
-                    MAX_MOTOR_SPEED,
-                );
-                let target_angle = clamp(
-                    signal / MAX_MOTOR_SPEED * controller.limit,
-                    -controller.limit,
-                    controller.limit,
+                let signal_x = clamp(controller.control.signal_x(sim_time), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
+                let target_x = clamp(
+                    signal_x / MAX_MOTOR_SPEED * controller.limit_x,
+                    -controller.limit_x,
+                    controller.limit_x,
                 );
                 if let Some(joint) = self.impulse_joints.get_mut(controller.joint, true) {
                     joint.data.set_motor_position(
                         JointAxis::AngX,
-                        target_angle,
-                        controller.stiffness,
+                        target_x,
+                        controller.stiffness_x,
                         JOINT_MOTOR_RESPONSE,
                     );
                     joint
                         .data
-                        .set_motor_max_force(JointAxis::AngX, controller.torque);
+                        .set_motor_max_force(JointAxis::AngX, controller.torque_x);
+
+                    energy_step +=
+                        (target_x.abs() * controller.stiffness_x).min(controller.torque_x) * dt;
+                    if matches!(controller.joint_type, JointTypeGene::Ball) {
+                        let signal_y =
+                            clamp(controller.control.signal_y(sim_time), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
+                        let signal_z =
+                            clamp(controller.control.signal_z(sim_time), -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
+                        let target_y = clamp(
+                            signal_y / MAX_MOTOR_SPEED * controller.limit_y,
+                            -controller.limit_y,
+                            controller.limit_y,
+                        );
+                        let target_z = clamp(
+                            signal_z / MAX_MOTOR_SPEED * controller.limit_z,
+                            -controller.limit_z,
+                            controller.limit_z,
+                        );
+                        joint.data.set_motor_position(
+                            JointAxis::AngY,
+                            target_y,
+                            controller.stiffness_y,
+                            JOINT_MOTOR_RESPONSE,
+                        );
+                        joint.data.set_motor_max_force(JointAxis::AngY, controller.torque_y);
+                        joint.data.set_motor_position(
+                            JointAxis::AngZ,
+                            target_z,
+                            controller.stiffness_z,
+                            JOINT_MOTOR_RESPONSE,
+                        );
+                        joint.data.set_motor_max_force(JointAxis::AngZ, controller.torque_z);
+                        energy_step +=
+                            (target_y.abs() * controller.stiffness_y).min(controller.torque_y)
+                                * dt;
+                        energy_step +=
+                            (target_z.abs() * controller.stiffness_z).min(controller.torque_z)
+                                * dt;
+                    }
                 }
-                energy_step +=
-                    (target_angle.abs() * controller.stiffness).min(controller.torque) * dt;
             }
             self.metrics.add_energy(energy_step);
         }
@@ -1173,6 +1320,8 @@ struct TopologyProfile {
     mean_segment_mass: f32,
     mean_control_amp: f32,
     mean_control_freq: f32,
+    #[serde(default)]
+    ball_joint_ratio: f32,
     descriptor: [f32; 5],
     topology_fingerprint: String,
     #[serde(default)]
@@ -3023,7 +3172,7 @@ struct ParameterFeatureDefinition {
     extractor: fn(&Genome) -> f32,
 }
 
-const LEARNED_PARAMETER_FEATURES: [ParameterFeatureDefinition; 11] = [
+const LEARNED_PARAMETER_FEATURES: [ParameterFeatureDefinition; 12] = [
     ParameterFeatureDefinition {
         name: "torso.w",
         bounds: [0.45, 3.1],
@@ -3071,13 +3220,18 @@ const LEARNED_PARAMETER_FEATURES: [ParameterFeatureDefinition; 11] = [
     },
     ParameterFeatureDefinition {
         name: "control.amp_mean",
-        bounds: [0.35, 11.6],
+        bounds: [0.0, 11.6],
         extractor: feature_control_amp_mean,
     },
     ParameterFeatureDefinition {
         name: "control.freq_mean",
         bounds: [0.3, 4.9],
         extractor: feature_control_freq_mean,
+    },
+    ParameterFeatureDefinition {
+        name: "joint.ball_ratio",
+        bounds: [0.0, 1.0],
+        extractor: feature_ball_joint_ratio,
     },
 ];
 
@@ -3738,6 +3892,7 @@ fn build_topology_profile(generation: usize, candidate: &EvolutionCandidate) -> 
         mean_segment_mass: feature_segment_mass_mean(genome),
         mean_control_amp: feature_control_amp_mean(genome),
         mean_control_freq: feature_control_freq_mean(genome),
+        ball_joint_ratio: feature_ball_joint_ratio(genome),
         descriptor: [
             finite_or_zero(candidate.descriptor[0]),
             finite_or_zero(candidate.descriptor[1]),
@@ -3779,12 +3934,34 @@ fn topology_fingerprint(genome: &Genome) -> String {
                 quantize_to_bucket(segment.thickness, 0.05) as u64,
             );
             stable_hash_mix(&mut hash, quantize_to_bucket(segment.mass, 0.05) as u64);
+            stable_hash_mix(
+                &mut hash,
+                match segment.joint_type {
+                    JointTypeGene::Hinge => 0,
+                    JointTypeGene::Ball => 1,
+                },
+            );
         }
-        for control in limb.controls.iter().take(count.min(limb.controls.len())) {
+        for (index, control) in limb.controls.iter().take(count.min(limb.controls.len())).enumerate() {
+            let joint_type = limb
+                .segments
+                .get(index)
+                .map(|segment| segment.joint_type)
+                .unwrap_or(JointTypeGene::Hinge);
             stable_hash_mix(&mut hash, quantize_to_bucket(control.amp, 0.1) as u64);
             stable_hash_mix(&mut hash, quantize_to_bucket(control.freq, 0.05) as u64);
             stable_hash_mix(&mut hash, quantize_to_bucket(control.phase, 0.1) as u64);
             stable_hash_mix(&mut hash, quantize_to_bucket(control.bias, 0.1) as u64);
+            if matches!(joint_type, JointTypeGene::Ball) {
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.amp_y, 0.1) as u64);
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.freq_y, 0.05) as u64);
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.phase_y, 0.1) as u64);
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.bias_y, 0.1) as u64);
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.amp_z, 0.1) as u64);
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.freq_z, 0.05) as u64);
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.phase_z, 0.1) as u64);
+                stable_hash_mix(&mut hash, quantize_to_bucket(control.bias_z, 0.1) as u64);
+            }
         }
     }
     format!("{hash:016x}")
@@ -3797,6 +3974,7 @@ fn coarse_topology_key(genome: &Genome) -> String {
     let mean_segment_mass = feature_segment_mass_mean(genome);
     let mean_control_amp = feature_control_amp_mean(genome);
     let mean_control_freq = feature_control_freq_mean(genome);
+    let ball_ratio = feature_ball_joint_ratio(genome);
     let mean_segment_count = feature_segment_count_mean(genome);
     let torso_wh = if genome.torso.h.abs() > 1e-5 {
         genome.torso.w / genome.torso.h
@@ -3809,7 +3987,7 @@ fn coarse_topology_key(genome: &Genome) -> String {
         1.0
     };
     format!(
-        "e{}-h{}:{}:{}:{}:{}-sc{}-sl{}-sm{}-ca{}-cf{}-wh{}-dh{}",
+        "e{}-h{}:{}:{}:{}:{}-sc{}-sl{}-sm{}-ca{}-cf{}-br{}-wh{}-dh{}",
         enabled,
         hist[0],
         hist[1],
@@ -3821,6 +3999,7 @@ fn coarse_topology_key(genome: &Genome) -> String {
         quantize_to_bucket(mean_segment_mass, 0.2),
         quantize_to_bucket(mean_control_amp, 0.5),
         quantize_to_bucket(mean_control_freq, 0.25),
+        quantize_to_bucket(ball_ratio, 0.1),
         quantize_to_bucket(torso_wh, 0.2),
         quantize_to_bucket(torso_dh, 0.2)
     )
@@ -3876,15 +4055,20 @@ where
 
 fn for_each_active_control<F>(genome: &Genome, mut f: F)
 where
-    F: FnMut(&ControlGene),
+    F: FnMut(&ControlGene, JointTypeGene),
 {
     for limb in &genome.limbs {
         if !limb.enabled {
             continue;
         }
         let count = active_segment_count(limb).min(limb.controls.len());
-        for control in limb.controls.iter().take(count) {
-            f(control);
+        for (index, control) in limb.controls.iter().take(count).enumerate() {
+            let joint_type = limb
+                .segments
+                .get(index)
+                .map(|segment| segment.joint_type)
+                .unwrap_or(JointTypeGene::Hinge);
+            f(control, joint_type);
         }
     }
 }
@@ -3962,9 +4146,13 @@ fn feature_segment_mass_mean(genome: &Genome) -> f32 {
 fn feature_control_amp_mean(genome: &Genome) -> f32 {
     let mut count = 0usize;
     let mut total = 0.0f32;
-    for_each_active_control(genome, |control| {
+    for_each_active_control(genome, |control, joint_type| {
         total += control.amp;
         count += 1;
+        if matches!(joint_type, JointTypeGene::Ball) {
+            total += control.amp_y + control.amp_z;
+            count += 2;
+        }
     });
     if count == 0 {
         0.0
@@ -3976,14 +4164,40 @@ fn feature_control_amp_mean(genome: &Genome) -> f32 {
 fn feature_control_freq_mean(genome: &Genome) -> f32 {
     let mut count = 0usize;
     let mut total = 0.0f32;
-    for_each_active_control(genome, |control| {
+    for_each_active_control(genome, |control, joint_type| {
         total += control.freq;
         count += 1;
+        if matches!(joint_type, JointTypeGene::Ball) {
+            total += control.freq_y + control.freq_z;
+            count += 2;
+        }
     });
     if count == 0 {
         0.0
     } else {
         total / count as f32
+    }
+}
+
+fn feature_ball_joint_ratio(genome: &Genome) -> f32 {
+    let mut total = 0usize;
+    let mut ball = 0usize;
+    for limb in &genome.limbs {
+        if !limb.enabled {
+            continue;
+        }
+        let count = active_segment_count(limb).min(limb.segments.len());
+        for segment in limb.segments.iter().take(count) {
+            total += 1;
+            if matches!(segment.joint_type, JointTypeGene::Ball) {
+                ball += 1;
+            }
+        }
+    }
+    if total == 0 {
+        0.0
+    } else {
+        ball as f32 / total as f32
     }
 }
 
@@ -5448,10 +5662,10 @@ fn matches_spider4x2_preset(genome: &Genome) -> bool {
         return false;
     }
     let expected_anchors = [
-        (0.72, -0.06, 0.46),
-        (-0.72, -0.06, 0.46),
-        (0.72, -0.06, -0.46),
-        (-0.72, -0.06, -0.46),
+        (0.72, -0.18, 0.46),
+        (-0.72, -0.18, 0.46),
+        (0.72, -0.18, -0.46),
+        (-0.72, -0.18, -0.46),
     ];
     for (limb_index, expected) in expected_anchors.iter().enumerate() {
         let limb = &genome.limbs[limb_index];
@@ -5462,6 +5676,20 @@ fn matches_spider4x2_preset(genome: &Genome) -> bool {
             || !approx_eq(limb.anchor_y, expected.1, 0.05)
             || !approx_eq(limb.anchor_z, expected.2, 0.05)
         {
+            return false;
+        }
+        if let Some(shoulder) = limb.segments.first() {
+            if !matches!(shoulder.joint_type, JointTypeGene::Ball) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        if let Some(distal) = limb.segments.get(1) {
+            if !matches!(distal.joint_type, JointTypeGene::Hinge) {
+                return false;
+            }
+        } else {
             return false;
         }
     }
@@ -5523,6 +5751,23 @@ fn copy_control_genes(source: &Genome, target: &mut Genome) {
     }
 }
 
+fn default_control_gene() -> ControlGene {
+    ControlGene {
+        amp: 1.0,
+        freq: 1.0,
+        phase: 0.0,
+        bias: 0.0,
+        amp_y: default_secondary_control_amp(),
+        freq_y: default_secondary_control_freq(),
+        phase_y: default_secondary_control_phase(),
+        bias_y: default_secondary_control_bias(),
+        amp_z: default_secondary_control_amp(),
+        freq_z: default_secondary_control_freq(),
+        phase_z: default_secondary_control_phase(),
+        bias_z: default_secondary_control_bias(),
+    }
+}
+
 fn spider4x2_template_genome() -> Genome {
     let torso = TorsoGene {
         w: 1.68,
@@ -5531,15 +5776,15 @@ fn spider4x2_template_genome() -> Genome {
         mass: 1.08,
     };
     let mut limbs = vec![disabled_limb_template(); MAX_LIMBS];
-    let anchor_y = -0.06;
+    let anchor_y = -0.18;
     let freq = 1.7;
     limbs[0] = spider_leg_template(
         0.72,
         anchor_y,
         0.46,
-        0.08,
-        0.24,
-        [0.94, -0.10, 0.33],
+        0.14,
+        0.16,
+        [0.92, 0.0, 0.38],
         0.0,
         freq,
     );
@@ -5547,9 +5792,9 @@ fn spider4x2_template_genome() -> Genome {
         -0.72,
         anchor_y,
         0.46,
-        0.08,
-        -0.24,
-        [-0.94, -0.10, 0.33],
+        0.14,
+        -0.16,
+        [-0.92, 0.0, 0.38],
         PI,
         freq,
     );
@@ -5557,9 +5802,9 @@ fn spider4x2_template_genome() -> Genome {
         0.72,
         anchor_y,
         -0.46,
-        -0.08,
-        0.24,
-        [0.94, -0.10, -0.33],
+        -0.14,
+        0.16,
+        [0.92, 0.0, -0.38],
         PI,
         freq,
     );
@@ -5567,9 +5812,9 @@ fn spider4x2_template_genome() -> Genome {
         -0.72,
         anchor_y,
         -0.46,
-        -0.08,
-        -0.24,
-        [-0.94, -0.10, -0.33],
+        -0.14,
+        -0.16,
+        [-0.92, 0.0, -0.38],
         0.0,
         freq,
     );
@@ -5598,17 +5843,13 @@ fn disabled_limb_template() -> LimbGene {
                 length: 0.9,
                 thickness: 0.2,
                 mass: 0.45,
+                joint_type: JointTypeGene::Hinge,
                 motor_strength: 1.0,
                 joint_stiffness: 45.0,
             })
             .collect(),
         controls: (0..MAX_SEGMENTS_PER_LIMB)
-            .map(|_| ControlGene {
-                amp: 1.0,
-                freq: 1.0,
-                phase: 0.0,
-                bias: 0.0,
-            })
+            .map(|_| default_control_gene())
             .collect(),
     }
 }
@@ -5625,25 +5866,28 @@ fn spider_leg_template(
 ) -> LimbGene {
     let mut segments = vec![
         SegmentGene {
-            length: 2.04,
-            thickness: 0.28,
-            mass: 0.95,
+            length: 1.33,
+            thickness: 0.24,
+            mass: 0.8,
+            joint_type: JointTypeGene::Ball,
             motor_strength: 1.0,
             joint_stiffness: 48.0,
         },
         SegmentGene {
-            length: 1.76,
-            thickness: 0.24,
-            mass: 0.74,
+            length: 1.33,
+            thickness: 0.21,
+            mass: 0.58,
+            joint_type: JointTypeGene::Hinge,
             motor_strength: 0.9,
             joint_stiffness: 44.0,
         },
     ];
     while segments.len() < MAX_SEGMENTS_PER_LIMB {
         segments.push(SegmentGene {
-            length: 1.6,
-            thickness: 0.22,
-            mass: 0.68,
+            length: 0.56,
+            thickness: 0.20,
+            mass: 0.52,
+            joint_type: JointTypeGene::Hinge,
             motor_strength: 0.88,
             joint_stiffness: 40.0,
         });
@@ -5655,21 +5899,35 @@ fn spider_leg_template(
             freq,
             phase,
             bias: 0.0,
+            amp_y: 2.1,
+            freq_y: freq * 0.92,
+            phase_y: wrap_phase(phase + PI * 0.28),
+            bias_y: 0.0,
+            amp_z: 1.8,
+            freq_z: freq * 1.08,
+            phase_z: wrap_phase(phase + PI * 0.66),
+            bias_z: 0.0,
         },
         ControlGene {
             amp: 2.2,
             freq,
             phase: wrap_phase(phase + PI * 0.45),
             bias: -0.16,
+            amp_y: 0.0,
+            freq_y: default_secondary_control_freq(),
+            phase_y: default_secondary_control_phase(),
+            bias_y: default_secondary_control_bias(),
+            amp_z: 0.0,
+            freq_z: default_secondary_control_freq(),
+            phase_z: default_secondary_control_phase(),
+            bias_z: default_secondary_control_bias(),
         },
     ];
     while controls.len() < MAX_SEGMENTS_PER_LIMB {
-        controls.push(ControlGene {
-            amp: 1.0,
-            freq,
-            phase,
-            bias: 0.0,
-        });
+        let mut control = default_control_gene();
+        control.freq = freq;
+        control.phase = phase;
+        controls.push(control);
     }
 
     LimbGene {
@@ -5719,6 +5977,7 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
                         length: clamp(rng_range(rng, 0.5, 2.25) * hierarchy_scale, 0.45, 2.5),
                         thickness: clamp(rng_range(rng, 0.16, 0.95) * hierarchy_scale, 0.14, 1.05),
                         mass: clamp(rng_range(rng, 0.24, 1.75) * hierarchy_scale, 0.14, 2.0),
+                        joint_type: JointTypeGene::Hinge,
                         motor_strength: rng_range(rng, 0.5, 5.0),
                         joint_stiffness: rng_range(rng, 15.0, 120.0),
                     }
@@ -5734,6 +5993,14 @@ fn random_genome(rng: &mut SmallRng) -> Genome {
                     freq: rng_range(rng, 0.55, 4.4),
                     phase: rng_range(rng, 0.0, PI * 2.0),
                     bias: rng_range(rng, -1.6, 1.6),
+                    amp_y: default_secondary_control_amp(),
+                    freq_y: default_secondary_control_freq(),
+                    phase_y: default_secondary_control_phase(),
+                    bias_y: default_secondary_control_bias(),
+                    amp_z: default_secondary_control_amp(),
+                    freq_z: default_secondary_control_freq(),
+                    phase_z: default_secondary_control_phase(),
+                    bias_z: default_secondary_control_bias(),
                 })
                 .collect::<Vec<_>>();
             LimbGene {
@@ -5812,6 +6079,11 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             sg.length = lerp(sa.length, sb.length, seg_blend);
             sg.thickness = lerp(sa.thickness, sb.thickness, seg_blend);
             sg.mass = lerp(sa.mass, sb.mass, seg_blend);
+            sg.joint_type = if rng.random::<f32>() < 0.5 {
+                sa.joint_type
+            } else {
+                sb.joint_type
+            };
             sg.motor_strength = lerp(sa.motor_strength, sb.motor_strength, seg_blend);
             sg.joint_stiffness = lerp(sa.joint_stiffness, sb.joint_stiffness, seg_blend);
 
@@ -5820,6 +6092,14 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
             cg.freq = lerp(ca.freq, cb.freq, ctrl_blend);
             cg.phase = wrap_phase(lerp(ca.phase, cb.phase, ctrl_blend));
             cg.bias = lerp(ca.bias, cb.bias, ctrl_blend);
+            cg.amp_y = lerp(ca.amp_y, cb.amp_y, ctrl_blend);
+            cg.freq_y = lerp(ca.freq_y, cb.freq_y, ctrl_blend);
+            cg.phase_y = wrap_phase(lerp(ca.phase_y, cb.phase_y, ctrl_blend));
+            cg.bias_y = lerp(ca.bias_y, cb.bias_y, ctrl_blend);
+            cg.amp_z = lerp(ca.amp_z, cb.amp_z, ctrl_blend);
+            cg.freq_z = lerp(ca.freq_z, cb.freq_z, ctrl_blend);
+            cg.phase_z = wrap_phase(lerp(ca.phase_z, cb.phase_z, ctrl_blend));
+            cg.bias_z = lerp(ca.bias_z, cb.bias_z, ctrl_blend);
         }
     }
     child.hue = if rng.random::<f32>() < 0.5 {
@@ -5906,6 +6186,28 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
                 rng,
             ));
             control.bias = mutate_number(control.bias, -2.35, 2.35, chance, 0.16, rng);
+            control.amp_y = mutate_number(control.amp_y, 0.0, 11.6, chance, 0.18, rng);
+            control.freq_y = mutate_number(control.freq_y, 0.3, 4.9, chance, 0.14, rng);
+            control.phase_y = wrap_phase(mutate_number(
+                control.phase_y,
+                0.0,
+                PI * 2.0,
+                chance,
+                0.28,
+                rng,
+            ));
+            control.bias_y = mutate_number(control.bias_y, -2.35, 2.35, chance, 0.16, rng);
+            control.amp_z = mutate_number(control.amp_z, 0.0, 11.6, chance, 0.18, rng);
+            control.freq_z = mutate_number(control.freq_z, 0.3, 4.9, chance, 0.14, rng);
+            control.phase_z = wrap_phase(mutate_number(
+                control.phase_z,
+                0.0,
+                PI * 2.0,
+                chance,
+                0.28,
+                rng,
+            ));
+            control.bias_z = mutate_number(control.bias_z, -2.35, 2.35, chance, 0.16, rng);
         }
     }
 
@@ -6700,12 +7002,32 @@ fn default_limb_dir_z() -> f32 {
     0.0
 }
 
+fn default_joint_type() -> JointTypeGene {
+    JointTypeGene::Hinge
+}
+
 fn default_motor_strength() -> f32 {
     1.0
 }
 
 fn default_joint_stiffness() -> f32 {
     40.0
+}
+
+fn default_secondary_control_amp() -> f32 {
+    0.0
+}
+
+fn default_secondary_control_freq() -> f32 {
+    1.0
+}
+
+fn default_secondary_control_phase() -> f32 {
+    0.0
+}
+
+fn default_secondary_control_bias() -> f32 {
+    0.0
 }
 
 fn default_run_speed() -> f32 {

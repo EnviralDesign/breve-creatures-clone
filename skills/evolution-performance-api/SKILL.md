@@ -78,6 +78,7 @@ Response:
     - `bestN` (bounded; at most 3 profiles)
     - `distinctFingerprintCount`
     - `distinctCoarseFingerprintCount`
+    - `winner.ballJointRatio` and `bestN[*].ballJointRatio`
     - `winner.coarseTopologyKey` and `bestN[*].coarseTopologyKey`
   - `breeding`: `{ mutationRate, randomInjectChance, injectedGenomes, eliteKept }`
 - `learnedParams[]` (if enabled):
@@ -104,8 +105,14 @@ Preset notes:
   - 1 torso
   - 4 enabled legs
   - 2 active segments per leg
+  - shoulder segment uses `ball` joint
+  - distal segment uses `hinge` joint
   - 2 disabled spare limb slots
 - In fixed mode, topology/body params are locked to the preset while control genes continue evolving.
+
+Joint support:
+- Segment genes include `jointType`: `hinge` or `ball`.
+- Ball joints support independent motor targets on `AngX`, `AngY`, and `AngZ`.
 
 ## Startup Overrides (No API Call)
 
@@ -129,6 +136,7 @@ Current `learnedParams.name` values:
 - `segment.mass_mean`
 - `control.amp_mean`
 - `control.freq_mean`
+- `joint.ball_ratio`
 
 ## Practical AI Workflow
 
