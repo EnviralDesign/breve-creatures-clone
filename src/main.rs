@@ -54,7 +54,6 @@ const JOINT_MOTOR_RESPONSE: f32 = 12.0;
 const JOINT_MOTOR_FORCE_MULTIPLIER: f32 = 1.0;
 const AXIS_TILT_GAIN: f32 = 1.9;
 const FALLEN_HEIGHT_THRESHOLD: f32 = 0.35;
-const MAX_PLAUSIBLE_STEP_DISPLACEMENT: f32 = 1.5;
 const FITNESS_PROGRESS_MIDPOINT_FRACTION: f32 = 0.5;
 const FITNESS_PROGRESS_LATE_FRACTION: f32 = 0.85;
 const SETTLE_SECONDS: f32 = 2.25;
@@ -508,7 +507,6 @@ struct ExpandedGraphPart {
 
 struct TrialAccumulator {
     spawn: Vector3<f32>,
-    best_distance: f32,
     path_length: f32,
     distance_at_mid_phase: Option<f32>,
     distance_at_late_phase: Option<f32>,
@@ -544,7 +542,6 @@ impl TrialAccumulator {
 
         Self {
             spawn,
-            best_distance: 0.0,
             path_length: 0.0,
             distance_at_mid_phase: None,
             distance_at_late_phase: None,
@@ -581,24 +578,21 @@ impl TrialAccumulator {
             return;
         }
 
-        let step_displacement = if let Some(last) = self.last_torso_pos {
-            (torso_pos - last).norm()
+        let (raw_dx, raw_dz) = if let Some(last) = self.last_torso_pos {
+            (torso_pos.x - last.x, torso_pos.z - last.z)
         } else {
-            0.0
+            (torso_pos.x - self.spawn.x, torso_pos.z - self.spawn.z)
         };
-        let plausible = step_displacement <= MAX_PLAUSIBLE_STEP_DISPLACEMENT;
-
-        if plausible {
-            self.net_dx = torso_pos.x - self.spawn.x;
-            self.net_dz = torso_pos.z - self.spawn.z;
-            let traveled = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
-            self.best_distance = self.best_distance.max(traveled);
-
-            if let Some(last) = self.last_torso_pos {
-                let dx = torso_pos.x - last.x;
-                let dz = torso_pos.z - last.z;
-                self.path_length += (dx * dx + dz * dz).sqrt();
-            }
+        let raw_step = (raw_dx * raw_dx + raw_dz * raw_dz).sqrt();
+        if raw_step.is_finite() && raw_step > 1e-6 {
+            // Keep progress physically consistent with the configured max body speed.
+            let step_cap = (MAX_BODY_LINEAR_SPEED * dt).max(1e-6);
+            let scale = (step_cap / raw_step).min(1.0);
+            let credited_dx = raw_dx * scale;
+            let credited_dz = raw_dz * scale;
+            self.net_dx += credited_dx;
+            self.net_dz += credited_dz;
+            self.path_length += (credited_dx * credited_dx + credited_dz * credited_dz).sqrt();
         }
 
         let current_distance = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
