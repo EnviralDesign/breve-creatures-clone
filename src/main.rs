@@ -99,10 +99,14 @@ const DIAG_RECENT_WINDOW: usize = 20;
 const DIAG_PLATEAU_STAGNATION_GENERATIONS: usize = 20;
 const DIAG_WATCH_STAGNATION_GENERATIONS: usize = 10;
 const FIXED_PRESET_SPAWN_HEIGHT: f32 = 0.58;
+const RANDOM_SPAWN_EXTRA_HEIGHT_MIN: f32 = 1.2;
+const RANDOM_SPAWN_EXTRA_HEIGHT_MAX: f32 = 2.6;
 const FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS: f32 = 0.45;
 const FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS: f32 = 1.8;
 const FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX: f32 = 0.65;
 const FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX: f32 = 1.45;
+const STARTUP_INVALID_LINEAR_SPEED: f32 = 20.0;
+const STARTUP_INVALID_ANGULAR_SPEED: f32 = 24.0;
 const TRAIN_TRIAL_SEED_BANK_TAG: u32 = 0x9e37_79b9;
 const HOLDOUT_TRIAL_SEED_BANK_TAG: u32 = 0x7f4a_7c15;
 const HOLDOUT_TRIALS_PER_CANDIDATE: usize = 5;
@@ -366,6 +370,9 @@ struct GenerationEvalResult {
     median_progress: f32,
     median_upright: f32,
     median_straightness: f32,
+    invalid_startup_trials: usize,
+    invalid_startup_trial_rate: f32,
+    all_trials_invalid_startup: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -395,6 +402,8 @@ struct TrialMetrics {
     fallen_ratio: f32,
     straightness: f32,
     net_distance: f32,
+    #[serde(default)]
+    invalid_startup: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -695,6 +704,7 @@ impl TrialAccumulator {
             fallen_ratio,
             straightness,
             net_distance,
+            invalid_startup: false,
         }
     }
 }
@@ -726,6 +736,7 @@ struct TrialSimulator {
     settled_time_before_actuation: f32,
     actuation_started: bool,
     surface_friction_is_passive: bool,
+    startup_invalid: bool,
 }
 
 impl TrialSimulator {
@@ -792,7 +803,16 @@ impl TrialSimulator {
         let drop_start = if use_fixed_preset_startup {
             spawn
         } else {
-            vector![spawn.x, spawn.y + rng_range(&mut rng, 5.2, 7.7), spawn.z]
+            vector![
+                spawn.x,
+                spawn.y
+                    + rng_range(
+                        &mut rng,
+                        RANDOM_SPAWN_EXTRA_HEIGHT_MIN,
+                        RANDOM_SPAWN_EXTRA_HEIGHT_MAX,
+                    ),
+                spawn.z
+            ]
         };
         let torso_handle = insert_box_body(
             &mut bodies,
@@ -908,16 +928,33 @@ impl TrialSimulator {
 
             let joint_handle = match edge.joint_type {
                 JointTypeGene::Hinge => {
-                    let mut joint =
-                        RevoluteJointBuilder::new(UnitVector::new_normalize(axis_local))
-                            .local_anchor1(point![
-                                pivot_from_parent.x,
-                                pivot_from_parent.y,
-                                pivot_from_parent.z
-                            ])
-                            .local_anchor2(local_anchor2)
-                            .contacts_enabled(false);
-                    joint = joint.limits([-limit_x, limit_x]);
+                    let hinge_axis = UnitVector::new_normalize(axis_local);
+                    let hinge_frame_parent_rot =
+                        UnitQuaternion::rotation_between(&vector![1.0, 0.0, 0.0], &axis_local)
+                            .unwrap_or_else(UnitQuaternion::identity);
+                    let hinge_frame_child_rot = seg_local_rot.inverse() * hinge_frame_parent_rot;
+                    let mut joint = RevoluteJointBuilder::new(hinge_axis)
+                        .contacts_enabled(false)
+                        .limits([-limit_x, limit_x])
+                        .build();
+                    let local_frame1 = Isometry3::from_parts(
+                        Translation3::from(vector![
+                            pivot_from_parent.x,
+                            pivot_from_parent.y,
+                            pivot_from_parent.z
+                        ]),
+                        hinge_frame_parent_rot,
+                    );
+                    let local_frame2 = Isometry3::from_parts(
+                        Translation3::from(vector![
+                            local_anchor2.x,
+                            local_anchor2.y,
+                            local_anchor2.z
+                        ]),
+                        hinge_frame_child_rot,
+                    );
+                    joint.data.set_local_frame1(local_frame1);
+                    joint.data.set_local_frame2(local_frame2);
                     let handle =
                         impulse_joints.insert(parts[parent_index].body, child, joint, true);
                     if let Some(joint_ref) = impulse_joints.get_mut(handle, false) {
@@ -1082,10 +1119,11 @@ impl TrialSimulator {
             metrics: TrialAccumulator::new(spawn, genome),
             elapsed: 0.0,
             duration: config.duration_seconds,
-            require_settled_before_actuation: use_fixed_preset_startup,
+            require_settled_before_actuation: true,
             settled_time_before_actuation: 0.0,
-            actuation_started: !use_fixed_preset_startup,
+            actuation_started: false,
             surface_friction_is_passive: true,
+            startup_invalid: false,
         };
         sim.set_surface_friction(PASSIVE_SETTLE_FRICTION);
         Ok(sim)
@@ -1180,7 +1218,13 @@ impl TrialSimulator {
     }
 
     fn final_result(&self) -> TrialResult {
-        let metrics = self.metrics.compute_metrics(self.duration);
+        let mut metrics = self.metrics.compute_metrics(self.duration);
+        if self.startup_invalid {
+            metrics.quality = 0.0;
+            metrics.progress = 0.0;
+            metrics.net_distance = 0.0;
+            metrics.invalid_startup = true;
+        }
         let descriptor = self.metrics.descriptor(&metrics);
         TrialResult {
             fitness: metrics.quality,
@@ -1415,6 +1459,10 @@ impl TrialSimulator {
     fn step(&mut self) -> Result<(), String> {
         let dt = self.integration_parameters.dt;
         let sim_time = self.elapsed;
+        if self.startup_invalid {
+            self.elapsed += dt;
+            return Ok(());
+        }
 
         let mut can_actuate = sim_time >= SETTLE_SECONDS;
         if can_actuate
@@ -1424,6 +1472,11 @@ impl TrialSimulator {
         {
             let linear_speed = torso.linvel().norm();
             let angular_speed = torso.angvel().norm();
+            if linear_speed > STARTUP_INVALID_LINEAR_SPEED
+                || angular_speed > STARTUP_INVALID_ANGULAR_SPEED
+            {
+                self.startup_invalid = true;
+            }
             if linear_speed <= FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX
                 && angular_speed <= FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX
             {
@@ -1440,6 +1493,10 @@ impl TrialSimulator {
                 self.actuation_started = true;
             }
             can_actuate = self.actuation_started;
+        }
+        if self.startup_invalid {
+            self.elapsed += dt;
+            return Ok(());
         }
         if can_actuate && self.surface_friction_is_passive {
             self.set_surface_friction(ACTIVE_SURFACE_FRICTION);
@@ -1555,19 +1612,33 @@ impl TrialSimulator {
             &(),
         );
 
+        let mut passive_instability = false;
         for part in &self.parts {
             if let Some(body) = self.bodies.get_mut(part.body) {
                 let av = *body.angvel();
                 let av_len = av.norm();
+                let lv = *body.linvel();
+                let lv_len = lv.norm();
+                if !can_actuate
+                    && (!av_len.is_finite()
+                        || !lv_len.is_finite()
+                        || av_len > STARTUP_INVALID_ANGULAR_SPEED
+                        || lv_len > STARTUP_INVALID_LINEAR_SPEED)
+                {
+                    passive_instability = true;
+                }
                 if av_len > EMERGENCY_MAX_BODY_ANGULAR_SPEED {
                     body.set_angvel(av * (EMERGENCY_MAX_BODY_ANGULAR_SPEED / av_len), true);
                 }
-                let lv = *body.linvel();
-                let lv_len = lv.norm();
                 if lv_len > EMERGENCY_MAX_BODY_LINEAR_SPEED {
                     body.set_linvel(lv * (EMERGENCY_MAX_BODY_LINEAR_SPEED / lv_len), true);
                 }
             }
+        }
+        if !can_actuate && passive_instability {
+            self.startup_invalid = true;
+            self.elapsed += dt;
+            return Ok(());
         }
 
         let torso = self
@@ -1720,6 +1791,16 @@ struct GenerationFitnessSummary {
     generation: usize,
     best_fitness: f32,
     attempt_fitnesses: Vec<f32>,
+    #[serde(default)]
+    invalid_startup_attempts: usize,
+    #[serde(default)]
+    invalid_startup_attempt_rate: f32,
+    #[serde(default)]
+    invalid_startup_trials: usize,
+    #[serde(default)]
+    invalid_startup_trial_rate: f32,
+    #[serde(default)]
+    total_trials: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2031,6 +2112,14 @@ struct EvolutionStatus {
     morphology_preset: MorphologyPreset,
     #[serde(default)]
     connected_satellites: Vec<String>,
+    #[serde(default)]
+    latest_invalid_startup_attempts: usize,
+    #[serde(default)]
+    latest_invalid_startup_attempt_rate: f32,
+    #[serde(default)]
+    latest_invalid_startup_trials: usize,
+    #[serde(default)]
+    latest_invalid_startup_trial_rate: f32,
     current_genome: Option<Genome>,
     best_genome: Option<Genome>,
 }
@@ -2160,6 +2249,10 @@ impl EvolutionController {
             morphology_mode: initial_morphology_mode,
             morphology_preset: initial_morphology_preset,
             connected_satellites: Vec::new(),
+            latest_invalid_startup_attempts: 0,
+            latest_invalid_startup_attempt_rate: 0.0,
+            latest_invalid_startup_trials: 0,
+            latest_invalid_startup_trial_rate: 0.0,
             current_genome: None,
             best_genome: None,
         };
@@ -2513,7 +2606,7 @@ impl EvolutionController {
     }
 
     fn emit_generation_summary(&self, summary: GenerationFitnessSummary) {
-        {
+        let status = {
             let mut shared = self.shared.lock().expect("evolution shared mutex poisoned");
             let append = match shared.fitness_history.last() {
                 None => true,
@@ -2533,7 +2626,23 @@ impl EvolutionController {
                 let drop_count = shared.fitness_history.len() - MAX_FITNESS_HISTORY_POINTS;
                 shared.fitness_history.drain(0..drop_count);
             }
-        }
+            shared.status.latest_invalid_startup_attempts = summary.invalid_startup_attempts;
+            shared.status.latest_invalid_startup_attempt_rate = summary.invalid_startup_attempt_rate;
+            shared.status.latest_invalid_startup_trials = summary.invalid_startup_trials;
+            shared.status.latest_invalid_startup_trial_rate = summary.invalid_startup_trial_rate;
+            shared.status.clone()
+        };
+        self.broadcast_status(status);
+        info!(
+            "generation={} startup-invalid rejects: attempts={}/{} ({:.1}%), trials={}/{} ({:.1}%)",
+            summary.generation,
+            summary.invalid_startup_attempts,
+            summary.attempt_fitnesses.len(),
+            summary.invalid_startup_attempt_rate * 100.0,
+            summary.invalid_startup_trials,
+            summary.total_trials,
+            summary.invalid_startup_trial_rate * 100.0
+        );
         let _ = self
             .events
             .send(EvolutionStreamEvent::GenerationSummary { summary });
@@ -2636,6 +2745,12 @@ struct EvolutionCandidate {
     quality_norm: f32,
     local_competition: f32,
     attempt: usize,
+    #[serde(default = "default_trials_per_candidate")]
+    trial_count: usize,
+    #[serde(default)]
+    invalid_startup_trials: usize,
+    #[serde(default)]
+    all_trials_invalid_startup: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2785,6 +2900,10 @@ fn start_evolution_worker(
                     status.fast_forward_remaining = 0;
                     status.fast_forward_active = false;
                     status.injection_queue_count = 0;
+                    status.latest_invalid_startup_attempts = 0;
+                    status.latest_invalid_startup_attempt_rate = 0.0;
+                    status.latest_invalid_startup_trials = 0;
+                    status.latest_invalid_startup_trial_rate = 0.0;
                 });
                 publish_runtime_snapshot(
                     &controller,
@@ -3058,6 +3177,9 @@ fn start_evolution_worker(
                                 quality_norm: 0.0,
                                 local_competition: 0.0,
                                 attempt,
+                                trial_count: result.trial_count,
+                                invalid_startup_trials: result.invalid_startup_trials,
+                                all_trials_invalid_startup: result.all_trials_invalid_startup,
                             })
                             .collect();
                         if let Some(summary) =
@@ -3307,6 +3429,9 @@ fn start_evolution_worker(
                 quality_norm: 0.0,
                 local_competition: 0.0,
                 attempt: current_attempt_index,
+                trial_count: summary.trial_count,
+                invalid_startup_trials: summary.invalid_startup_trials,
+                all_trials_invalid_startup: summary.all_trials_invalid_startup,
             });
             if summary.fitness > best_ever_score {
                 best_ever_score = summary.fitness;
@@ -3444,6 +3569,19 @@ fn build_generation_fitness_summary(
         .into_iter()
         .map(|(_, fitness)| fitness)
         .collect();
+    let attempt_count = batch_results.len();
+    let invalid_startup_attempts = batch_results
+        .iter()
+        .filter(|candidate| candidate.all_trials_invalid_startup)
+        .count();
+    let invalid_startup_trials = batch_results
+        .iter()
+        .map(|candidate| candidate.invalid_startup_trials.min(candidate.trial_count))
+        .sum::<usize>();
+    let total_trials = batch_results
+        .iter()
+        .map(|candidate| candidate.trial_count)
+        .sum::<usize>();
     let best_fitness = attempt_fitnesses
         .iter()
         .copied()
@@ -3456,6 +3594,11 @@ fn build_generation_fitness_summary(
             0.0
         },
         attempt_fitnesses,
+        invalid_startup_attempts,
+        invalid_startup_attempt_rate: invalid_startup_attempts as f32 / attempt_count.max(1) as f32,
+        invalid_startup_trials,
+        invalid_startup_trial_rate: invalid_startup_trials as f32 / total_trials.max(1) as f32,
+        total_trials,
     })
 }
 
@@ -5826,6 +5969,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
             median_progress: 0.0,
             median_upright: 0.0,
             median_straightness: 0.0,
+            invalid_startup_trials: 0,
+            invalid_startup_trial_rate: 0.0,
+            all_trials_invalid_startup: false,
         };
     }
 
@@ -5839,6 +5985,12 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         .iter()
         .map(|trial| trial.metrics.straightness)
         .collect();
+    let invalid_startup_trials = trials
+        .iter()
+        .filter(|trial| trial.metrics.invalid_startup)
+        .count();
+    let invalid_startup_trial_rate = invalid_startup_trials as f32 / trials.len().max(1) as f32;
+    let all_trials_invalid_startup = invalid_startup_trials == trials.len();
 
     let robust_quality = 0.7 * quantile(&qualities, 0.5) + 0.3 * quantile(&qualities, 0.25);
     let consistency_gate = if qualities.len() < 2 {
@@ -5879,6 +6031,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         median_progress,
         median_upright,
         median_straightness,
+        invalid_startup_trials,
+        invalid_startup_trial_rate,
+        all_trials_invalid_startup,
     }
 }
 
