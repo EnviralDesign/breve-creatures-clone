@@ -7194,31 +7194,40 @@ fn resize_neural_gene(
     neuron.leak = clamp(neuron.leak, 0.05, 1.0);
 }
 
-fn resize_local_brain(brain: &mut LocalBrainGene, global_dim: usize) {
-    if brain.neurons.is_empty() {
-        brain.neurons.push(NeuralUnitGene {
-            activation: NeuralActivationGene::Tanh,
-            input_weights: vec![0.0; LOCAL_SENSOR_DIM],
-            recurrent_weights: vec![0.0; MIN_LOCAL_NEURONS],
-            global_weights: vec![0.0; global_dim],
-            bias: 0.0,
-            leak: default_neural_leak(),
-        });
-    }
-    let neuron_count = brain
-        .neurons
-        .len()
-        .clamp(MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
+fn resize_global_brain(
+    brain: &mut GlobalBrainGene,
+    target_count: Option<usize>,
+    rng: &mut SmallRng,
+) {
+    let requested = target_count.unwrap_or_else(|| brain.neurons.len().max(MIN_GLOBAL_NEURONS));
+    let neuron_count = requested.clamp(MIN_GLOBAL_NEURONS, MAX_GLOBAL_NEURONS);
     brain.neurons.truncate(neuron_count);
     while brain.neurons.len() < neuron_count {
-        brain.neurons.push(NeuralUnitGene {
-            activation: NeuralActivationGene::Tanh,
-            input_weights: vec![0.0; LOCAL_SENSOR_DIM],
-            recurrent_weights: vec![0.0; neuron_count],
-            global_weights: vec![0.0; global_dim],
-            bias: 0.0,
-            leak: default_neural_leak(),
-        });
+        brain.neurons.push(random_neural_unit_gene(
+            rng,
+            GLOBAL_SENSOR_DIM,
+            neuron_count,
+            0,
+        ));
+    }
+    for neuron in &mut brain.neurons {
+        resize_neural_gene(neuron, GLOBAL_SENSOR_DIM, neuron_count, 0);
+    }
+}
+
+fn resize_local_brain(
+    brain: &mut LocalBrainGene,
+    global_dim: usize,
+    target_count: Option<usize>,
+    rng: &mut SmallRng,
+) {
+    let requested = target_count.unwrap_or_else(|| brain.neurons.len().max(MIN_LOCAL_NEURONS));
+    let neuron_count = requested.clamp(MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
+    brain.neurons.truncate(neuron_count);
+    while brain.neurons.len() < neuron_count {
+        brain
+            .neurons
+            .push(random_neural_unit_gene(rng, LOCAL_SENSOR_DIM, neuron_count, global_dim));
     }
     for neuron in &mut brain.neurons {
         resize_neural_gene(neuron, LOCAL_SENSOR_DIM, neuron_count, global_dim);
@@ -7241,26 +7250,11 @@ fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng) {
     }
     graph.max_parts = graph.max_parts.clamp(6, MAX_GRAPH_PARTS);
     graph.root = graph.root.min(graph.nodes.len().saturating_sub(1));
-    let global_count = graph
-        .global_brain
-        .neurons
-        .len()
-        .clamp(MIN_GLOBAL_NEURONS, MAX_GLOBAL_NEURONS);
-    graph.global_brain.neurons.truncate(global_count);
-    while graph.global_brain.neurons.len() < global_count {
-        graph.global_brain.neurons.push(random_neural_unit_gene(
-            rng,
-            GLOBAL_SENSOR_DIM,
-            global_count,
-            0,
-        ));
-    }
-    for neuron in &mut graph.global_brain.neurons {
-        resize_neural_gene(neuron, GLOBAL_SENSOR_DIM, global_count, 0);
-    }
+    resize_global_brain(&mut graph.global_brain, None, rng);
+    let global_count = graph.global_brain.neurons.len();
     let node_len = graph.nodes.len().max(1);
     for node in &mut graph.nodes {
-        resize_local_brain(&mut node.brain, global_count);
+        resize_local_brain(&mut node.brain, global_count, None, rng);
         node.part.w = clamp(node.part.w, 0.14, 2.8);
         node.part.h = clamp(node.part.h, 0.2, 3.4);
         node.part.d = clamp(node.part.d, 0.14, 2.8);
@@ -7457,6 +7451,18 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
         graph.max_parts = (graph.max_parts as i32 + if rng.random::<f32>() < 0.5 { -3 } else { 3 })
             .clamp(6, MAX_GRAPH_PARTS as i32) as usize;
     }
+    let mut global_target = graph
+        .global_brain
+        .neurons
+        .len()
+        .clamp(MIN_GLOBAL_NEURONS, MAX_GLOBAL_NEURONS);
+    if rng.random::<f32>() < chance * 0.22 {
+        let delta = if rng.random::<f32>() < 0.5 { -1 } else { 1 };
+        global_target = (global_target as i32 + delta)
+            .clamp(MIN_GLOBAL_NEURONS as i32, MAX_GLOBAL_NEURONS as i32)
+            as usize;
+    }
+    resize_global_brain(&mut graph.global_brain, Some(global_target), rng);
     for neuron in &mut graph.global_brain.neurons {
         mutate_weight_vector(&mut neuron.input_weights, local_chance * 0.7, 0.22, rng);
         mutate_weight_vector(&mut neuron.recurrent_weights, local_chance * 0.7, 0.18, rng);
@@ -7477,7 +7483,18 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
         node.part.h = mutate_number(node.part.h, 0.2, 3.4, local_chance, 0.14, rng);
         node.part.d = mutate_number(node.part.d, 0.14, 2.8, local_chance, 0.14, rng);
         node.part.mass = mutate_number(node.part.mass, 0.08, 3.4, local_chance, 0.18, rng);
-        resize_local_brain(&mut node.brain, global_dim);
+        let mut local_target = node
+            .brain
+            .neurons
+            .len()
+            .clamp(MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
+        if rng.random::<f32>() < local_chance * 0.28 {
+            let delta = if rng.random::<f32>() < 0.5 { -1 } else { 1 };
+            local_target = (local_target as i32 + delta)
+                .clamp(MIN_LOCAL_NEURONS as i32, MAX_LOCAL_NEURONS as i32)
+                as usize;
+        }
+        resize_local_brain(&mut node.brain, global_dim, Some(local_target), rng);
         for neuron in &mut node.brain.neurons {
             mutate_weight_vector(&mut neuron.input_weights, local_chance * 0.75, 0.24, rng);
             mutate_weight_vector(
@@ -7609,6 +7626,38 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
     ensure_graph_valid(graph, rng);
 }
 
+fn collect_reachable_subgraph_indices(
+    graph: &GraphGene,
+    start_index: usize,
+    max_nodes: usize,
+) -> Vec<usize> {
+    if graph.nodes.is_empty() || max_nodes == 0 {
+        return Vec::new();
+    }
+    let start = start_index.min(graph.nodes.len().saturating_sub(1));
+    let mut visited = vec![false; graph.nodes.len()];
+    let mut queue = VecDeque::new();
+    let mut ordered = Vec::with_capacity(max_nodes.min(graph.nodes.len()));
+    visited[start] = true;
+    queue.push_back(start);
+    while let Some(index) = queue.pop_front() {
+        ordered.push(index);
+        if ordered.len() >= max_nodes {
+            break;
+        }
+        if let Some(node) = graph.nodes.get(index) {
+            for edge in node.edges.iter().take(MAX_GRAPH_EDGES_PER_NODE) {
+                let to = edge.to.min(graph.nodes.len().saturating_sub(1));
+                if !visited[to] {
+                    visited[to] = true;
+                    queue.push_back(to);
+                }
+            }
+        }
+    }
+    ordered
+}
+
 fn graft_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> GraphGene {
     let mut child = a.clone();
     if child.nodes.is_empty() {
@@ -7618,8 +7667,44 @@ fn graft_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> GraphGe
         return child;
     }
     let replace_index = rng.random_range(0..child.nodes.len());
-    let donor_index = rng.random_range(0..b.nodes.len());
-    child.nodes[replace_index] = b.nodes[donor_index].clone();
+    let donor_root = rng.random_range(0..b.nodes.len());
+    let room_for_new_nodes = MAX_GRAPH_NODES.saturating_sub(child.nodes.len());
+    let donor_indices =
+        collect_reachable_subgraph_indices(b, donor_root, room_for_new_nodes.saturating_add(1));
+    if donor_indices.is_empty() {
+        ensure_graph_valid(&mut child, rng);
+        return child;
+    }
+    let mut donor_to_child: HashMap<usize, usize> = HashMap::new();
+    donor_to_child.insert(donor_root, replace_index);
+    for donor_index in donor_indices {
+        if donor_index == donor_root {
+            continue;
+        }
+        if child.nodes.len() >= MAX_GRAPH_NODES {
+            break;
+        }
+        let new_child_index = child.nodes.len();
+        child.nodes.push(b.nodes[donor_index].clone());
+        donor_to_child.insert(donor_index, new_child_index);
+    }
+    let mut mapped_indices = donor_to_child
+        .iter()
+        .map(|(&donor_index, &child_index)| (donor_index, child_index))
+        .collect::<Vec<_>>();
+    mapped_indices.sort_by_key(|(_, child_index)| *child_index);
+    for (donor_index, child_index) in mapped_indices {
+        let mut donor_node = b.nodes[donor_index].clone();
+        donor_node.edges.truncate(MAX_GRAPH_EDGES_PER_NODE);
+        for edge in &mut donor_node.edges {
+            edge.to = if let Some(mapped) = donor_to_child.get(&edge.to) {
+                *mapped
+            } else {
+                replace_index
+            };
+        }
+        child.nodes[child_index] = donor_node;
+    }
     if rng.random::<f32>() < 0.5 {
         child.global_brain = b.global_brain.clone();
     }
