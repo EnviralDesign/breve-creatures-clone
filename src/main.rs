@@ -98,12 +98,16 @@ const DEFAULT_PERFORMANCE_WINDOW_GENERATIONS: usize = 120;
 const MAX_PERFORMANCE_WINDOW_GENERATIONS: usize = 400;
 const DEFAULT_PERFORMANCE_STRIDE: usize = 1;
 const MAX_PERFORMANCE_STRIDE: usize = 8;
+const ENABLE_SPECIES_MECHANICS: bool = false;
 const MAX_SPECIES_ELITE_SLOTS: usize = 6;
 const BREEDING_PARAMETRIC_ONLY_SHARE: f32 = 0.80;
 const BREEDING_CROSSOVER_PARAMETRIC_SHARE: f32 = 0.10;
 const BREEDING_STRUCTURAL_MUTATION_SHARE: f32 = 0.06;
 const BREEDING_GRAFT_PARAMETRIC_SHARE: f32 = 0.04;
 const BREEDING_CROSS_SPECIES_MATING_CHANCE: f32 = 0.10;
+const ACTUATION_SELECTION_TOP_SHARE_THRESHOLD: f32 = 0.6;
+const ACTUATION_SELECTION_ENTROPY_THRESHOLD: f32 = 0.45;
+const ACTUATION_SELECTION_PENALTY_WEIGHT: f32 = 0.12;
 const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
 const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
@@ -3975,22 +3979,33 @@ fn finalize_generation(
     }
     let mut elite_kept = 0usize;
     if next_genomes.len() < target_population_size {
-        let mut best_per_species: HashMap<usize, &EvolutionCandidate> = HashMap::new();
-        for candidate in ranked_by_fitness.iter() {
-            let species = enabled_limb_count(&candidate.genome);
-            best_per_species.entry(species).or_insert(candidate);
-        }
-        let mut species_elites: Vec<&EvolutionCandidate> = best_per_species.into_values().collect();
-        species_elites.sort_by(|a, b| {
-            b.fitness
-                .partial_cmp(&a.fitness)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let desired_elite_slots = ELITE_COUNT.max(species_elites.len().min(MAX_SPECIES_ELITE_SLOTS));
-        let elite_slots = desired_elite_slots.min(target_population_size.saturating_sub(next_genomes.len()));
-        for elite in species_elites.into_iter().take(elite_slots) {
-            next_genomes.push(elite.genome.clone());
-            elite_kept += 1;
+        if ENABLE_SPECIES_MECHANICS {
+            let mut best_per_species: HashMap<usize, &EvolutionCandidate> = HashMap::new();
+            for candidate in ranked_by_fitness.iter() {
+                let species = enabled_limb_count(&candidate.genome);
+                best_per_species.entry(species).or_insert(candidate);
+            }
+            let mut species_elites: Vec<&EvolutionCandidate> =
+                best_per_species.into_values().collect();
+            species_elites.sort_by(|a, b| {
+                b.fitness
+                    .partial_cmp(&a.fitness)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let desired_elite_slots =
+                ELITE_COUNT.max(species_elites.len().min(MAX_SPECIES_ELITE_SLOTS));
+            let elite_slots =
+                desired_elite_slots.min(target_population_size.saturating_sub(next_genomes.len()));
+            for elite in species_elites.into_iter().take(elite_slots) {
+                next_genomes.push(elite.genome.clone());
+                elite_kept += 1;
+            }
+        } else {
+            let elite_slots = ELITE_COUNT.min(target_population_size.saturating_sub(next_genomes.len()));
+            for elite in ranked_by_fitness.iter().take(elite_slots) {
+                next_genomes.push(elite.genome.clone());
+                elite_kept += 1;
+            }
         }
     }
     if target_population_size == 1 && next_genomes.is_empty() && !ranked_by_fitness.is_empty() {
@@ -4060,12 +4075,14 @@ fn finalize_generation(
     let mut mating_count = 0usize;
     let mut cross_species_mating_count = 0usize;
     let mut species_breeding_pools: HashMap<usize, Vec<EvolutionCandidate>> = HashMap::new();
-    for candidate in ranked_for_breeding.iter().cloned() {
-        let species = enabled_limb_count(&candidate.genome);
-        species_breeding_pools
-            .entry(species)
-            .or_default()
-            .push(candidate);
+    if ENABLE_SPECIES_MECHANICS {
+        for candidate in ranked_for_breeding.iter().cloned() {
+            let species = enabled_limb_count(&candidate.genome);
+            species_breeding_pools
+                .entry(species)
+                .or_default()
+                .push(candidate);
+        }
     }
     while next_genomes.len() < target_population_size {
         let tournament_size = 4usize.min(ranked_for_breeding.len().max(1));
@@ -4073,16 +4090,19 @@ fn finalize_generation(
             .genome
             .clone();
         let parent_a_species = enabled_limb_count(&parent_a);
-        let same_species_pool: &[EvolutionCandidate] = species_breeding_pools
-            .get(&parent_a_species)
-            .map(|pool| pool.as_slice())
-            .unwrap_or(ranked_for_breeding.as_slice());
-        let allow_cross_species = rng.random::<f32>() < BREEDING_CROSS_SPECIES_MATING_CHANCE;
-        let parent_b_pool: &[EvolutionCandidate] = if allow_cross_species || same_species_pool.len() < 2
-        {
-            ranked_for_breeding.as_slice()
+        let parent_b_pool: &[EvolutionCandidate] = if ENABLE_SPECIES_MECHANICS {
+            let same_species_pool: &[EvolutionCandidate] = species_breeding_pools
+                .get(&parent_a_species)
+                .map(|pool| pool.as_slice())
+                .unwrap_or(ranked_for_breeding.as_slice());
+            let allow_cross_species = rng.random::<f32>() < BREEDING_CROSS_SPECIES_MATING_CHANCE;
+            if allow_cross_species || same_species_pool.len() < 2 {
+                ranked_for_breeding.as_slice()
+            } else {
+                same_species_pool
+            }
         } else {
-            same_species_pool
+            ranked_for_breeding.as_slice()
         };
         let parent_b = if parent_b_pool.len() > 1 {
             let pool_tournament_size = tournament_size.min(parent_b_pool.len()).max(1);
@@ -6599,6 +6619,24 @@ fn load_checkpoint_snapshot(
     Ok((checkpoint.id, checkpoint.snapshot))
 }
 
+fn actuation_selection_penalty(top_joint_energy_share: f32, actuation_entropy: f32) -> f32 {
+    let top_share = finite_or_zero(top_joint_energy_share);
+    let entropy = finite_or_zero(actuation_entropy);
+    let top_excess = clamp(
+        (top_share - ACTUATION_SELECTION_TOP_SHARE_THRESHOLD)
+            / (1.0 - ACTUATION_SELECTION_TOP_SHARE_THRESHOLD).max(1e-6),
+        0.0,
+        1.0,
+    );
+    let entropy_deficit = clamp(
+        (ACTUATION_SELECTION_ENTROPY_THRESHOLD - entropy)
+            / ACTUATION_SELECTION_ENTROPY_THRESHOLD.max(1e-6),
+        0.0,
+        1.0,
+    );
+    ACTUATION_SELECTION_PENALTY_WEIGHT * top_excess * entropy_deficit
+}
+
 fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[NoveltyEntry]) {
     if results.is_empty() {
         return;
@@ -6656,18 +6694,29 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
         },
     );
     let mut species_sizes: HashMap<usize, usize> = HashMap::new();
-    for result in results.iter() {
-        let species = enabled_limb_count(&result.genome);
-        *species_sizes.entry(species).or_insert(0) += 1;
+    if ENABLE_SPECIES_MECHANICS {
+        for result in results.iter() {
+            let species = enabled_limb_count(&result.genome);
+            *species_sizes.entry(species).or_insert(0) += 1;
+        }
     }
     for result in results.iter_mut() {
-        let species = enabled_limb_count(&result.genome);
-        let species_size = *species_sizes.get(&species).unwrap_or(&1) as f32;
-        let sharing_divisor = species_size.sqrt().max(1.0);
+        let sharing_divisor = if ENABLE_SPECIES_MECHANICS {
+            let species = enabled_limb_count(&result.genome);
+            let species_size = *species_sizes.get(&species).unwrap_or(&1) as f32;
+            species_size.sqrt().max(1.0)
+        } else {
+            1.0
+        };
         let shared_quality = result.quality_norm / sharing_divisor;
-        result.selection_score = 0.62 * shared_quality
+        let base_score = 0.62 * shared_quality
             + 0.28 * result.novelty_norm
             + 0.1 * result.local_competition;
+        let actuation_penalty = actuation_selection_penalty(
+            result.median_top_joint_energy_share,
+            result.median_actuation_entropy,
+        );
+        result.selection_score = (base_score - actuation_penalty).max(0.0);
     }
 }
 
