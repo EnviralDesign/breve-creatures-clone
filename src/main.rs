@@ -48,7 +48,7 @@ const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const EMERGENCY_MAX_BODY_ANGULAR_SPEED: f32 = 20.0;
 const EMERGENCY_MAX_BODY_LINEAR_SPEED: f32 = 30.0;
 const BODY_LINEAR_DAMPING: f32 = 0.19;
-const BODY_ANGULAR_DAMPING: f32 = 25.0;
+const BODY_ANGULAR_DAMPING: f32 = 50.0;
 const QUADRATIC_ANGULAR_DRAG_COEFF: f32 = 0.22;
 const QUADRATIC_LINEAR_DRAG_COEFF: f32 = 0.08;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
@@ -95,6 +95,10 @@ const DEFAULT_PERFORMANCE_WINDOW_GENERATIONS: usize = 120;
 const MAX_PERFORMANCE_WINDOW_GENERATIONS: usize = 400;
 const DEFAULT_PERFORMANCE_STRIDE: usize = 1;
 const MAX_PERFORMANCE_STRIDE: usize = 8;
+const BREEDING_PARAMETRIC_ONLY_SHARE: f32 = 0.80;
+const BREEDING_CROSSOVER_PARAMETRIC_SHARE: f32 = 0.10;
+const BREEDING_STRUCTURAL_MUTATION_SHARE: f32 = 0.06;
+const BREEDING_GRAFT_PARAMETRIC_SHARE: f32 = 0.04;
 const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
 const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
@@ -3883,6 +3887,11 @@ fn finalize_generation(
     } else {
         0.0
     };
+    let crossover_cutoff =
+        BREEDING_PARAMETRIC_ONLY_SHARE + BREEDING_CROSSOVER_PARAMETRIC_SHARE;
+    let structural_cutoff = crossover_cutoff + BREEDING_STRUCTURAL_MUTATION_SHARE;
+    let graft_cutoff = structural_cutoff + BREEDING_GRAFT_PARAMETRIC_SHARE;
+    debug_assert!((graft_cutoff - 1.0).abs() < 1e-4);
     while next_genomes.len() < target_population_size {
         let tournament_size = 4usize.min(ranked_for_breeding.len().max(1));
         let parent_a = tournament_select(&ranked_for_breeding, tournament_size, rng)
@@ -3896,16 +3905,18 @@ fn finalize_generation(
             parent_a.clone()
         };
         let operation_roll = rng.random::<f32>();
-        let mut child = if operation_roll < 0.60 {
+        let mut child = if operation_roll < BREEDING_PARAMETRIC_ONLY_SHARE {
             mutate_genome(parent_a.clone(), mutation_rate, false, rng)
-        } else if operation_roll < 0.80 {
+        } else if operation_roll < crossover_cutoff {
             let crossed = crossover_genome(&parent_a, &parent_b, rng);
             mutate_genome(crossed, mutation_rate, false, rng)
-        } else if operation_roll < 0.92 {
+        } else if operation_roll < structural_cutoff {
             mutate_genome(parent_a.clone(), mutation_rate, true, rng)
-        } else {
+        } else if operation_roll < graft_cutoff {
             let grafted = graft_genome(&parent_a, &parent_b, rng);
             mutate_genome(grafted, mutation_rate, false, rng)
+        } else {
+            mutate_genome(parent_a.clone(), mutation_rate, false, rng)
         };
         if ranked_for_breeding.len() > 1 && rng.random::<f32>() < random_inject_chance {
             child = random_genome(rng);
