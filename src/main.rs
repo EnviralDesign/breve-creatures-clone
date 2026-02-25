@@ -47,6 +47,8 @@ const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const EMERGENCY_MAX_BODY_ANGULAR_SPEED: f32 = 20.0;
 const EMERGENCY_MAX_BODY_LINEAR_SPEED: f32 = 30.0;
+const BODY_LINEAR_DAMPING: f32 = 0.19;
+const BODY_ANGULAR_DAMPING: f32 = 25;
 const QUADRATIC_ANGULAR_DRAG_COEFF: f32 = 0.22;
 const QUADRATIC_LINEAR_DRAG_COEFF: f32 = 0.08;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
@@ -8958,8 +8960,8 @@ fn insert_box_body(
 ) -> RigidBodyHandle {
     let body = RigidBodyBuilder::dynamic()
         .translation(center)
-        .linear_damping(0.19)
-        .angular_damping(8.0)
+        .linear_damping(BODY_LINEAR_DAMPING)
+        .angular_damping(BODY_ANGULAR_DAMPING)
         .ccd_enabled(true)
         .build();
     let handle = bodies.insert(body);

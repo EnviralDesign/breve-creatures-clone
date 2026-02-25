@@ -1310,6 +1310,18 @@
       renderFitnessHistory();
     }
 
+    function medianFitness(values) {
+      if (!Array.isArray(values) || values.length === 0) return NaN;
+      const sorted = values
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b);
+      if (sorted.length === 0) return NaN;
+      const mid = Math.floor(sorted.length / 2);
+      if (sorted.length % 2 === 1) return sorted[mid];
+      return (sorted[mid - 1] + sorted[mid]) * 0.5;
+    }
+
     function renderFitnessHistory() {
       const W = Math.max(1, Math.floor(fitnessHistoryCanvas.clientWidth));
       const H = Math.max(1, Math.floor(fitnessHistoryCanvas.clientHeight));
@@ -1385,6 +1397,28 @@
           ctx.arc(x, y, 1.7, 0, Math.PI * 2);
           ctx.fill();
         }
+      }
+
+      ctx.strokeStyle = "rgba(52, 56, 54, 0.92)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      let hasMedianPoint = false;
+      for (let i = 0; i < entries.length; i++) {
+        const x = xForIndex(i);
+        const median = medianFitness(entries[i].attemptFitnesses);
+        const fallback = Number(entries[i].bestFitness);
+        const value = Number.isFinite(median) ? median : fallback;
+        if (!Number.isFinite(value)) continue;
+        const y = yForFitness(value);
+        if (!hasMedianPoint) {
+          ctx.moveTo(x, y);
+          hasMedianPoint = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      if (hasMedianPoint) {
+        ctx.stroke();
       }
 
       ctx.strokeStyle = "rgba(210, 240, 159, 0.94)";
