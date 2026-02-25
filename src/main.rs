@@ -33,10 +33,10 @@ const MAX_SEGMENTS_PER_LIMB: usize = 5;
 const MAX_GRAPH_NODES: usize = 24;
 const MAX_GRAPH_EDGES_PER_NODE: usize = 4;
 const MAX_GRAPH_PARTS: usize = 72;
-const MIN_LOCAL_NEURONS: usize = 3;
-const MAX_LOCAL_NEURONS: usize = 12;
-const MIN_GLOBAL_NEURONS: usize = 4;
-const MAX_GLOBAL_NEURONS: usize = 14;
+const MIN_LOCAL_NEURONS: usize = 2;
+const MAX_LOCAL_NEURONS: usize = 4;
+const MIN_GLOBAL_NEURONS: usize = 2;
+const MAX_GLOBAL_NEURONS: usize = 4;
 const LOCAL_SENSOR_DIM: usize = 14;
 const GLOBAL_SENSOR_DIM: usize = 8;
 const BRAIN_SUBSTEPS_PER_PHYSICS_STEP: usize = 2;
@@ -60,6 +60,7 @@ const FITNESS_PROGRESS_MIDPOINT_FRACTION: f32 = 0.5;
 const FITNESS_PROGRESS_LATE_FRACTION: f32 = 0.85;
 const FITNESS_PROGRESS_MID_WEIGHT: f32 = 1.35;
 const FITNESS_PROGRESS_LATE_WEIGHT: f32 = 2.0;
+const FITNESS_GROUNDED_BONUS_WEIGHT: f32 = 0.5;
 const SETTLE_SECONDS: f32 = 2.25;
 const PASSIVE_SETTLE_FRICTION: f32 = 0.0;
 const ACTIVE_SURFACE_FRICTION: f32 = 1.08;
@@ -692,7 +693,8 @@ impl TrialAccumulator {
         let sustained_progress =
             early_gain + mid_gain * FITNESS_PROGRESS_MID_WEIGHT + late_gain * FITNESS_PROGRESS_LATE_WEIGHT;
         let progress = net_distance;
-        let quality = (sustained_progress * (1.0 - 0.3 * fallen_ratio)).max(0.0);
+        let grounded_bonus = FITNESS_GROUNDED_BONUS_WEIGHT * (1.0 - fallen_ratio);
+        let quality = (sustained_progress * (1.0 - 0.3 * fallen_ratio) + grounded_bonus).max(0.0);
 
         TrialMetrics {
             quality,
@@ -6781,7 +6783,7 @@ fn random_graph_gene(rng: &mut SmallRng) -> GraphGene {
         root: 0,
         nodes,
         global_brain,
-        max_parts: rng.random_range(18..=MAX_GRAPH_PARTS.min(56)),
+        max_parts: rng.random_range(12..=MAX_GRAPH_PARTS.min(16)),
     }
 }
 
@@ -8937,7 +8939,7 @@ fn insert_box_body(
     let body = RigidBodyBuilder::dynamic()
         .translation(center)
         .linear_damping(0.19)
-        .angular_damping(0.31)
+        .angular_damping(2.0)
         .ccd_enabled(true)
         .build();
     let handle = bodies.insert(body);
