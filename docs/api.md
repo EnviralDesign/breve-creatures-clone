@@ -53,6 +53,10 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `generations[*].breeding.speciesDistribution`:
       - grouped by `enabledLimbCount`
       - each item includes `enabledLimbCount`, `count`, `bestFitness`
+    - `generations[*].breeding` also includes mating telemetry:
+      - `matingCount`
+      - `crossSpeciesMatingCount`
+      - `crossSpeciesMatingRate` (0..1, observed parent-pair rate)
     - `generations[*].topology` with winner + best-N topology profiles and:
       - `distinctFingerprintCount`
       - `distinctCoarseFingerprintCount`

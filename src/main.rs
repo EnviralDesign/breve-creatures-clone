@@ -102,6 +102,7 @@ const BREEDING_PARAMETRIC_ONLY_SHARE: f32 = 0.80;
 const BREEDING_CROSSOVER_PARAMETRIC_SHARE: f32 = 0.10;
 const BREEDING_STRUCTURAL_MUTATION_SHARE: f32 = 0.06;
 const BREEDING_GRAFT_PARAMETRIC_SHARE: f32 = 0.04;
+const BREEDING_CROSS_SPECIES_MATING_CHANCE: f32 = 0.10;
 const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
 const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
@@ -1900,6 +1901,12 @@ struct GenerationBreedingStats {
     #[serde(default)]
     species_distribution: Vec<BreedingSpeciesStat>,
     #[serde(default)]
+    mating_count: usize,
+    #[serde(default)]
+    cross_species_mating_count: usize,
+    #[serde(default)]
+    cross_species_mating_rate: f32,
+    #[serde(default)]
     holdout_best_fitness: f32,
     #[serde(default)]
     holdout_gap: f32,
@@ -3659,6 +3666,9 @@ fn build_generation_performance_summary(
     random_inject_chance: f32,
     injected_genomes: usize,
     elite_kept: usize,
+    mating_count: usize,
+    cross_species_mating_count: usize,
+    cross_species_mating_rate: f32,
     holdout_best_fitness: f32,
     holdout_gap: f32,
     anneal_factor: f32,
@@ -3751,6 +3761,9 @@ fn build_generation_performance_summary(
             injected_genomes,
             elite_kept,
             species_distribution,
+            mating_count,
+            cross_species_mating_count,
+            cross_species_mating_rate,
             holdout_best_fitness,
             holdout_gap,
             anneal_factor,
@@ -3946,18 +3959,46 @@ fn finalize_generation(
     let structural_cutoff = crossover_cutoff + BREEDING_STRUCTURAL_MUTATION_SHARE;
     let graft_cutoff = structural_cutoff + BREEDING_GRAFT_PARAMETRIC_SHARE;
     debug_assert!((graft_cutoff - 1.0).abs() < 1e-4);
+    let mut mating_count = 0usize;
+    let mut cross_species_mating_count = 0usize;
+    let mut species_breeding_pools: HashMap<usize, Vec<EvolutionCandidate>> = HashMap::new();
+    for candidate in ranked_for_breeding.iter().cloned() {
+        let species = enabled_limb_count(&candidate.genome);
+        species_breeding_pools
+            .entry(species)
+            .or_default()
+            .push(candidate);
+    }
     while next_genomes.len() < target_population_size {
         let tournament_size = 4usize.min(ranked_for_breeding.len().max(1));
         let parent_a = tournament_select(&ranked_for_breeding, tournament_size, rng)
             .genome
             .clone();
-        let parent_b = if ranked_for_breeding.len() > 1 {
-            tournament_select(&ranked_for_breeding, tournament_size, rng)
+        let parent_a_species = enabled_limb_count(&parent_a);
+        let same_species_pool: &[EvolutionCandidate] = species_breeding_pools
+            .get(&parent_a_species)
+            .map(|pool| pool.as_slice())
+            .unwrap_or(ranked_for_breeding.as_slice());
+        let allow_cross_species = rng.random::<f32>() < BREEDING_CROSS_SPECIES_MATING_CHANCE;
+        let parent_b_pool: &[EvolutionCandidate] = if allow_cross_species || same_species_pool.len() < 2
+        {
+            ranked_for_breeding.as_slice()
+        } else {
+            same_species_pool
+        };
+        let parent_b = if parent_b_pool.len() > 1 {
+            let pool_tournament_size = tournament_size.min(parent_b_pool.len()).max(1);
+            tournament_select(parent_b_pool, pool_tournament_size, rng)
                 .genome
                 .clone()
         } else {
             parent_a.clone()
         };
+        let parent_b_species = enabled_limb_count(&parent_b);
+        mating_count += 1;
+        if parent_a_species != parent_b_species {
+            cross_species_mating_count += 1;
+        }
         let operation_roll = rng.random::<f32>();
         let mut child = if operation_roll < BREEDING_PARAMETRIC_ONLY_SHARE {
             mutate_genome(parent_a.clone(), mutation_rate, false, rng)
@@ -3982,6 +4023,11 @@ fn finalize_generation(
             apply_morphology_mode(genome.clone(), morphology_mode, morphology_preset, rng);
         *genome = constrained;
     }
+    let cross_species_mating_rate = if mating_count > 0 {
+        cross_species_mating_count as f32 / mating_count as f32
+    } else {
+        0.0
+    };
 
     let performance_summary = build_generation_performance_summary(
         *generation,
@@ -3990,6 +4036,9 @@ fn finalize_generation(
         random_inject_chance,
         injected_used,
         elite_kept,
+        mating_count,
+        cross_species_mating_count,
+        cross_species_mating_rate,
         holdout_best_fitness,
         holdout_gap,
         0.0,
