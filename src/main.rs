@@ -8959,7 +8959,7 @@ fn insert_box_body(
     let body = RigidBodyBuilder::dynamic()
         .translation(center)
         .linear_damping(0.19)
-        .angular_damping(4.5)
+        .angular_damping(8)
         .ccd_enabled(true)
         .build();
     let handle = bodies.insert(body);
