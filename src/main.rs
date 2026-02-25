@@ -39,6 +39,7 @@ const MIN_GLOBAL_NEURONS: usize = 2;
 const MAX_GLOBAL_NEURONS: usize = 4;
 const LOCAL_SENSOR_DIM: usize = 14;
 const GLOBAL_SENSOR_DIM: usize = 8;
+const BRAIN_STEPS_PER_UPDATE: usize = 4;
 const BRAIN_SUBSTEPS_PER_PHYSICS_STEP: usize = 2;
 const FIXED_SIM_DT: f32 = 1.0 / 120.0;
 const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
@@ -65,6 +66,7 @@ const FITNESS_PROGRESS_LATE_FRACTION: f32 = 0.85;
 const FITNESS_PROGRESS_MID_WEIGHT: f32 = 1.35;
 const FITNESS_PROGRESS_LATE_WEIGHT: f32 = 2.0;
 const FITNESS_GROUNDED_BONUS_WEIGHT: f32 = 1.0;
+const FITNESS_ENERGY_PENALTY: f32 = 0.04;
 const SETTLE_SECONDS: f32 = 1.5;
 const PASSIVE_SETTLE_FRICTION: f32 = 0.0;
 const ACTIVE_SURFACE_FRICTION: f32 = 1.08;
@@ -702,7 +704,9 @@ impl TrialAccumulator {
             early_gain + mid_gain * FITNESS_PROGRESS_MID_WEIGHT + late_gain * FITNESS_PROGRESS_LATE_WEIGHT;
         let progress = net_distance;
         let grounded_bonus = FITNESS_GROUNDED_BONUS_WEIGHT * (1.0 - fallen_ratio);
-        let quality = (sustained_progress * (1.0 - 0.3 * fallen_ratio) + grounded_bonus).max(0.0);
+        let quality = (sustained_progress * (1.0 - 0.3 * fallen_ratio) + grounded_bonus
+            - FITNESS_ENERGY_PENALTY * energy_norm)
+            .max(0.0);
 
         TrialMetrics {
             quality,
@@ -745,6 +749,7 @@ struct TrialSimulator {
     require_settled_before_actuation: bool,
     settled_time_before_actuation: f32,
     actuation_started: bool,
+    brain_step_counter: usize,
     surface_friction_is_passive: bool,
     startup_invalid: bool,
 }
@@ -1132,6 +1137,7 @@ impl TrialSimulator {
             require_settled_before_actuation: true,
             settled_time_before_actuation: 0.0,
             actuation_started: false,
+            brain_step_counter: 0,
             surface_friction_is_passive: true,
             startup_invalid: false,
         };
@@ -1369,6 +1375,7 @@ impl TrialSimulator {
     }
 
     fn update_brains(&mut self, sim_time: f32, dt: f32) {
+        let substep_dt = dt / BRAIN_SUBSTEPS_PER_PHYSICS_STEP as f32;
         for _ in 0..BRAIN_SUBSTEPS_PER_PHYSICS_STEP {
             let global_sensors = self.global_sensor_vector(sim_time);
             for global_index in 0..self.global_brain.outputs_prev.len() {
@@ -1391,7 +1398,7 @@ impl TrialSimulator {
                 self.global_brain.outputs_next[global_index] = lerp(
                     self.global_brain.outputs_prev[global_index],
                     activated,
-                    leak * dt * 30.0,
+                    leak * substep_dt * 30.0,
                 );
             }
             std::mem::swap(
@@ -1427,7 +1434,7 @@ impl TrialSimulator {
                     let activated = apply_neural_activation(neuron_gene.activation, signal);
                     let leak = clamp(neuron_gene.leak, 0.05, 1.0);
                     self.local_brains[part_index].outputs_next[neuron_index] =
-                        lerp(prev_outputs[neuron_index], activated, leak * dt * 30.0);
+                        lerp(prev_outputs[neuron_index], activated, leak * substep_dt * 30.0);
                 }
             }
             for part_index in 0..self.local_brains.len() {
@@ -1514,7 +1521,11 @@ impl TrialSimulator {
         }
 
         if can_actuate {
-            self.update_brains(sim_time, dt);
+            self.brain_step_counter += 1;
+            if self.brain_step_counter >= BRAIN_STEPS_PER_UPDATE {
+                self.brain_step_counter = 0;
+                self.update_brains(sim_time, dt);
+            }
             let mut energy_step = 0.0;
             for controller in &self.controllers {
                 let brain_gene = self
