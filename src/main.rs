@@ -112,12 +112,18 @@ const BREEDING_GRAFT_PARAMETRIC_SHARE: f32 = 0.04;
 const BREEDING_CROSS_SPECIES_MATING_CHANCE: f32 = 0.10;
 const ENABLE_ACTUATION_SELECTION_PENALTY: bool = false;
 const ENABLE_EFFICIENCY_SELECTION_PRESSURE: bool = true;
+const ENABLE_STARTUP_INVALID_SELECTION_PENALTY: bool = true;
+const ENABLE_MORPH_OVERLAP_SELECTION_PENALTY: bool = true;
 const ACTUATION_SELECTION_TOP_SHARE_THRESHOLD: f32 = 0.6;
 const ACTUATION_SELECTION_ENTROPY_THRESHOLD: f32 = 0.45;
 const ACTUATION_SELECTION_PENALTY_WEIGHT: f32 = 0.12;
 const EFFICIENCY_SELECTION_COT_WEIGHT: f32 = 0.12;
 const EFFICIENCY_SELECTION_COT_TARGET: f32 = 0.22;
 const EFFICIENCY_SELECTION_COT_SCALE: f32 = 0.8;
+const STARTUP_INVALID_SELECTION_GRACE_RATE: f32 = 0.10;
+const STARTUP_INVALID_SELECTION_WEIGHT: f32 = 0.18;
+const MORPH_OVERLAP_SELECTION_GRACE_RATIO: f32 = 0.10;
+const MORPH_OVERLAP_SELECTION_WEIGHT: f32 = 0.14;
 const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
 const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
@@ -130,6 +136,9 @@ const DIAG_DOMINANT_JOINT_SHARE_THRESHOLD: f32 = 0.65;
 const DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD: f32 = 0.45;
 const DIAG_DOMINANT_JOINT_ALERT_RATE: f32 = 0.5;
 const DIAG_LOW_ENTROPY_ALERT_RATE: f32 = 0.5;
+const DIAG_HIGH_OVERLAP_RATIO_THRESHOLD: f32 = 0.22;
+const DIAG_HIGH_OVERLAP_ALERT_RATE: f32 = 0.35;
+const DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE: f32 = 0.12;
 const FIXED_PRESET_SPAWN_HEIGHT: f32 = 0.58;
 const RANDOM_SPAWN_EXTRA_HEIGHT_MIN: f32 = 1.2;
 const RANDOM_SPAWN_EXTRA_HEIGHT_MAX: f32 = 2.6;
@@ -403,6 +412,8 @@ struct GenerationEvalResult {
     median_upright: f32,
     median_straightness: f32,
     median_energy_norm: f32,
+    #[serde(default)]
+    median_overlap_ratio: f32,
     median_active_joint_fraction: f32,
     median_top_joint_energy_share: f32,
     median_actuation_entropy: f32,
@@ -435,6 +446,8 @@ struct TrialMetrics {
     avg_height: f32,
     instability_norm: f32,
     energy_norm: f32,
+    #[serde(default)]
+    overlap_ratio: f32,
     #[serde(default)]
     active_joint_fraction: f32,
     #[serde(default)]
@@ -746,6 +759,7 @@ impl TrialAccumulator {
             avg_height,
             instability_norm,
             energy_norm,
+            overlap_ratio: 0.0,
             active_joint_fraction: 0.0,
             top_joint_energy_share: 0.0,
             actuation_entropy: 0.0,
@@ -789,6 +803,7 @@ struct TrialSimulator {
     surface_friction_is_passive: bool,
     active_surface_friction: f32,
     startup_invalid: bool,
+    morphology_overlap_ratio: f32,
 }
 
 impl TrialSimulator {
@@ -1116,6 +1131,7 @@ impl TrialSimulator {
                 limit_z,
             });
         }
+        let morphology_overlap_ratio = morphology_overlap_ratio(&parts, &bodies);
 
         let mut child_controller_index = vec![None; parts.len()];
         for (controller_index, controller) in controllers.iter().enumerate() {
@@ -1201,6 +1217,7 @@ impl TrialSimulator {
             surface_friction_is_passive: true,
             active_surface_friction: trial_active_surface_friction,
             startup_invalid: false,
+            morphology_overlap_ratio,
         };
         sim.set_surface_friction(PASSIVE_SETTLE_FRICTION);
         Ok(sim)
@@ -1301,6 +1318,7 @@ impl TrialSimulator {
         metrics.active_joint_fraction = active_joint_fraction;
         metrics.top_joint_energy_share = top_joint_energy_share;
         metrics.actuation_entropy = actuation_entropy;
+        metrics.overlap_ratio = self.morphology_overlap_ratio;
         if self.startup_invalid {
             metrics.quality = 0.0;
             metrics.progress = 0.0;
@@ -2012,6 +2030,16 @@ struct GenerationActuationStats {
     low_entropy_rate: f32,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct GenerationViabilityStats {
+    startup_invalid_trial_rate: f32,
+    startup_invalid_candidate_rate: f32,
+    overlap_ratio_mean: f32,
+    overlap_ratio_p50: f32,
+    high_overlap_rate: f32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerationDescriptorStats {
@@ -2092,6 +2120,8 @@ struct GenerationPerformanceSummary {
     diversity: GenerationDiversityStats,
     #[serde(default)]
     actuation: GenerationActuationStats,
+    #[serde(default)]
+    viability: GenerationViabilityStats,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     descriptor: Option<GenerationDescriptorStats>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2188,6 +2218,8 @@ struct EvolutionPerformanceSummaryResponse {
     signals: Vec<String>,
     latest_actuation: GenerationActuationStats,
     recent_actuation: GenerationActuationStats,
+    latest_viability: GenerationViabilityStats,
+    recent_viability: GenerationViabilityStats,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     latest_topology: Option<TopologyProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2236,6 +2268,10 @@ struct EvolutionDiagnosisMetrics {
     last_recent_actuation_entropy_mean: f32,
     last_recent_dominant_joint_share_rate: f32,
     last_recent_low_entropy_rate: f32,
+    last_recent_startup_invalid_trial_rate: f32,
+    last_recent_startup_invalid_candidate_rate: f32,
+    last_recent_overlap_ratio_mean: f32,
+    last_recent_high_overlap_rate: f32,
     current_mutation_rate: f32,
     mutation_at_lower_clamp: bool,
     mutation_at_upper_clamp: bool,
@@ -2973,6 +3009,8 @@ struct EvolutionCandidate {
     #[serde(default)]
     median_energy_norm: f32,
     #[serde(default)]
+    median_overlap_ratio: f32,
+    #[serde(default)]
     median_progress: f32,
 }
 
@@ -3416,6 +3454,7 @@ fn start_evolution_worker(
                                     .median_top_joint_energy_share,
                                 median_actuation_entropy: result.median_actuation_entropy,
                                 median_energy_norm: result.median_energy_norm,
+                                median_overlap_ratio: result.median_overlap_ratio,
                                 median_progress: result.median_progress,
                             })
                             .collect();
@@ -3673,6 +3712,7 @@ fn start_evolution_worker(
                 median_top_joint_energy_share: summary.median_top_joint_energy_share,
                 median_actuation_entropy: summary.median_actuation_entropy,
                 median_energy_norm: summary.median_energy_norm,
+                median_overlap_ratio: summary.median_overlap_ratio,
                 median_progress: summary.median_progress,
             });
             if summary.fitness > best_ever_score {
@@ -3890,6 +3930,10 @@ fn build_generation_performance_summary(
         .iter()
         .map(|item| finite_or_zero(item.median_actuation_entropy))
         .collect();
+    let overlap_ratios: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_overlap_ratio))
+        .collect();
     let best = fitnesses.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let mut centroid = [0.0f32; 5];
     let mut spread = [0.0f32; 5];
@@ -3939,6 +3983,26 @@ fn build_generation_performance_summary(
     );
     let low_entropy_rate =
         ratio_at_or_below_threshold(&actuation_entropies, DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD);
+    let total_trials: usize = batch_results.iter().map(|item| item.trial_count).sum();
+    let invalid_startup_trials: usize = batch_results
+        .iter()
+        .map(|item| item.invalid_startup_trials)
+        .sum();
+    let startup_invalid_trial_rate = if total_trials > 0 {
+        invalid_startup_trials as f32 / total_trials as f32
+    } else {
+        0.0
+    };
+    let startup_invalid_candidate_rate = if batch_results.is_empty() {
+        0.0
+    } else {
+        batch_results
+            .iter()
+            .filter(|item| item.invalid_startup_trials > 0)
+            .count() as f32
+            / batch_results.len() as f32
+    };
+    let high_overlap_rate = ratio_above_threshold(&overlap_ratios, DIAG_HIGH_OVERLAP_RATIO_THRESHOLD);
     Some(GenerationPerformanceSummary {
         generation,
         fitness: GenerationFitnessStats {
@@ -3965,6 +4029,13 @@ fn build_generation_performance_summary(
             actuation_entropy_p50: quantile(&actuation_entropies, 0.5),
             dominant_joint_share_rate,
             low_entropy_rate,
+        },
+        viability: GenerationViabilityStats {
+            startup_invalid_trial_rate,
+            startup_invalid_candidate_rate,
+            overlap_ratio_mean: mean(&overlap_ratios),
+            overlap_ratio_p50: quantile(&overlap_ratios, 0.5),
+            high_overlap_rate,
         },
         descriptor: Some(GenerationDescriptorStats { centroid, spread }),
         topology,
@@ -4469,6 +4540,17 @@ fn build_evolution_performance_summary_response(
         .map(|entry| entry.actuation.clone())
         .collect::<Vec<_>>();
     let recent_actuation = aggregate_actuation_stats(&recent_actuation_points);
+    let latest_viability = history
+        .last()
+        .map(|item| item.viability.clone())
+        .unwrap_or_default();
+    let recent_viability_points = history
+        .iter()
+        .rev()
+        .take(20)
+        .map(|entry| entry.viability.clone())
+        .collect::<Vec<_>>();
+    let recent_viability = aggregate_viability_stats(&recent_viability_points);
 
     let recent_best_fitness = history
         .iter()
@@ -4530,6 +4612,12 @@ fn build_evolution_performance_summary_response(
     {
         signals.push("actuation_concentrated".to_string());
     }
+    if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
+        signals.push("startup_invalid_elevated".to_string());
+    }
+    if recent_viability.high_overlap_rate >= DIAG_HIGH_OVERLAP_ALERT_RATE {
+        signals.push("overlap_heavy_morphologies".to_string());
+    }
 
     EvolutionPerformanceSummaryResponse {
         generation: status.generation,
@@ -4548,6 +4636,8 @@ fn build_evolution_performance_summary_response(
         signals,
         latest_actuation,
         recent_actuation,
+        latest_viability,
+        recent_viability,
         latest_topology,
         best_ever_topology,
         best_n_topologies,
@@ -4615,6 +4705,11 @@ fn build_evolution_performance_diagnose_response(
         .map(|entry| entry.actuation.clone())
         .collect::<Vec<_>>();
     let recent_actuation = aggregate_actuation_stats(&recent_actuation_points);
+    let recent_viability_points = recent
+        .iter()
+        .map(|entry| entry.viability.clone())
+        .collect::<Vec<_>>();
+    let recent_viability = aggregate_viability_stats(&recent_viability_points);
 
     let plateau_state = if stagnation >= DIAG_PLATEAU_STAGNATION_GENERATIONS {
         "plateau"
@@ -4755,6 +4850,20 @@ fn build_evolution_performance_diagnose_response(
             message: "Actuation concentration is elevated; monitor whether multi-joint coordination continues to improve.".to_string(),
         });
     }
+    if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "startup_invalid_rate_elevated".to_string(),
+            severity: "warn".to_string(),
+            message: "Startup invalid trials are elevated; many candidates are failing viability before meaningful actuation.".to_string(),
+        });
+    }
+    if recent_viability.high_overlap_rate >= DIAG_HIGH_OVERLAP_ALERT_RATE {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "morphology_overlap_elevated".to_string(),
+            severity: "info".to_string(),
+            message: "A large fraction of candidates have heavy initial body overlap; expect unstable clustered morphologies and wasted evaluations.".to_string(),
+        });
+    }
     if findings.is_empty() {
         findings.push(EvolutionDiagnosisFinding {
             code: "no_critical_alerts".to_string(),
@@ -4784,6 +4893,16 @@ fn build_evolution_performance_diagnose_response(
     {
         recommended_actions.push(
             "Inspect actuation concentration telemetry and consider additional anti-dominance pressure if one-joint strategies persist.".to_string(),
+        );
+    }
+    if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
+        recommended_actions.push(
+            "Tighten morphology generation bounds or mutation amplitudes if startup-invalid trial rate stays elevated for 10+ generations.".to_string(),
+        );
+    }
+    if recent_viability.high_overlap_rate >= DIAG_HIGH_OVERLAP_ALERT_RATE {
+        recommended_actions.push(
+            "Increase overlap selection pressure or narrow edge scale/anchor ranges to reduce highly interpenetrating clustered bodies.".to_string(),
         );
     }
     if recommended_actions.is_empty() {
@@ -4819,6 +4938,11 @@ fn build_evolution_performance_diagnose_response(
             last_recent_actuation_entropy_mean: recent_actuation.actuation_entropy_mean,
             last_recent_dominant_joint_share_rate: recent_actuation.dominant_joint_share_rate,
             last_recent_low_entropy_rate: recent_actuation.low_entropy_rate,
+            last_recent_startup_invalid_trial_rate: recent_viability.startup_invalid_trial_rate,
+            last_recent_startup_invalid_candidate_rate: recent_viability
+                .startup_invalid_candidate_rate,
+            last_recent_overlap_ratio_mean: recent_viability.overlap_ratio_mean,
+            last_recent_high_overlap_rate: recent_viability.high_overlap_rate,
             current_mutation_rate: latest_mutation_rate,
             mutation_at_lower_clamp: mutation_at_lower,
             mutation_at_upper_clamp: mutation_at_upper,
@@ -5078,6 +5202,83 @@ fn aggregate_actuation_stats(points: &[GenerationActuationStats]) -> GenerationA
     out.dominant_joint_share_rate *= inv;
     out.low_entropy_rate *= inv;
     out
+}
+
+fn aggregate_viability_stats(points: &[GenerationViabilityStats]) -> GenerationViabilityStats {
+    if points.is_empty() {
+        return GenerationViabilityStats::default();
+    }
+    let inv = 1.0 / points.len() as f32;
+    let mut out = GenerationViabilityStats::default();
+    for point in points {
+        out.startup_invalid_trial_rate += point.startup_invalid_trial_rate;
+        out.startup_invalid_candidate_rate += point.startup_invalid_candidate_rate;
+        out.overlap_ratio_mean += point.overlap_ratio_mean;
+        out.overlap_ratio_p50 += point.overlap_ratio_p50;
+        out.high_overlap_rate += point.high_overlap_rate;
+    }
+    out.startup_invalid_trial_rate *= inv;
+    out.startup_invalid_candidate_rate *= inv;
+    out.overlap_ratio_mean *= inv;
+    out.overlap_ratio_p50 *= inv;
+    out.high_overlap_rate *= inv;
+    out
+}
+
+fn morphology_overlap_ratio(parts: &[SimPart], bodies: &RigidBodySet) -> f32 {
+    if parts.len() < 2 {
+        return 0.0;
+    }
+    let mut bounds: Vec<(Vector3<f32>, Vector3<f32>)> = Vec::with_capacity(parts.len());
+    let mut total_volume = 0.0f32;
+    for part in parts {
+        let Some(body) = bodies.get(part.body) else {
+            continue;
+        };
+        let half = vector![
+            (part.size[0].abs() * 0.5).max(1e-4),
+            (part.size[1].abs() * 0.5).max(1e-4),
+            (part.size[2].abs() * 0.5).max(1e-4)
+        ];
+        let rotation = body.rotation().to_rotation_matrix();
+        let m = rotation.matrix();
+        let extent_x =
+            m[(0, 0)].abs() * half.x + m[(0, 1)].abs() * half.y + m[(0, 2)].abs() * half.z;
+        let extent_y =
+            m[(1, 0)].abs() * half.x + m[(1, 1)].abs() * half.y + m[(1, 2)].abs() * half.z;
+        let extent_z =
+            m[(2, 0)].abs() * half.x + m[(2, 1)].abs() * half.y + m[(2, 2)].abs() * half.z;
+        let center = *body.translation();
+        let extent = vector![extent_x, extent_y, extent_z];
+        bounds.push((center - extent, center + extent));
+        total_volume += (part.size[0].abs() * part.size[1].abs() * part.size[2].abs()).max(1e-6);
+    }
+    if bounds.len() < 2 || total_volume <= 1e-6 {
+        return 0.0;
+    }
+    let mut overlap_volume_sum = 0.0f32;
+    for i in 0..bounds.len().saturating_sub(1) {
+        for j in (i + 1)..bounds.len() {
+            let (a_min, a_max) = bounds[i];
+            let (b_min, b_max) = bounds[j];
+            let overlap_x = (a_max.x.min(b_max.x) - a_min.x.max(b_min.x)).max(0.0);
+            let overlap_y = (a_max.y.min(b_max.y) - a_min.y.max(b_min.y)).max(0.0);
+            let overlap_z = (a_max.z.min(b_max.z) - a_min.z.max(b_min.z)).max(0.0);
+            let overlap_volume = overlap_x * overlap_y * overlap_z;
+            if overlap_volume.is_finite() && overlap_volume > 0.0 {
+                overlap_volume_sum += overlap_volume;
+            }
+        }
+    }
+    if overlap_volume_sum <= 0.0 {
+        return 0.0;
+    }
+    // Normalize as overlap/(solid+overlap) to keep the signal bounded in [0, 1).
+    clamp(
+        overlap_volume_sum / (total_volume + overlap_volume_sum).max(1e-6),
+        0.0,
+        1.0,
+    )
 }
 
 fn actuation_distribution_metrics(joint_energy_integrals: &[f32]) -> (f32, f32, f32) {
@@ -6503,6 +6704,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
             median_upright: 0.0,
             median_straightness: 0.0,
             median_energy_norm: 0.0,
+            median_overlap_ratio: 0.0,
             median_active_joint_fraction: 0.0,
             median_top_joint_energy_share: 0.0,
             median_actuation_entropy: 0.0,
@@ -6523,6 +6725,10 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         .map(|trial| trial.metrics.straightness)
         .collect();
     let energy_norms: Vec<f32> = trials.iter().map(|trial| trial.metrics.energy_norm).collect();
+    let overlap_ratios: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.overlap_ratio)
+        .collect();
     let active_joint_fractions: Vec<f32> = trials
         .iter()
         .map(|trial| trial.metrics.active_joint_fraction)
@@ -6559,6 +6765,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     let median_upright = quantile(&uprights, 0.5);
     let median_straightness = quantile(&straightnesses, 0.5);
     let median_energy_norm = quantile(&energy_norms, 0.5);
+    let median_overlap_ratio = quantile(&overlap_ratios, 0.5);
     let median_active_joint_fraction = quantile(&active_joint_fractions, 0.5);
     let median_top_joint_energy_share = quantile(&top_joint_energy_shares, 0.5);
     let median_actuation_entropy = quantile(&actuation_entropies, 0.5);
@@ -6586,6 +6793,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         median_upright,
         median_straightness,
         median_energy_norm,
+        median_overlap_ratio,
         median_active_joint_fraction,
         median_top_joint_energy_share,
         median_actuation_entropy,
@@ -6776,6 +6984,39 @@ fn efficiency_selection_penalty(dynamic_energy_norm: f32, median_progress: f32) 
     EFFICIENCY_SELECTION_COT_WEIGHT * excess
 }
 
+fn startup_invalid_selection_penalty(
+    invalid_startup_trials: usize,
+    trial_count: usize,
+    all_trials_invalid_startup: bool,
+) -> f32 {
+    if trial_count == 0 {
+        return 0.0;
+    }
+    if all_trials_invalid_startup {
+        // All-startup-invalid candidates are non-viable and should not breed.
+        return 1.0;
+    }
+    let invalid_rate = invalid_startup_trials as f32 / trial_count as f32;
+    let excess = clamp(
+        (invalid_rate - STARTUP_INVALID_SELECTION_GRACE_RATE)
+            / (1.0 - STARTUP_INVALID_SELECTION_GRACE_RATE).max(1e-6),
+        0.0,
+        1.0,
+    );
+    STARTUP_INVALID_SELECTION_WEIGHT * excess
+}
+
+fn morphology_overlap_selection_penalty(median_overlap_ratio: f32) -> f32 {
+    let overlap = finite_or_zero(median_overlap_ratio).max(0.0);
+    let excess = clamp(
+        (overlap - MORPH_OVERLAP_SELECTION_GRACE_RATIO)
+            / (1.0 - MORPH_OVERLAP_SELECTION_GRACE_RATIO).max(1e-6),
+        0.0,
+        1.0,
+    );
+    MORPH_OVERLAP_SELECTION_WEIGHT * excess
+}
+
 fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[NoveltyEntry]) {
     if results.is_empty() {
         return;
@@ -6861,6 +7102,16 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
         if ENABLE_EFFICIENCY_SELECTION_PRESSURE {
             selection_score -=
                 efficiency_selection_penalty(result.median_energy_norm, result.median_progress);
+        }
+        if ENABLE_STARTUP_INVALID_SELECTION_PENALTY {
+            selection_score -= startup_invalid_selection_penalty(
+                result.invalid_startup_trials,
+                result.trial_count,
+                result.all_trials_invalid_startup,
+            );
+        }
+        if ENABLE_MORPH_OVERLAP_SELECTION_PENALTY {
+            selection_score -= morphology_overlap_selection_penalty(result.median_overlap_ratio);
         }
         result.selection_score = selection_score.max(0.0);
     }
