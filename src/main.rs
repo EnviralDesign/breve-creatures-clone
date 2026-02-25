@@ -97,6 +97,7 @@ const DEFAULT_PERFORMANCE_WINDOW_GENERATIONS: usize = 120;
 const MAX_PERFORMANCE_WINDOW_GENERATIONS: usize = 400;
 const DEFAULT_PERFORMANCE_STRIDE: usize = 1;
 const MAX_PERFORMANCE_STRIDE: usize = 8;
+const MAX_SPECIES_ELITE_SLOTS: usize = 6;
 const BREEDING_PARAMETRIC_ONLY_SHARE: f32 = 0.80;
 const BREEDING_CROSSOVER_PARAMETRIC_SHARE: f32 = 0.10;
 const BREEDING_STRUCTURAL_MUTATION_SHARE: f32 = 0.06;
@@ -1897,6 +1898,8 @@ struct GenerationBreedingStats {
     injected_genomes: usize,
     elite_kept: usize,
     #[serde(default)]
+    species_distribution: Vec<BreedingSpeciesStat>,
+    #[serde(default)]
     holdout_best_fitness: f32,
     #[serde(default)]
     holdout_gap: f32,
@@ -1904,6 +1907,14 @@ struct GenerationBreedingStats {
     anneal_factor: f32,
     #[serde(default)]
     elite_consistency: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BreedingSpeciesStat {
+    enabled_limb_count: usize,
+    count: usize,
+    best_fitness: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3684,6 +3695,37 @@ fn build_generation_performance_summary(
         spread[axis] = std_dev(&axis_values);
     }
     let topology = build_generation_topology_diagnostics(generation, batch_results);
+    let mut species_distribution_map: HashMap<usize, (usize, f32)> = HashMap::new();
+    for candidate in batch_results {
+        let species = enabled_limb_count(&candidate.genome);
+        let entry = species_distribution_map
+            .entry(species)
+            .or_insert((0, f32::NEG_INFINITY));
+        entry.0 += 1;
+        entry.1 = entry.1.max(finite_or_zero(candidate.fitness));
+    }
+    let mut species_distribution = species_distribution_map
+        .into_iter()
+        .map(|(enabled_limb_count, (count, best_fitness))| BreedingSpeciesStat {
+            enabled_limb_count,
+            count,
+            best_fitness: if best_fitness.is_finite() {
+                best_fitness
+            } else {
+                0.0
+            },
+        })
+        .collect::<Vec<_>>();
+    species_distribution.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| {
+                b.best_fitness
+                    .partial_cmp(&a.best_fitness)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| b.enabled_limb_count.cmp(&a.enabled_limb_count))
+    });
     Some(GenerationPerformanceSummary {
         generation,
         fitness: GenerationFitnessStats {
@@ -3708,6 +3750,7 @@ fn build_generation_performance_summary(
             random_inject_chance,
             injected_genomes,
             elite_kept,
+            species_distribution,
             holdout_best_fitness,
             holdout_gap,
             anneal_factor,
@@ -3819,24 +3862,24 @@ fn finalize_generation(
         next_genomes.push(genome);
         injected_used += 1;
     }
-    let elite_count = ELITE_COUNT
-        .min(ranked_by_fitness.len())
-        .min(target_population_size.saturating_sub(next_genomes.len()));
     let mut elite_kept = 0usize;
-    if elite_count > 0 && next_genomes.len() < target_population_size {
-        next_genomes.push(ranked_by_fitness[0].genome.clone());
-        elite_kept += 1;
-    }
-    if elite_count > 1 && next_genomes.len() < target_population_size {
-        let diversity_elite = ranked_for_breeding.first();
-        if let Some(candidate) = diversity_elite {
-            if candidate.attempt != ranked_by_fitness[0].attempt {
-                next_genomes.push(candidate.genome.clone());
-                elite_kept += 1;
-            } else if ranked_by_fitness.len() > 1 {
-                next_genomes.push(ranked_by_fitness[1].genome.clone());
-                elite_kept += 1;
-            }
+    if next_genomes.len() < target_population_size {
+        let mut best_per_species: HashMap<usize, &EvolutionCandidate> = HashMap::new();
+        for candidate in ranked_by_fitness.iter() {
+            let species = enabled_limb_count(&candidate.genome);
+            best_per_species.entry(species).or_insert(candidate);
+        }
+        let mut species_elites: Vec<&EvolutionCandidate> = best_per_species.into_values().collect();
+        species_elites.sort_by(|a, b| {
+            b.fitness
+                .partial_cmp(&a.fitness)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let desired_elite_slots = ELITE_COUNT.max(species_elites.len().min(MAX_SPECIES_ELITE_SLOTS));
+        let elite_slots = desired_elite_slots.min(target_population_size.saturating_sub(next_genomes.len()));
+        for elite in species_elites.into_iter().take(elite_slots) {
+            next_genomes.push(elite.genome.clone());
+            elite_kept += 1;
         }
     }
     if target_population_size == 1 && next_genomes.is_empty() && !ranked_by_fitness.is_empty() {
@@ -6297,8 +6340,17 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             candidate.novelty_norm = value;
         },
     );
+    let mut species_sizes: HashMap<usize, usize> = HashMap::new();
+    for result in results.iter() {
+        let species = enabled_limb_count(&result.genome);
+        *species_sizes.entry(species).or_insert(0) += 1;
+    }
     for result in results.iter_mut() {
-        result.selection_score = 0.62 * result.quality_norm
+        let species = enabled_limb_count(&result.genome);
+        let species_size = *species_sizes.get(&species).unwrap_or(&1) as f32;
+        let sharing_divisor = species_size.sqrt().max(1.0);
+        let shared_quality = result.quality_norm / sharing_divisor;
+        result.selection_score = 0.62 * shared_quality
             + 0.28 * result.novelty_norm
             + 0.1 * result.local_competition;
     }

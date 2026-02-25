@@ -50,6 +50,9 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `run`, `window`, `trends`
     - `run` includes `generation`, `populationSize`, `trialCount`, `runSpeed`, `paused`, `morphologyMode`, `morphologyPreset`
     - `generations` with per-generation fitness/selection/diversity/breeding stats
+    - `generations[*].breeding.speciesDistribution`:
+      - grouped by `enabledLimbCount`
+      - each item includes `enabledLimbCount`, `count`, `bestFitness`
     - `generations[*].topology` with winner + best-N topology profiles and:
       - `distinctFingerprintCount`
       - `distinctCoarseFingerprintCount`
