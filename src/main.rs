@@ -44,6 +44,7 @@ const BRAIN_SUBSTEPS_PER_PHYSICS_STEP: usize = 2;
 const FIXED_SIM_DT: f32 = 1.0 / 120.0;
 const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
 const MAX_MOTOR_SPEED: f32 = 6.8;
+const MOTOR_TARGET_MAX_SLEW_RATE_RAD_PER_SEC: f32 = 4.0;
 const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const EMERGENCY_MAX_BODY_ANGULAR_SPEED: f32 = 20.0;
@@ -71,6 +72,9 @@ const ACTIVE_JOINT_ENERGY_SHARE_THRESHOLD: f32 = 0.01;
 const SETTLE_SECONDS: f32 = 1.5;
 const PASSIVE_SETTLE_FRICTION: f32 = 0.0;
 const ACTIVE_SURFACE_FRICTION: f32 = 1.08;
+const ENABLE_TRIAL_ENV_RANDOMIZATION: bool = true;
+const TRIAL_FRICTION_JITTER_FRACTION: f32 = 0.08;
+const TRIAL_MASS_JITTER_FRACTION: f32 = 0.03;
 const JOINT_AREA_STRENGTH_MIN_SCALE: f32 = 0.12;
 const JOINT_AREA_STRENGTH_MAX_SCALE: f32 = 5.5;
 const GROUND_COLLISION_GROUP: Group = Group::GROUP_1;
@@ -111,10 +115,9 @@ const ENABLE_EFFICIENCY_SELECTION_PRESSURE: bool = true;
 const ACTUATION_SELECTION_TOP_SHARE_THRESHOLD: f32 = 0.6;
 const ACTUATION_SELECTION_ENTROPY_THRESHOLD: f32 = 0.45;
 const ACTUATION_SELECTION_PENALTY_WEIGHT: f32 = 0.12;
-const EFFICIENCY_SELECTION_DYNAMIC_WEIGHT: f32 = 0.09;
-const EFFICIENCY_SELECTION_MAINTENANCE_WEIGHT: f32 = 0.11;
-const EFFICIENCY_MAINTENANCE_EDGE_WEIGHT: f32 = 0.45;
-const EFFICIENCY_MAINTENANCE_PART_BUDGET_WEIGHT: f32 = 0.08;
+const EFFICIENCY_SELECTION_COT_WEIGHT: f32 = 0.12;
+const EFFICIENCY_SELECTION_COT_TARGET: f32 = 0.22;
+const EFFICIENCY_SELECTION_COT_SCALE: f32 = 0.8;
 const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
 const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
@@ -776,6 +779,7 @@ struct TrialSimulator {
     genome: Genome,
     metrics: TrialAccumulator,
     joint_energy_integrals: Vec<f32>,
+    joint_target_positions: Vec<[f32; 3]>,
     elapsed: f32,
     duration: f32,
     require_settled_before_actuation: bool,
@@ -783,6 +787,7 @@ struct TrialSimulator {
     actuation_started: bool,
     brain_step_counter: usize,
     surface_friction_is_passive: bool,
+    active_surface_friction: f32,
     startup_invalid: bool,
 }
 
@@ -807,11 +812,29 @@ impl TrialSimulator {
         let ccd_solver = CCDSolver::new();
 
         let mut rng = SmallRng::seed_from_u64(seed);
+        let (trial_active_surface_friction, trial_mass_scale) = if ENABLE_TRIAL_ENV_RANDOMIZATION {
+            (
+                (ACTIVE_SURFACE_FRICTION
+                    * rng_range(
+                        &mut rng,
+                        1.0 - TRIAL_FRICTION_JITTER_FRACTION,
+                        1.0 + TRIAL_FRICTION_JITTER_FRACTION,
+                    ))
+                .clamp(0.2, 2.4),
+                rng_range(
+                    &mut rng,
+                    1.0 - TRIAL_MASS_JITTER_FRACTION,
+                    1.0 + TRIAL_MASS_JITTER_FRACTION,
+                ),
+            )
+        } else {
+            (ACTIVE_SURFACE_FRICTION, 1.0)
+        };
 
         let ground_handle = bodies.insert(RigidBodyBuilder::fixed().build());
         let ground_collider = ColliderBuilder::cuboid(420.0, 5.0, 420.0)
             .translation(vector![0.0, -5.0, 0.0])
-            .friction(ACTIVE_SURFACE_FRICTION)
+            .friction(trial_active_surface_friction)
             .restitution(0.015)
             .collision_groups(InteractionGroups::new(
                 GROUND_COLLISION_GROUP,
@@ -844,6 +867,7 @@ impl TrialSimulator {
             * torso_dims.d
             * torso_dims.mass
             * genome.mass_scale
+            * trial_mass_scale
             * MASS_DENSITY_MULTIPLIER)
             .max(0.7);
 
@@ -945,6 +969,7 @@ impl TrialSimulator {
                 * part_d
                 * node.part.mass
                 * genome.mass_scale
+                * trial_mass_scale
                 * MASS_DENSITY_MULTIPLIER)
                 .max(0.08);
             let child = insert_box_body(
@@ -1166,6 +1191,7 @@ impl TrialSimulator {
             genome: genome.clone(),
             metrics: TrialAccumulator::new(spawn, genome),
             joint_energy_integrals: vec![0.0; controller_count],
+            joint_target_positions: vec![[0.0; 3]; controller_count],
             elapsed: 0.0,
             duration: config.duration_seconds,
             require_settled_before_actuation: true,
@@ -1173,6 +1199,7 @@ impl TrialSimulator {
             actuation_started: false,
             brain_step_counter: 0,
             surface_friction_is_passive: true,
+            active_surface_friction: trial_active_surface_friction,
             startup_invalid: false,
         };
         sim.set_surface_friction(PASSIVE_SETTLE_FRICTION);
@@ -1322,6 +1349,17 @@ impl TrialSimulator {
         let Some(controller) = self.controllers.get(controller_index) else {
             return ([0.0; 3], [0.0; 3]);
         };
+        let (joint_angles, joint_angvels) = self.joint_state_raw_for_controller(controller);
+        let angle_x = clamp(joint_angles[0] / controller.limit_x.max(0.05), -1.0, 1.0);
+        let angle_y = clamp(joint_angles[1] / controller.limit_y.max(0.05), -1.0, 1.0);
+        let angle_z = clamp(joint_angles[2] / controller.limit_z.max(0.05), -1.0, 1.0);
+        let vel_x = clamp(joint_angvels[0] / MAX_MOTOR_SPEED, -1.0, 1.0);
+        let vel_y = clamp(joint_angvels[1] / MAX_MOTOR_SPEED, -1.0, 1.0);
+        let vel_z = clamp(joint_angvels[2] / MAX_MOTOR_SPEED, -1.0, 1.0);
+        ([angle_x, angle_y, angle_z], [vel_x, vel_y, vel_z])
+    }
+
+    fn joint_state_raw_for_controller(&self, controller: &SimController) -> ([f32; 3], [f32; 3]) {
         let Some(parent_body) = self
             .bodies
             .get(self.parts[controller.parent_part_index].body)
@@ -1340,13 +1378,10 @@ impl TrialSimulator {
         let rel_angvel_local = parent_body
             .rotation()
             .inverse_transform_vector(&rel_angvel_world);
-        let angle_x = clamp(rx / controller.limit_x.max(0.05), -1.0, 1.0);
-        let angle_y = clamp(ry / controller.limit_y.max(0.05), -1.0, 1.0);
-        let angle_z = clamp(rz / controller.limit_z.max(0.05), -1.0, 1.0);
-        let vel_x = clamp(rel_angvel_local.x / MAX_MOTOR_SPEED, -1.0, 1.0);
-        let vel_y = clamp(rel_angvel_local.y / MAX_MOTOR_SPEED, -1.0, 1.0);
-        let vel_z = clamp(rel_angvel_local.z / MAX_MOTOR_SPEED, -1.0, 1.0);
-        ([angle_x, angle_y, angle_z], [vel_x, vel_y, vel_z])
+        (
+            [rx, ry, rz],
+            [rel_angvel_local.x, rel_angvel_local.y, rel_angvel_local.z],
+        )
     }
 
     fn local_sensor_vector(&self, part_index: usize, sim_time: f32) -> [f32; LOCAL_SENSOR_DIM] {
@@ -1558,7 +1593,7 @@ impl TrialSimulator {
             return Ok(());
         }
         if can_actuate && self.surface_friction_is_passive {
-            self.set_surface_friction(ACTIVE_SURFACE_FRICTION);
+            self.set_surface_friction(self.active_surface_friction);
             self.surface_friction_is_passive = false;
         }
 
@@ -1604,11 +1639,42 @@ impl TrialSimulator {
                 } else {
                     (0.0, 0.0)
                 };
-                let target_x = clamp(
+                let raw_target_x = clamp(
                     signal_x * controller.limit_x,
                     -controller.limit_x,
                     controller.limit_x,
                 );
+                let raw_target_y = clamp(
+                    signal_y * controller.limit_y,
+                    -controller.limit_y,
+                    controller.limit_y,
+                );
+                let raw_target_z = clamp(
+                    signal_z * controller.limit_z,
+                    -controller.limit_z,
+                    controller.limit_z,
+                );
+                let (joint_angles, joint_angvels) = self.joint_state_raw_for_controller(controller);
+                let target_prev = self
+                    .joint_target_positions
+                    .get(controller_index)
+                    .copied()
+                    .unwrap_or([0.0; 3]);
+                let max_delta = MOTOR_TARGET_MAX_SLEW_RATE_RAD_PER_SEC * dt.max(1e-6);
+                let target_x = slew_limit(target_prev[0], raw_target_x, max_delta);
+                let target_y = if matches!(controller.joint_type, JointTypeGene::Ball) {
+                    slew_limit(target_prev[1], raw_target_y, max_delta)
+                } else {
+                    0.0
+                };
+                let target_z = if matches!(controller.joint_type, JointTypeGene::Ball) {
+                    slew_limit(target_prev[2], raw_target_z, max_delta)
+                } else {
+                    0.0
+                };
+                if let Some(target_state) = self.joint_target_positions.get_mut(controller_index) {
+                    *target_state = [target_x, target_y, target_z];
+                }
                 if let Some(joint) = self.impulse_joints.get_mut(controller.joint, true) {
                     joint.data.set_motor_position(
                         JointAxis::AngX,
@@ -1620,19 +1686,13 @@ impl TrialSimulator {
                         .data
                         .set_motor_max_force(JointAxis::AngX, controller.torque_x);
 
-                    controller_energy +=
-                        (target_x.abs() * controller.stiffness_x).min(controller.torque_x) * dt;
+                    let tau_x = clamp(
+                        controller.stiffness_x * (target_x - joint_angles[0]),
+                        -controller.torque_x,
+                        controller.torque_x,
+                    );
+                    controller_energy += tau_x.abs() * joint_angvels[0].abs() * dt;
                     if matches!(controller.joint_type, JointTypeGene::Ball) {
-                        let target_y = clamp(
-                            signal_y * controller.limit_y,
-                            -controller.limit_y,
-                            controller.limit_y,
-                        );
-                        let target_z = clamp(
-                            signal_z * controller.limit_z,
-                            -controller.limit_z,
-                            controller.limit_z,
-                        );
                         joint.data.set_motor_position(
                             JointAxis::AngY,
                             target_y,
@@ -1651,10 +1711,18 @@ impl TrialSimulator {
                         joint
                             .data
                             .set_motor_max_force(JointAxis::AngZ, controller.torque_z);
-                        controller_energy +=
-                            (target_y.abs() * controller.stiffness_y).min(controller.torque_y) * dt;
-                        controller_energy +=
-                            (target_z.abs() * controller.stiffness_z).min(controller.torque_z) * dt;
+                        let tau_y = clamp(
+                            controller.stiffness_y * (target_y - joint_angles[1]),
+                            -controller.torque_y,
+                            controller.torque_y,
+                        );
+                        let tau_z = clamp(
+                            controller.stiffness_z * (target_z - joint_angles[2]),
+                            -controller.torque_z,
+                            controller.torque_z,
+                        );
+                        controller_energy += tau_y.abs() * joint_angvels[1].abs() * dt;
+                        controller_energy += tau_z.abs() * joint_angvels[2].abs() * dt;
                     }
                 }
                 let controller_energy = controller_energy.max(0.0);
@@ -1782,6 +1850,7 @@ struct EvolutionControlRequest {
     population_size: Option<usize>,
     fast_forward_generations: Option<usize>,
     run_speed: Option<f32>,
+    fast_forward_use_primary_compute: Option<bool>,
     morphology_mode: Option<EvolutionMorphologyMode>,
     morphology_preset: Option<MorphologyPreset>,
 }
@@ -2231,6 +2300,8 @@ struct EvolutionStatus {
     run_speed: f32,
     fast_forward_remaining: usize,
     fast_forward_active: bool,
+    #[serde(default = "default_fast_forward_use_primary_compute")]
+    fast_forward_use_primary_compute: bool,
     injection_queue_count: usize,
     #[serde(default = "default_morphology_mode")]
     morphology_mode: EvolutionMorphologyMode,
@@ -2315,6 +2386,7 @@ struct EvolutionCommandState {
     pending_population_size: usize,
     run_speed: f32,
     fast_forward_remaining: usize,
+    fast_forward_use_primary_compute: bool,
     morphology_mode: EvolutionMorphologyMode,
     morphology_preset: MorphologyPreset,
     injection_queue: VecDeque<EvolutionInjection>,
@@ -2371,6 +2443,7 @@ impl EvolutionController {
             run_speed: 1.0,
             fast_forward_remaining: 0,
             fast_forward_active: false,
+            fast_forward_use_primary_compute: true,
             injection_queue_count: 0,
             morphology_mode: initial_morphology_mode,
             morphology_preset: initial_morphology_preset,
@@ -2390,6 +2463,7 @@ impl EvolutionController {
                 pending_population_size: initial_population_size,
                 run_speed: 1.0,
                 fast_forward_remaining: 0,
+                fast_forward_use_primary_compute: true,
                 morphology_mode: initial_morphology_mode,
                 morphology_preset: initial_morphology_preset,
                 injection_queue: VecDeque::new(),
@@ -2420,6 +2494,7 @@ impl EvolutionController {
         usize,
         EvolutionMorphologyMode,
         MorphologyPreset,
+        bool,
     ) {
         let mut commands = self
             .commands
@@ -2435,6 +2510,7 @@ impl EvolutionController {
             commands.fast_forward_remaining,
             commands.morphology_mode,
             commands.morphology_preset,
+            commands.fast_forward_use_primary_compute,
         )
     }
 
@@ -2637,6 +2713,15 @@ impl EvolutionController {
                 };
                 commands.run_speed = requested.clamp(0.5, 8.0);
             }
+            "set_fast_forward_primary_compute" => {
+                let Some(enabled) = request.fast_forward_use_primary_compute else {
+                    return Err(
+                        "fastForwardUsePrimaryCompute is required for set_fast_forward_primary_compute"
+                            .to_string(),
+                    );
+                };
+                commands.fast_forward_use_primary_compute = enabled;
+            }
             "queue_fast_forward" => {
                 let Some(requested) = request.fast_forward_generations else {
                     return Err(
@@ -2678,6 +2763,7 @@ impl EvolutionController {
         let pending_population_size = commands.pending_population_size;
         let run_speed = commands.run_speed;
         let fast_forward_remaining = commands.fast_forward_remaining;
+        let fast_forward_use_primary_compute = commands.fast_forward_use_primary_compute;
         let morphology_mode = commands.morphology_mode;
         let morphology_preset = commands.morphology_preset;
         let injection_queue_count = commands.injection_queue.len();
@@ -2690,6 +2776,7 @@ impl EvolutionController {
             shared.status.pending_population_size = pending_population_size;
             shared.status.fast_forward_remaining = fast_forward_remaining;
             shared.status.fast_forward_active = fast_forward_remaining > 0;
+            shared.status.fast_forward_use_primary_compute = fast_forward_use_primary_compute;
             shared.status.injection_queue_count = injection_queue_count;
             shared.status.morphology_mode = morphology_mode;
             shared.status.morphology_preset = morphology_preset;
@@ -2885,6 +2972,8 @@ struct EvolutionCandidate {
     median_actuation_entropy: f32,
     #[serde(default)]
     median_energy_norm: f32,
+    #[serde(default)]
+    median_progress: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2956,6 +3045,8 @@ fn start_evolution_worker(
                     commands.pending_population_size = loaded_status.pending_population_size;
                     commands.run_speed = loaded_status.run_speed.clamp(0.5, 8.0);
                     commands.fast_forward_remaining = loaded_status.fast_forward_remaining;
+                    commands.fast_forward_use_primary_compute =
+                        loaded_status.fast_forward_use_primary_compute;
                     commands.morphology_mode = loaded_status.morphology_mode;
                     commands.morphology_preset = loaded_status.morphology_preset;
                     commands.injection_queue = VecDeque::from(loaded.injection_queue.clone());
@@ -2994,6 +3085,7 @@ fn start_evolution_worker(
                 fast_forward_remaining,
                 morphology_mode,
                 morphology_preset,
+                fast_forward_use_primary_compute,
             ) = controller.command_snapshot();
             config.fixed_startup = matches!(morphology_mode, EvolutionMorphologyMode::FixedPreset);
             if restart_requested {
@@ -3223,6 +3315,11 @@ fn start_evolution_worker(
                     _dt: Some(config.dt),
                     motor_power_scale: Some(config.motor_power_scale),
                 };
+                let local_fast_forward_worker_limit = if fast_forward_use_primary_compute {
+                    sim_worker_limit
+                } else {
+                    0
+                };
                 let (tx_progress, mut rx_progress) = mpsc::channel::<GenerationStreamEvent>(256);
                 let request_for_stream = request.clone();
                 let config_for_stream = config.clone();
@@ -3232,7 +3329,7 @@ fn start_evolution_worker(
                         request_for_stream,
                         config_for_stream,
                         tx_progress,
-                        sim_worker_limit,
+                        local_fast_forward_worker_limit,
                         sat_pool_for_stream,
                     )
                 });
@@ -3319,6 +3416,7 @@ fn start_evolution_worker(
                                     .median_top_joint_energy_share,
                                 median_actuation_entropy: result.median_actuation_entropy,
                                 median_energy_norm: result.median_energy_norm,
+                                median_progress: result.median_progress,
                             })
                             .collect();
                         if let Some(summary) =
@@ -3451,7 +3549,7 @@ fn start_evolution_worker(
             let wall_trial_start = Instant::now();
 
             for step in 0..steps {
-                let (paused_now, restart_now, _, _, fast_forward_now, _, _) =
+                let (paused_now, restart_now, _, _, fast_forward_now, _, _, _) =
                     controller.command_snapshot();
                 if restart_now {
                     controller.force_restart();
@@ -3466,7 +3564,7 @@ fn start_evolution_worker(
                 if paused_now {
                     loop {
                         std::thread::sleep(Duration::from_millis(25));
-                        let (paused_loop, restart_loop, _, _, fast_forward_loop, _, _) =
+                        let (paused_loop, restart_loop, _, _, fast_forward_loop, _, _, _) =
                             controller.command_snapshot();
                         if restart_loop {
                             controller.force_restart();
@@ -3575,6 +3673,7 @@ fn start_evolution_worker(
                 median_top_joint_energy_share: summary.median_top_joint_energy_share,
                 median_actuation_entropy: summary.median_actuation_entropy,
                 median_energy_norm: summary.median_energy_norm,
+                median_progress: summary.median_progress,
             });
             if summary.fitness > best_ever_score {
                 best_ever_score = summary.fitness;
@@ -6024,7 +6123,19 @@ fn run_generation_stream(
 
     let attempt_count = request.genomes.len();
     let trial_count = request.seeds.len();
-    let worker_count = resolve_generation_worker_count(max_workers, attempt_count);
+    let worker_count = if max_workers == 0 {
+        0
+    } else {
+        resolve_generation_worker_count(max_workers, attempt_count)
+    };
+    if worker_count == 0 && satellite_pool.connected_count() == 0 {
+        tx.blocking_send(GenerationStreamEvent::Error {
+            message: "fast-forward is set to satellite-only, but no satellites are connected"
+                .to_string(),
+        })
+        .ok();
+        return Err("satellite-only generation requested with no connected satellites".to_string());
+    }
     let pending_jobs = Arc::new(Mutex::new(Vec::new()));
     for a in (0..attempt_count).rev() {
         for t in (0..trial_count).rev() {
@@ -6653,53 +6764,16 @@ fn actuation_selection_penalty(top_joint_energy_share: f32, actuation_entropy: f
     ACTUATION_SELECTION_PENALTY_WEIGHT * top_excess * entropy_deficit
 }
 
-fn efficiency_selection_penalty(dynamic_energy_norm: f32, maintenance_norm: f32) -> f32 {
-    EFFICIENCY_SELECTION_DYNAMIC_WEIGHT * clamp(dynamic_energy_norm, 0.0, 1.0)
-        + EFFICIENCY_SELECTION_MAINTENANCE_WEIGHT * clamp(maintenance_norm, 0.0, 1.0)
-}
-
-fn normalize_values(values: &[f32]) -> Vec<f32> {
-    if values.is_empty() {
-        return Vec::new();
-    }
-    let mut min_value = f32::INFINITY;
-    let mut max_value = f32::NEG_INFINITY;
-    for value in values {
-        let value = finite_or_zero(*value);
-        min_value = min_value.min(value);
-        max_value = max_value.max(value);
-    }
-    if !min_value.is_finite() || !max_value.is_finite() {
-        return vec![0.0; values.len()];
-    }
-    let span = max_value - min_value;
-    if span < 1e-9 {
-        return vec![0.0; values.len()];
-    }
-    values
-        .iter()
-        .map(|value| (finite_or_zero(*value) - min_value) / span)
-        .collect()
-}
-
-fn genome_maintenance_load(genome: &Genome) -> f32 {
-    if genome.graph.nodes.is_empty() {
-        return 0.0;
-    }
-    let mut mass_estimate = 0.0f32;
-    let mut edge_count = 0usize;
-    for node in &genome.graph.nodes {
-        let w = node.part.w.abs().clamp(0.14, 2.8);
-        let h = node.part.h.abs().clamp(0.22, 3.4);
-        let d = node.part.d.abs().clamp(0.14, 2.8);
-        let density_scale = node.part.mass.abs().clamp(0.08, 3.4);
-        mass_estimate += w * h * d * density_scale * genome.mass_scale.max(0.1) * MASS_DENSITY_MULTIPLIER;
-        edge_count += node.edges.len().min(MAX_GRAPH_EDGES_PER_NODE);
-    }
-    let part_budget = genome.graph.max_parts.clamp(1, MAX_GRAPH_PARTS) as f32;
-    mass_estimate
-        + edge_count as f32 * EFFICIENCY_MAINTENANCE_EDGE_WEIGHT
-        + part_budget * EFFICIENCY_MAINTENANCE_PART_BUDGET_WEIGHT
+fn efficiency_selection_penalty(dynamic_energy_norm: f32, median_progress: f32) -> f32 {
+    let energy = finite_or_zero(dynamic_energy_norm).max(0.0);
+    let progress = finite_or_zero(median_progress).max(0.0);
+    let cost_of_transport = energy / (progress + 1.0);
+    let excess = clamp(
+        (cost_of_transport - EFFICIENCY_SELECTION_COT_TARGET) / EFFICIENCY_SELECTION_COT_SCALE,
+        0.0,
+        1.0,
+    );
+    EFFICIENCY_SELECTION_COT_WEIGHT * excess
 }
 
 fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[NoveltyEntry]) {
@@ -6758,18 +6832,6 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             candidate.novelty_norm = value;
         },
     );
-    let dynamic_energy_norm = normalize_values(
-        &results
-            .iter()
-            .map(|candidate| finite_or_zero(candidate.median_energy_norm))
-            .collect::<Vec<_>>(),
-    );
-    let maintenance_norm = normalize_values(
-        &results
-            .iter()
-            .map(|candidate| genome_maintenance_load(&candidate.genome))
-            .collect::<Vec<_>>(),
-    );
     let mut species_sizes: HashMap<usize, usize> = HashMap::new();
     if ENABLE_SPECIES_MECHANICS {
         for result in results.iter() {
@@ -6777,7 +6839,7 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             *species_sizes.entry(species).or_insert(0) += 1;
         }
     }
-    for (index, result) in results.iter_mut().enumerate() {
+    for result in results.iter_mut() {
         let sharing_divisor = if ENABLE_SPECIES_MECHANICS {
             let species = enabled_limb_count(&result.genome);
             let species_size = *species_sizes.get(&species).unwrap_or(&1) as f32;
@@ -6797,10 +6859,8 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             selection_score -= actuation_penalty;
         }
         if ENABLE_EFFICIENCY_SELECTION_PRESSURE {
-            let dynamic_penalty_input = dynamic_energy_norm.get(index).copied().unwrap_or(0.0);
-            let maintenance_penalty_input = maintenance_norm.get(index).copied().unwrap_or(0.0);
             selection_score -=
-                efficiency_selection_penalty(dynamic_penalty_input, maintenance_penalty_input);
+                efficiency_selection_penalty(result.median_energy_norm, result.median_progress);
         }
         result.selection_score = selection_score.max(0.0);
     }
@@ -9711,6 +9771,10 @@ fn default_run_speed() -> f32 {
     1.0
 }
 
+fn default_fast_forward_use_primary_compute() -> bool {
+    true
+}
+
 fn default_min_population_size() -> usize {
     MIN_POPULATION_SIZE
 }
@@ -9749,6 +9813,13 @@ fn rng_range(rng: &mut SmallRng, min: f32, max: f32) -> f32 {
 
 fn clamp(value: f32, min: f32, max: f32) -> f32 {
     value.max(min).min(max)
+}
+
+fn slew_limit(previous: f32, target: f32, max_delta: f32) -> f32 {
+    if max_delta <= 0.0 {
+        return target;
+    }
+    previous + clamp(target - previous, -max_delta, max_delta)
 }
 
 fn quantile(values: &[f32], q: f32) -> f32 {

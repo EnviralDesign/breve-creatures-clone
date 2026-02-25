@@ -283,6 +283,7 @@
       <div><span class="label">Sim rate:</span><span id="simRate">1.00x</span></div>
       <div><span class="label">Queued batch:</span><span id="queuedPop">none</span></div>
       <div><span class="label">Fast skip:</span><span id="fastSkipStatus">off</span></div>
+      <div><span class="label">FF compute:</span><span id="ffComputeMode">primary + satellites</span></div>
       <div><span class="label">Satellites:</span><span id="satellites">none</span></div>
       <div class="ctrl">
         Evolution
@@ -328,6 +329,10 @@
         <button id="skip500Btn" type="button">+500</button>
         <button id="skipStopBtn" type="button">Stop</button>
       </div>
+      <label class="ctrl">
+        <input id="ffPrimaryComputeCheckbox" type="checkbox" checked>
+        Use this PC for fast-forward
+      </label>
       <div class="hint">Space: pause | Drag: temporary manual camera</div>
     </div>
   </div>
@@ -437,7 +442,9 @@
     const simRateLabel = document.getElementById("simRate");
     const queuedPopLabel = document.getElementById("queuedPop");
     const fastSkipStatusLabel = document.getElementById("fastSkipStatus");
+    const ffComputeModeLabel = document.getElementById("ffComputeMode");
     const satellitesLabel = document.getElementById("satellites");
+    const ffPrimaryComputeCheckbox = document.getElementById("ffPrimaryComputeCheckbox");
     const populationSlider = document.getElementById("populationSlider");
     const populationSliderValue = document.getElementById("populationSliderValue");
     const speedSelect = document.getElementById("speedSelect");
@@ -488,6 +495,7 @@
     populationLabel.textContent = String(defaultPopulationSize);
     queuedPopLabel.textContent = "none";
     fastSkipStatusLabel.textContent = "off";
+    ffComputeModeLabel.textContent = "primary + satellites";
     satellitesLabel.textContent = "none";
     trialInfoLabel.textContent = `1/${defaultTrialCount}`;
 
@@ -511,6 +519,7 @@
     let evolutionConnected = false;
     let injectionQueueCount = 0;
     let connectedSatellites = [];
+    let fastForwardUsePrimaryCompute = true;
     let lastCheckpointId = "";
     let hudCollapsed = false;
     let genomeCollapsed = false;
@@ -564,6 +573,13 @@
     skip200Btn.addEventListener("click", () => queueFastForward(200));
     skip500Btn.addEventListener("click", () => queueFastForward(500));
     skipStopBtn.addEventListener("click", stopFastForward);
+    ffPrimaryComputeCheckbox.addEventListener("change", () => {
+      const enabled = Boolean(ffPrimaryComputeCheckbox.checked);
+      void sendEvolutionControl({
+        action: "set_fast_forward_primary_compute",
+        fastForwardUsePrimaryCompute: enabled,
+      });
+    });
     pauseResumeBtn.addEventListener("click", () => {
       void sendEvolutionControl({ action: paused ? "resume" : "pause" });
     });
@@ -1055,10 +1071,16 @@
       }
       const ffRemainingRaw = status.fastForwardRemaining ?? status.fast_forward_remaining;
       const ffActiveRaw = status.fastForwardActive ?? status.fast_forward_active;
+      const ffPrimaryComputeRaw =
+        status.fastForwardUsePrimaryCompute ?? status.fast_forward_use_primary_compute;
       const queueRaw = status.injectionQueueCount ?? status.injection_queue_count;
       const satellitesRaw = status.connectedSatellites ?? status.connected_satellites;
       fastForwardGenerationsRemaining = Number.isFinite(ffRemainingRaw) ? Math.max(0, ffRemainingRaw | 0) : fastForwardGenerationsRemaining;
       backendFastForwardBusy = Boolean(ffActiveRaw);
+      if (typeof ffPrimaryComputeRaw === "boolean") {
+        fastForwardUsePrimaryCompute = ffPrimaryComputeRaw;
+      }
+      ffPrimaryComputeCheckbox.checked = fastForwardUsePrimaryCompute;
       injectionQueueCount = Number.isFinite(queueRaw) ? Math.max(0, queueRaw | 0) : injectionQueueCount;
       if (Array.isArray(satellitesRaw)) {
         connectedSatellites = satellitesRaw.filter((id) => typeof id === "string");
@@ -1149,6 +1171,9 @@
           ? `${fastForwardGenerationsRemaining} gens remaining${backendFastForwardBusy ? " (processing...)" : ""}`
           : "off")
         : `offline${backendOfflineReason ? `: ${backendOfflineReason}` : ""}`;
+      ffComputeModeLabel.textContent = fastForwardUsePrimaryCompute
+        ? "primary + satellites"
+        : "satellites only";
       satellitesLabel.textContent = connectedSatellites.length > 0
         ? `${connectedSatellites.length} connected: ${connectedSatellites.join(", ")}`
         : "none";
