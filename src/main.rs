@@ -3537,7 +3537,7 @@ fn dequeue_injected_genomes(
         .map(|injection| {
             let genome = match injection.mutation_mode {
                 InjectMutationMode::None => injection.genome,
-                InjectMutationMode::Light => mutate_genome(injection.genome, 0.12, rng),
+                InjectMutationMode::Light => mutate_genome(injection.genome, 0.12, false, rng),
             };
             apply_morphology_mode(genome, morphology_mode, morphology_preset, rng)
         })
@@ -3826,7 +3826,12 @@ fn finalize_generation(
     }
     if target_population_size == 1 && next_genomes.is_empty() && !ranked_by_fitness.is_empty() {
         next_genomes.clear();
-        next_genomes.push(mutate_genome(ranked_by_fitness[0].genome.clone(), 0.7, rng));
+        next_genomes.push(mutate_genome(
+            ranked_by_fitness[0].genome.clone(),
+            0.7,
+            false,
+            rng,
+        ));
     }
 
     let mean_novelty_norm = if ranked_for_breeding.is_empty() {
@@ -3891,14 +3896,16 @@ fn finalize_generation(
             parent_a.clone()
         };
         let operation_roll = rng.random::<f32>();
-        let mut child = if operation_roll < 0.4 {
-            mutate_genome(parent_a.clone(), mutation_rate, rng)
-        } else if operation_roll < 0.7 {
+        let mut child = if operation_roll < 0.60 {
+            mutate_genome(parent_a.clone(), mutation_rate, false, rng)
+        } else if operation_roll < 0.80 {
             let crossed = crossover_genome(&parent_a, &parent_b, rng);
-            mutate_genome(crossed, mutation_rate, rng)
+            mutate_genome(crossed, mutation_rate, false, rng)
+        } else if operation_roll < 0.92 {
+            mutate_genome(parent_a.clone(), mutation_rate, true, rng)
         } else {
             let grafted = graft_genome(&parent_a, &parent_b, rng);
-            mutate_genome(grafted, mutation_rate, rng)
+            mutate_genome(grafted, mutation_rate, false, rng)
         };
         if ranked_for_breeding.len() > 1 && rng.random::<f32>() < random_inject_chance {
             child = random_genome(rng);
@@ -7614,13 +7621,13 @@ fn crossover_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> Gra
     child
 }
 
-fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
+fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, structural: bool, rng: &mut SmallRng) {
     if graph.nodes.is_empty() {
         *graph = random_graph_gene(rng);
         return;
     }
     let mut local_chance = chance;
-    if rng.random::<f32>() < chance * 0.28 && graph.nodes.len() < MAX_GRAPH_NODES {
+    if structural && rng.random::<f32>() < chance * 0.28 && graph.nodes.len() < MAX_GRAPH_NODES {
         let current_node_len = graph.nodes.len().max(1);
         let to = rng.random_range(0..current_node_len);
         graph.nodes.push(MorphNodeGene {
@@ -7635,7 +7642,7 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
         });
         local_chance = (local_chance + 0.05).min(1.0);
     }
-    if rng.random::<f32>() < chance * 0.18 && graph.nodes.len() > 3 {
+    if structural && rng.random::<f32>() < chance * 0.18 && graph.nodes.len() > 3 {
         let remove_index = rng.random_range(1..graph.nodes.len());
         graph.nodes.remove(remove_index);
         let fallback_to = graph.root.min(graph.nodes.len().saturating_sub(1));
@@ -7649,7 +7656,7 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
             }
         }
     }
-    if rng.random::<f32>() < chance * 0.4 {
+    if structural && rng.random::<f32>() < chance * 0.4 {
         graph.max_parts = (graph.max_parts as i32 + if rng.random::<f32>() < 0.5 { -3 } else { 3 })
             .clamp(6, MAX_GRAPH_PARTS as i32) as usize;
     }
@@ -7658,7 +7665,7 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
         .neurons
         .len()
         .clamp(MIN_GLOBAL_NEURONS, MAX_GLOBAL_NEURONS);
-    if rng.random::<f32>() < chance * 0.22 {
+    if structural && rng.random::<f32>() < chance * 0.22 {
         let delta = if rng.random::<f32>() < 0.5 { -1 } else { 1 };
         global_target = (global_target as i32 + delta)
             .clamp(MIN_GLOBAL_NEURONS as i32, MAX_GLOBAL_NEURONS as i32)
@@ -7690,7 +7697,7 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
             .neurons
             .len()
             .clamp(MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
-        if rng.random::<f32>() < local_chance * 0.28 {
+        if structural && rng.random::<f32>() < local_chance * 0.28 {
             let delta = if rng.random::<f32>() < 0.5 { -1 } else { 1 };
             local_target = (local_target as i32 + delta)
                 .clamp(MIN_LOCAL_NEURONS as i32, MAX_LOCAL_NEURONS as i32)
@@ -7791,19 +7798,19 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
                 mutate_number(edge.motor_strength, 0.3, 4.5, local_chance, 0.2, rng);
             edge.joint_stiffness =
                 mutate_number(edge.joint_stiffness, 12.0, 160.0, local_chance, 0.16, rng);
-            if rng.random::<f32>() < local_chance * 0.18 {
+            if structural && rng.random::<f32>() < local_chance * 0.18 {
                 edge.reflect_x = !edge.reflect_x;
             }
-            if rng.random::<f32>() < local_chance * 0.12 {
+            if structural && rng.random::<f32>() < local_chance * 0.12 {
                 edge.terminal_only = !edge.terminal_only;
             }
-            if rng.random::<f32>() < local_chance * 0.16 {
+            if structural && rng.random::<f32>() < local_chance * 0.16 {
                 edge.joint_type = match edge.joint_type {
                     JointTypeGene::Hinge => JointTypeGene::Ball,
                     JointTypeGene::Ball => JointTypeGene::Hinge,
                 };
             }
-            if rng.random::<f32>() < local_chance * 0.15 {
+            if structural && rng.random::<f32>() < local_chance * 0.15 {
                 let delta = if rng.random::<f32>() < 0.5 {
                     -1i32
                 } else {
@@ -7811,16 +7818,18 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, rng: &mut SmallRng) {
                 };
                 edge.recursive_limit = (edge.recursive_limit as i32 + delta).clamp(1, 5) as u32;
             }
-            if rng.random::<f32>() < local_chance * 0.2 {
+            if structural && rng.random::<f32>() < local_chance * 0.2 {
                 edge.to = rng.random_range(0..node_len);
             }
         }
-        if node.edges.len() < MAX_GRAPH_EDGES_PER_NODE && rng.random::<f32>() < local_chance * 0.32
+        if structural
+            && node.edges.len() < MAX_GRAPH_EDGES_PER_NODE
+            && rng.random::<f32>() < local_chance * 0.32
         {
             let to = rng.random_range(0..node_len);
             node.edges.push(random_graph_edge_gene(rng, to));
         }
-        if node.edges.len() > 1 && rng.random::<f32>() < local_chance * 0.18 {
+        if structural && node.edges.len() > 1 && rng.random::<f32>() < local_chance * 0.18 {
             let remove = rng.random_range(0..node.edges.len());
             node.edges.remove(remove);
         }
@@ -8068,7 +8077,7 @@ fn crossover_genome(a: &Genome, b: &Genome, rng: &mut SmallRng) -> Genome {
     child
 }
 
-fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome {
+fn mutate_genome(mut genome: Genome, chance: f32, structural: bool, rng: &mut SmallRng) -> Genome {
     genome.torso.w = mutate_number(genome.torso.w, 0.45, 3.1, chance, 0.2, rng);
     genome.torso.h = mutate_number(genome.torso.h, 0.45, 3.1, chance, 0.2, rng);
     genome.torso.d = mutate_number(genome.torso.d, 0.45, 3.1, chance, 0.2, rng);
@@ -8192,7 +8201,7 @@ fn mutate_genome(mut genome: Genome, chance: f32, rng: &mut SmallRng) -> Genome 
         genome.mass_scale = mutate_number(genome.mass_scale, 0.7, 1.36, 1.0, 0.18, rng);
     }
     genome.version = default_genome_version();
-    mutate_graph_gene(&mut genome.graph, chance, rng);
+    mutate_graph_gene(&mut genome.graph, chance, structural, rng);
     project_graph_to_legacy(&mut genome);
     ensure_active_body_plan(&mut genome, rng);
     genome
