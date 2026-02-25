@@ -100,14 +100,21 @@ const DEFAULT_PERFORMANCE_STRIDE: usize = 1;
 const MAX_PERFORMANCE_STRIDE: usize = 8;
 const ENABLE_SPECIES_MECHANICS: bool = false;
 const MAX_SPECIES_ELITE_SLOTS: usize = 6;
+const BREEDING_TOURNAMENT_SIZE: usize = 3;
 const BREEDING_PARAMETRIC_ONLY_SHARE: f32 = 0.80;
 const BREEDING_CROSSOVER_PARAMETRIC_SHARE: f32 = 0.10;
 const BREEDING_STRUCTURAL_MUTATION_SHARE: f32 = 0.06;
 const BREEDING_GRAFT_PARAMETRIC_SHARE: f32 = 0.04;
 const BREEDING_CROSS_SPECIES_MATING_CHANCE: f32 = 0.10;
+const ENABLE_ACTUATION_SELECTION_PENALTY: bool = false;
+const ENABLE_EFFICIENCY_SELECTION_PRESSURE: bool = true;
 const ACTUATION_SELECTION_TOP_SHARE_THRESHOLD: f32 = 0.6;
 const ACTUATION_SELECTION_ENTROPY_THRESHOLD: f32 = 0.45;
 const ACTUATION_SELECTION_PENALTY_WEIGHT: f32 = 0.12;
+const EFFICIENCY_SELECTION_DYNAMIC_WEIGHT: f32 = 0.09;
+const EFFICIENCY_SELECTION_MAINTENANCE_WEIGHT: f32 = 0.11;
+const EFFICIENCY_MAINTENANCE_EDGE_WEIGHT: f32 = 0.45;
+const EFFICIENCY_MAINTENANCE_PART_BUDGET_WEIGHT: f32 = 0.08;
 const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
 const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
@@ -392,6 +399,7 @@ struct GenerationEvalResult {
     median_progress: f32,
     median_upright: f32,
     median_straightness: f32,
+    median_energy_norm: f32,
     median_active_joint_fraction: f32,
     median_top_joint_energy_share: f32,
     median_actuation_entropy: f32,
@@ -2875,6 +2883,8 @@ struct EvolutionCandidate {
     median_top_joint_energy_share: f32,
     #[serde(default)]
     median_actuation_entropy: f32,
+    #[serde(default)]
+    median_energy_norm: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3308,6 +3318,7 @@ fn start_evolution_worker(
                                 median_top_joint_energy_share: result
                                     .median_top_joint_energy_share,
                                 median_actuation_entropy: result.median_actuation_entropy,
+                                median_energy_norm: result.median_energy_norm,
                             })
                             .collect();
                         if let Some(summary) =
@@ -3563,6 +3574,7 @@ fn start_evolution_worker(
                 median_active_joint_fraction: summary.median_active_joint_fraction,
                 median_top_joint_energy_share: summary.median_top_joint_energy_share,
                 median_actuation_entropy: summary.median_actuation_entropy,
+                median_energy_norm: summary.median_energy_norm,
             });
             if summary.fitness > best_ever_score {
                 best_ever_score = summary.fitness;
@@ -4085,7 +4097,7 @@ fn finalize_generation(
         }
     }
     while next_genomes.len() < target_population_size {
-        let tournament_size = 4usize.min(ranked_for_breeding.len().max(1));
+        let tournament_size = BREEDING_TOURNAMENT_SIZE.min(ranked_for_breeding.len().max(1));
         let parent_a = tournament_select(&ranked_for_breeding, tournament_size, rng)
             .genome
             .clone();
@@ -6379,6 +6391,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
             median_progress: 0.0,
             median_upright: 0.0,
             median_straightness: 0.0,
+            median_energy_norm: 0.0,
             median_active_joint_fraction: 0.0,
             median_top_joint_energy_share: 0.0,
             median_actuation_entropy: 0.0,
@@ -6398,6 +6411,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         .iter()
         .map(|trial| trial.metrics.straightness)
         .collect();
+    let energy_norms: Vec<f32> = trials.iter().map(|trial| trial.metrics.energy_norm).collect();
     let active_joint_fractions: Vec<f32> = trials
         .iter()
         .map(|trial| trial.metrics.active_joint_fraction)
@@ -6433,6 +6447,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     let median_progress = quantile(&progresses, 0.5);
     let median_upright = quantile(&uprights, 0.5);
     let median_straightness = quantile(&straightnesses, 0.5);
+    let median_energy_norm = quantile(&energy_norms, 0.5);
     let median_active_joint_fraction = quantile(&active_joint_fractions, 0.5);
     let median_top_joint_energy_share = quantile(&top_joint_energy_shares, 0.5);
     let median_actuation_entropy = quantile(&actuation_entropies, 0.5);
@@ -6459,6 +6474,7 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         median_progress,
         median_upright,
         median_straightness,
+        median_energy_norm,
         median_active_joint_fraction,
         median_top_joint_energy_share,
         median_actuation_entropy,
@@ -6637,6 +6653,55 @@ fn actuation_selection_penalty(top_joint_energy_share: f32, actuation_entropy: f
     ACTUATION_SELECTION_PENALTY_WEIGHT * top_excess * entropy_deficit
 }
 
+fn efficiency_selection_penalty(dynamic_energy_norm: f32, maintenance_norm: f32) -> f32 {
+    EFFICIENCY_SELECTION_DYNAMIC_WEIGHT * clamp(dynamic_energy_norm, 0.0, 1.0)
+        + EFFICIENCY_SELECTION_MAINTENANCE_WEIGHT * clamp(maintenance_norm, 0.0, 1.0)
+}
+
+fn normalize_values(values: &[f32]) -> Vec<f32> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let mut min_value = f32::INFINITY;
+    let mut max_value = f32::NEG_INFINITY;
+    for value in values {
+        let value = finite_or_zero(*value);
+        min_value = min_value.min(value);
+        max_value = max_value.max(value);
+    }
+    if !min_value.is_finite() || !max_value.is_finite() {
+        return vec![0.0; values.len()];
+    }
+    let span = max_value - min_value;
+    if span < 1e-9 {
+        return vec![0.0; values.len()];
+    }
+    values
+        .iter()
+        .map(|value| (finite_or_zero(*value) - min_value) / span)
+        .collect()
+}
+
+fn genome_maintenance_load(genome: &Genome) -> f32 {
+    if genome.graph.nodes.is_empty() {
+        return 0.0;
+    }
+    let mut mass_estimate = 0.0f32;
+    let mut edge_count = 0usize;
+    for node in &genome.graph.nodes {
+        let w = node.part.w.abs().clamp(0.14, 2.8);
+        let h = node.part.h.abs().clamp(0.22, 3.4);
+        let d = node.part.d.abs().clamp(0.14, 2.8);
+        let density_scale = node.part.mass.abs().clamp(0.08, 3.4);
+        mass_estimate += w * h * d * density_scale * genome.mass_scale.max(0.1) * MASS_DENSITY_MULTIPLIER;
+        edge_count += node.edges.len().min(MAX_GRAPH_EDGES_PER_NODE);
+    }
+    let part_budget = genome.graph.max_parts.clamp(1, MAX_GRAPH_PARTS) as f32;
+    mass_estimate
+        + edge_count as f32 * EFFICIENCY_MAINTENANCE_EDGE_WEIGHT
+        + part_budget * EFFICIENCY_MAINTENANCE_PART_BUDGET_WEIGHT
+}
+
 fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[NoveltyEntry]) {
     if results.is_empty() {
         return;
@@ -6693,6 +6758,18 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             candidate.novelty_norm = value;
         },
     );
+    let dynamic_energy_norm = normalize_values(
+        &results
+            .iter()
+            .map(|candidate| finite_or_zero(candidate.median_energy_norm))
+            .collect::<Vec<_>>(),
+    );
+    let maintenance_norm = normalize_values(
+        &results
+            .iter()
+            .map(|candidate| genome_maintenance_load(&candidate.genome))
+            .collect::<Vec<_>>(),
+    );
     let mut species_sizes: HashMap<usize, usize> = HashMap::new();
     if ENABLE_SPECIES_MECHANICS {
         for result in results.iter() {
@@ -6700,7 +6777,7 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             *species_sizes.entry(species).or_insert(0) += 1;
         }
     }
-    for result in results.iter_mut() {
+    for (index, result) in results.iter_mut().enumerate() {
         let sharing_divisor = if ENABLE_SPECIES_MECHANICS {
             let species = enabled_limb_count(&result.genome);
             let species_size = *species_sizes.get(&species).unwrap_or(&1) as f32;
@@ -6709,14 +6786,23 @@ fn apply_diversity_scores(results: &mut [EvolutionCandidate], archive: &[Novelty
             1.0
         };
         let shared_quality = result.quality_norm / sharing_divisor;
-        let base_score = 0.62 * shared_quality
+        let mut selection_score = 0.62 * shared_quality
             + 0.28 * result.novelty_norm
             + 0.1 * result.local_competition;
-        let actuation_penalty = actuation_selection_penalty(
-            result.median_top_joint_energy_share,
-            result.median_actuation_entropy,
-        );
-        result.selection_score = (base_score - actuation_penalty).max(0.0);
+        if ENABLE_ACTUATION_SELECTION_PENALTY {
+            let actuation_penalty = actuation_selection_penalty(
+                result.median_top_joint_energy_share,
+                result.median_actuation_entropy,
+            );
+            selection_score -= actuation_penalty;
+        }
+        if ENABLE_EFFICIENCY_SELECTION_PRESSURE {
+            let dynamic_penalty_input = dynamic_energy_norm.get(index).copied().unwrap_or(0.0);
+            let maintenance_penalty_input = maintenance_norm.get(index).copied().unwrap_or(0.0);
+            selection_score -=
+                efficiency_selection_penalty(dynamic_penalty_input, maintenance_penalty_input);
+        }
+        result.selection_score = selection_score.max(0.0);
     }
 }
 

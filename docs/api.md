@@ -164,7 +164,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
   - Response shape: `{ results: GenerationEvalResult[] }`.
   - Each result includes:
     - `fitness`, `descriptor`, `trialCount`
-    - `medianProgress`, `medianUpright`, `medianStraightness`
+    - `medianProgress`, `medianUpright`, `medianStraightness`, `medianEnergyNorm`
     - actuation telemetry medians:
       - `medianActiveJointFraction`
       - `medianTopJointEnergyShare`
