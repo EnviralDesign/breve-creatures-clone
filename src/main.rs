@@ -67,6 +67,7 @@ const FITNESS_PROGRESS_MID_WEIGHT: f32 = 1.35;
 const FITNESS_PROGRESS_LATE_WEIGHT: f32 = 2.0;
 const FITNESS_GROUNDED_BONUS_WEIGHT: f32 = 1.0;
 const FITNESS_ENERGY_PENALTY: f32 = 0.04;
+const ACTIVE_JOINT_ENERGY_SHARE_THRESHOLD: f32 = 0.01;
 const SETTLE_SECONDS: f32 = 1.5;
 const PASSIVE_SETTLE_FRICTION: f32 = 0.0;
 const ACTIVE_SURFACE_FRICTION: f32 = 1.08;
@@ -111,6 +112,10 @@ const SUMMARY_BEST_TOPOLOGY_COUNT: usize = 5;
 const DIAG_RECENT_WINDOW: usize = 20;
 const DIAG_PLATEAU_STAGNATION_GENERATIONS: usize = 20;
 const DIAG_WATCH_STAGNATION_GENERATIONS: usize = 10;
+const DIAG_DOMINANT_JOINT_SHARE_THRESHOLD: f32 = 0.65;
+const DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD: f32 = 0.45;
+const DIAG_DOMINANT_JOINT_ALERT_RATE: f32 = 0.5;
+const DIAG_LOW_ENTROPY_ALERT_RATE: f32 = 0.5;
 const FIXED_PRESET_SPAWN_HEIGHT: f32 = 0.58;
 const RANDOM_SPAWN_EXTRA_HEIGHT_MIN: f32 = 1.2;
 const RANDOM_SPAWN_EXTRA_HEIGHT_MAX: f32 = 2.6;
@@ -383,6 +388,9 @@ struct GenerationEvalResult {
     median_progress: f32,
     median_upright: f32,
     median_straightness: f32,
+    median_active_joint_fraction: f32,
+    median_top_joint_energy_share: f32,
+    median_actuation_entropy: f32,
     invalid_startup_trials: usize,
     invalid_startup_trial_rate: f32,
     all_trials_invalid_startup: bool,
@@ -412,6 +420,12 @@ struct TrialMetrics {
     avg_height: f32,
     instability_norm: f32,
     energy_norm: f32,
+    #[serde(default)]
+    active_joint_fraction: f32,
+    #[serde(default)]
+    top_joint_energy_share: f32,
+    #[serde(default)]
+    actuation_entropy: f32,
     fallen_ratio: f32,
     straightness: f32,
     net_distance: f32,
@@ -717,6 +731,9 @@ impl TrialAccumulator {
             avg_height,
             instability_norm,
             energy_norm,
+            active_joint_fraction: 0.0,
+            top_joint_energy_share: 0.0,
+            actuation_entropy: 0.0,
             fallen_ratio,
             straightness,
             net_distance,
@@ -746,6 +763,7 @@ struct TrialSimulator {
     torso_handle: RigidBodyHandle,
     genome: Genome,
     metrics: TrialAccumulator,
+    joint_energy_integrals: Vec<f32>,
     elapsed: f32,
     duration: f32,
     require_settled_before_actuation: bool,
@@ -1113,6 +1131,7 @@ impl TrialSimulator {
             &(),
         );
 
+        let controller_count = controllers.len();
         let mut sim = Self {
             pipeline,
             gravity,
@@ -1134,6 +1153,7 @@ impl TrialSimulator {
             torso_handle,
             genome: genome.clone(),
             metrics: TrialAccumulator::new(spawn, genome),
+            joint_energy_integrals: vec![0.0; controller_count],
             elapsed: 0.0,
             duration: config.duration_seconds,
             require_settled_before_actuation: true,
@@ -1237,10 +1257,18 @@ impl TrialSimulator {
 
     fn final_result(&self) -> TrialResult {
         let mut metrics = self.metrics.compute_metrics(self.duration);
+        let (active_joint_fraction, top_joint_energy_share, actuation_entropy) =
+            actuation_distribution_metrics(&self.joint_energy_integrals);
+        metrics.active_joint_fraction = active_joint_fraction;
+        metrics.top_joint_energy_share = top_joint_energy_share;
+        metrics.actuation_entropy = actuation_entropy;
         if self.startup_invalid {
             metrics.quality = 0.0;
             metrics.progress = 0.0;
             metrics.net_distance = 0.0;
+            metrics.active_joint_fraction = 0.0;
+            metrics.top_joint_energy_share = 0.0;
+            metrics.actuation_entropy = 0.0;
             metrics.invalid_startup = true;
         }
         let descriptor = self.metrics.descriptor(&metrics);
@@ -1529,7 +1557,7 @@ impl TrialSimulator {
                 self.update_brains(sim_time, dt);
             }
             let mut energy_step = 0.0;
-            for controller in &self.controllers {
+            for (controller_index, controller) in self.controllers.iter().enumerate() {
                 let brain_gene = self
                     .genome
                     .graph
@@ -1542,6 +1570,7 @@ impl TrialSimulator {
                     .get(controller.child_part_index)
                     .map(|brain| brain.outputs_prev.as_slice())
                     .unwrap_or(&[]);
+                let mut controller_energy = 0.0;
                 let signal_x = self.joint_axis_signal(
                     &brain_gene.effector_x,
                     local_outputs,
@@ -1579,7 +1608,7 @@ impl TrialSimulator {
                         .data
                         .set_motor_max_force(JointAxis::AngX, controller.torque_x);
 
-                    energy_step +=
+                    controller_energy +=
                         (target_x.abs() * controller.stiffness_x).min(controller.torque_x) * dt;
                     if matches!(controller.joint_type, JointTypeGene::Ball) {
                         let target_y = clamp(
@@ -1610,11 +1639,16 @@ impl TrialSimulator {
                         joint
                             .data
                             .set_motor_max_force(JointAxis::AngZ, controller.torque_z);
-                        energy_step +=
+                        controller_energy +=
                             (target_y.abs() * controller.stiffness_y).min(controller.torque_y) * dt;
-                        energy_step +=
+                        controller_energy +=
                             (target_z.abs() * controller.stiffness_z).min(controller.torque_z) * dt;
                     }
+                }
+                let controller_energy = controller_energy.max(0.0);
+                energy_step += controller_energy;
+                if let Some(joint_energy) = self.joint_energy_integrals.get_mut(controller_index) {
+                    *joint_energy += controller_energy;
                 }
             }
             self.metrics.add_energy(energy_step);
@@ -1884,6 +1918,19 @@ struct GenerationDiversityStats {
     local_competition_mean: f32,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct GenerationActuationStats {
+    active_joint_fraction_mean: f32,
+    active_joint_fraction_p50: f32,
+    top_joint_energy_share_mean: f32,
+    top_joint_energy_share_p50: f32,
+    actuation_entropy_mean: f32,
+    actuation_entropy_p50: f32,
+    dominant_joint_share_rate: f32,
+    low_entropy_rate: f32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerationDescriptorStats {
@@ -1962,6 +2009,8 @@ struct GenerationPerformanceSummary {
     fitness: GenerationFitnessStats,
     selection: GenerationSelectionStats,
     diversity: GenerationDiversityStats,
+    #[serde(default)]
+    actuation: GenerationActuationStats,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     descriptor: Option<GenerationDescriptorStats>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2056,6 +2105,8 @@ struct EvolutionPerformanceSummaryResponse {
     mutation_pressure: EvolutionMutationPressure,
     convergence: Vec<EvolutionConvergenceSignal>,
     signals: Vec<String>,
+    latest_actuation: GenerationActuationStats,
+    recent_actuation: GenerationActuationStats,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     latest_topology: Option<TopologyProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2082,6 +2133,7 @@ struct EvolutionDiagnosisStates {
     volatility_state: String,
     novelty_state: String,
     trend_state: String,
+    actuation_state: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2098,6 +2150,11 @@ struct EvolutionDiagnosisMetrics {
     last_recent_novelty_mean: f32,
     last_recent_novelty_min: f32,
     last_recent_novelty_max: f32,
+    last_recent_active_joint_fraction_mean: f32,
+    last_recent_top_joint_energy_share_mean: f32,
+    last_recent_actuation_entropy_mean: f32,
+    last_recent_dominant_joint_share_rate: f32,
+    last_recent_low_entropy_rate: f32,
     current_mutation_rate: f32,
     mutation_at_lower_clamp: bool,
     mutation_at_upper_clamp: bool,
@@ -2808,6 +2865,12 @@ struct EvolutionCandidate {
     invalid_startup_trials: usize,
     #[serde(default)]
     all_trials_invalid_startup: bool,
+    #[serde(default)]
+    median_active_joint_fraction: f32,
+    #[serde(default)]
+    median_top_joint_energy_share: f32,
+    #[serde(default)]
+    median_actuation_entropy: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3237,6 +3300,10 @@ fn start_evolution_worker(
                                 trial_count: result.trial_count,
                                 invalid_startup_trials: result.invalid_startup_trials,
                                 all_trials_invalid_startup: result.all_trials_invalid_startup,
+                                median_active_joint_fraction: result.median_active_joint_fraction,
+                                median_top_joint_energy_share: result
+                                    .median_top_joint_energy_share,
+                                median_actuation_entropy: result.median_actuation_entropy,
                             })
                             .collect();
                         if let Some(summary) =
@@ -3489,6 +3556,9 @@ fn start_evolution_worker(
                 trial_count: summary.trial_count,
                 invalid_startup_trials: summary.invalid_startup_trials,
                 all_trials_invalid_startup: summary.all_trials_invalid_startup,
+                median_active_joint_fraction: summary.median_active_joint_fraction,
+                median_top_joint_energy_share: summary.median_top_joint_energy_share,
+                median_actuation_entropy: summary.median_actuation_entropy,
             });
             if summary.fitness > best_ever_score {
                 best_ever_score = summary.fitness;
@@ -3693,6 +3763,18 @@ fn build_generation_performance_summary(
         .iter()
         .map(|item| finite_or_zero(item.local_competition))
         .collect();
+    let active_joint_fractions: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_active_joint_fraction))
+        .collect();
+    let top_joint_energy_shares: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_top_joint_energy_share))
+        .collect();
+    let actuation_entropies: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_actuation_entropy))
+        .collect();
     let best = fitnesses.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let mut centroid = [0.0f32; 5];
     let mut spread = [0.0f32; 5];
@@ -3736,6 +3818,12 @@ fn build_generation_performance_summary(
             })
             .then_with(|| b.enabled_limb_count.cmp(&a.enabled_limb_count))
     });
+    let dominant_joint_share_rate = ratio_above_threshold(
+        &top_joint_energy_shares,
+        DIAG_DOMINANT_JOINT_SHARE_THRESHOLD,
+    );
+    let low_entropy_rate =
+        ratio_at_or_below_threshold(&actuation_entropies, DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD);
     Some(GenerationPerformanceSummary {
         generation,
         fitness: GenerationFitnessStats {
@@ -3752,6 +3840,16 @@ fn build_generation_performance_summary(
             novelty_mean: mean(&novelties),
             novelty_p90: quantile(&novelties, 0.9),
             local_competition_mean: mean(&local_competitions),
+        },
+        actuation: GenerationActuationStats {
+            active_joint_fraction_mean: mean(&active_joint_fractions),
+            active_joint_fraction_p50: quantile(&active_joint_fractions, 0.5),
+            top_joint_energy_share_mean: mean(&top_joint_energy_shares),
+            top_joint_energy_share_p50: quantile(&top_joint_energy_shares, 0.5),
+            actuation_entropy_mean: mean(&actuation_entropies),
+            actuation_entropy_p50: quantile(&actuation_entropies, 0.5),
+            dominant_joint_share_rate,
+            low_entropy_rate,
         },
         descriptor: Some(GenerationDescriptorStats { centroid, spread }),
         topology,
@@ -4229,6 +4327,17 @@ fn build_evolution_performance_summary_response(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
     let best_n_topologies = summarize_best_n_topologies(&history, SUMMARY_BEST_TOPOLOGY_COUNT);
+    let latest_actuation = history
+        .last()
+        .map(|item| item.actuation.clone())
+        .unwrap_or_default();
+    let recent_actuation_points = history
+        .iter()
+        .rev()
+        .take(20)
+        .map(|entry| entry.actuation.clone())
+        .collect::<Vec<_>>();
+    let recent_actuation = aggregate_actuation_stats(&recent_actuation_points);
 
     let recent_best_fitness = history
         .iter()
@@ -4285,6 +4394,11 @@ fn build_evolution_performance_summary_response(
     if mutation_rate > 0.55 {
         signals.push("mutation_pressure_high".to_string());
     }
+    if recent_actuation.dominant_joint_share_rate >= DIAG_DOMINANT_JOINT_ALERT_RATE
+        && recent_actuation.actuation_entropy_mean <= DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD
+    {
+        signals.push("actuation_concentrated".to_string());
+    }
 
     EvolutionPerformanceSummaryResponse {
         generation: status.generation,
@@ -4301,6 +4415,8 @@ fn build_evolution_performance_summary_response(
         },
         convergence,
         signals,
+        latest_actuation,
+        recent_actuation,
         latest_topology,
         best_ever_topology,
         best_n_topologies,
@@ -4363,6 +4479,11 @@ fn build_evolution_performance_diagnose_response(
         .last()
         .map(|_| latest_mutation_rate >= MAX_BREEDING_MUTATION_RATE - 1e-4)
         .unwrap_or(false);
+    let recent_actuation_points = recent
+        .iter()
+        .map(|entry| entry.actuation.clone())
+        .collect::<Vec<_>>();
+    let recent_actuation = aggregate_actuation_stats(&recent_actuation_points);
 
     let plateau_state = if stagnation >= DIAG_PLATEAU_STAGNATION_GENERATIONS {
         "plateau"
@@ -4391,6 +4512,16 @@ fn build_evolution_performance_diagnose_response(
         "declining"
     } else {
         "flat"
+    };
+    let actuation_state = if recent_actuation.dominant_joint_share_rate
+        >= DIAG_DOMINANT_JOINT_ALERT_RATE
+        && recent_actuation.actuation_entropy_mean <= DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD
+    {
+        "concentrated"
+    } else if recent_actuation.dominant_joint_share_rate >= 0.35 {
+        "watch"
+    } else {
+        "distributed"
     };
 
     let representative_topologies = summarize_best_n_topologies(&history, 3);
@@ -4478,6 +4609,21 @@ fn build_evolution_performance_diagnose_response(
                 .to_string(),
         });
     }
+    if recent_actuation.dominant_joint_share_rate >= DIAG_DOMINANT_JOINT_ALERT_RATE
+        && recent_actuation.actuation_entropy_mean <= DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD
+    {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "actuation_joint_dominance".to_string(),
+            severity: "warn".to_string(),
+            message: "Actuation is concentrated into a small set of joints; high-energy single-joint strategies may be dominating.".to_string(),
+        });
+    } else if recent_actuation.dominant_joint_share_rate >= 0.35 {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "actuation_concentration_watch".to_string(),
+            severity: "info".to_string(),
+            message: "Actuation concentration is elevated; monitor whether multi-joint coordination continues to improve.".to_string(),
+        });
+    }
     if findings.is_empty() {
         findings.push(EvolutionDiagnosisFinding {
             code: "no_critical_alerts".to_string(),
@@ -4502,6 +4648,13 @@ fn build_evolution_performance_diagnose_response(
             "Keep selection robust to variance (median/p25 emphasis) and avoid overreacting to one-generation spikes.".to_string(),
         );
     }
+    if recent_actuation.dominant_joint_share_rate >= DIAG_DOMINANT_JOINT_ALERT_RATE
+        && recent_actuation.low_entropy_rate >= DIAG_LOW_ENTROPY_ALERT_RATE
+    {
+        recommended_actions.push(
+            "Inspect actuation concentration telemetry and consider additional anti-dominance pressure if one-joint strategies persist.".to_string(),
+        );
+    }
     if recommended_actions.is_empty() {
         recommended_actions
             .push("Continue current run and re-evaluate after 10-15 generations.".to_string());
@@ -4515,6 +4668,7 @@ fn build_evolution_performance_diagnose_response(
             volatility_state: volatility_state.to_string(),
             novelty_state: novelty_state.to_string(),
             trend_state: trend_state.to_string(),
+            actuation_state: actuation_state.to_string(),
         },
         metrics: EvolutionDiagnosisMetrics {
             best_ever_fitness: finite_or_zero(status.best_ever_score),
@@ -4528,6 +4682,12 @@ fn build_evolution_performance_diagnose_response(
             last_recent_novelty_mean: finite_or_zero(novelty_mean),
             last_recent_novelty_min: finite_or_zero(novelty_min),
             last_recent_novelty_max: finite_or_zero(novelty_max),
+            last_recent_active_joint_fraction_mean: recent_actuation.active_joint_fraction_mean,
+            last_recent_top_joint_energy_share_mean: recent_actuation
+                .top_joint_energy_share_mean,
+            last_recent_actuation_entropy_mean: recent_actuation.actuation_entropy_mean,
+            last_recent_dominant_joint_share_rate: recent_actuation.dominant_joint_share_rate,
+            last_recent_low_entropy_rate: recent_actuation.low_entropy_rate,
             current_mutation_rate: latest_mutation_rate,
             mutation_at_lower_clamp: mutation_at_lower,
             mutation_at_upper_clamp: mutation_at_upper,
@@ -4746,6 +4906,91 @@ fn mean(values: &[f32]) -> f32 {
         return 0.0;
     }
     values.iter().sum::<f32>() / values.len() as f32
+}
+
+fn ratio_above_threshold(values: &[f32], threshold: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().filter(|value| **value >= threshold).count() as f32 / values.len() as f32
+}
+
+fn ratio_at_or_below_threshold(values: &[f32], threshold: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().filter(|value| **value <= threshold).count() as f32 / values.len() as f32
+}
+
+fn aggregate_actuation_stats(points: &[GenerationActuationStats]) -> GenerationActuationStats {
+    if points.is_empty() {
+        return GenerationActuationStats::default();
+    }
+    let inv = 1.0 / points.len() as f32;
+    let mut out = GenerationActuationStats::default();
+    for point in points {
+        out.active_joint_fraction_mean += point.active_joint_fraction_mean;
+        out.active_joint_fraction_p50 += point.active_joint_fraction_p50;
+        out.top_joint_energy_share_mean += point.top_joint_energy_share_mean;
+        out.top_joint_energy_share_p50 += point.top_joint_energy_share_p50;
+        out.actuation_entropy_mean += point.actuation_entropy_mean;
+        out.actuation_entropy_p50 += point.actuation_entropy_p50;
+        out.dominant_joint_share_rate += point.dominant_joint_share_rate;
+        out.low_entropy_rate += point.low_entropy_rate;
+    }
+    out.active_joint_fraction_mean *= inv;
+    out.active_joint_fraction_p50 *= inv;
+    out.top_joint_energy_share_mean *= inv;
+    out.top_joint_energy_share_p50 *= inv;
+    out.actuation_entropy_mean *= inv;
+    out.actuation_entropy_p50 *= inv;
+    out.dominant_joint_share_rate *= inv;
+    out.low_entropy_rate *= inv;
+    out
+}
+
+fn actuation_distribution_metrics(joint_energy_integrals: &[f32]) -> (f32, f32, f32) {
+    if joint_energy_integrals.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    let total_energy = joint_energy_integrals
+        .iter()
+        .map(|value| value.max(0.0))
+        .sum::<f32>();
+    if !total_energy.is_finite() || total_energy <= 1e-8 {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let activity_threshold = total_energy * ACTIVE_JOINT_ENERGY_SHARE_THRESHOLD;
+    let mut active_joint_count = 0usize;
+    let mut top_joint_energy_share = 0.0f32;
+    let mut entropy = 0.0f32;
+
+    for energy in joint_energy_integrals {
+        let energy = energy.max(0.0);
+        if energy >= activity_threshold {
+            active_joint_count += 1;
+        }
+        let share = clamp(energy / total_energy, 0.0, 1.0);
+        top_joint_energy_share = top_joint_energy_share.max(share);
+        if share > 1e-9 {
+            entropy -= share * share.ln();
+        }
+    }
+
+    let active_joint_fraction = active_joint_count as f32 / joint_energy_integrals.len() as f32;
+    let actuation_entropy = if joint_energy_integrals.len() > 1 {
+        let max_entropy = (joint_energy_integrals.len() as f32).ln();
+        if max_entropy > 1e-9 {
+            clamp(entropy / max_entropy, 0.0, 1.0)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    (active_joint_fraction, top_joint_energy_share, actuation_entropy)
 }
 
 fn std_dev(values: &[f32]) -> f32 {
@@ -6114,6 +6359,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
             median_progress: 0.0,
             median_upright: 0.0,
             median_straightness: 0.0,
+            median_active_joint_fraction: 0.0,
+            median_top_joint_energy_share: 0.0,
+            median_actuation_entropy: 0.0,
             invalid_startup_trials: 0,
             invalid_startup_trial_rate: 0.0,
             all_trials_invalid_startup: false,
@@ -6129,6 +6377,18 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     let straightnesses: Vec<f32> = trials
         .iter()
         .map(|trial| trial.metrics.straightness)
+        .collect();
+    let active_joint_fractions: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.active_joint_fraction)
+        .collect();
+    let top_joint_energy_shares: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.top_joint_energy_share)
+        .collect();
+    let actuation_entropies: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.actuation_entropy)
         .collect();
     let invalid_startup_trials = trials
         .iter()
@@ -6153,6 +6413,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     let median_progress = quantile(&progresses, 0.5);
     let median_upright = quantile(&uprights, 0.5);
     let median_straightness = quantile(&straightnesses, 0.5);
+    let median_active_joint_fraction = quantile(&active_joint_fractions, 0.5);
+    let median_top_joint_energy_share = quantile(&top_joint_energy_shares, 0.5);
+    let median_actuation_entropy = quantile(&actuation_entropies, 0.5);
 
     let active_limbs = enabled_limb_count(genome);
     let mean_segment_count = feature_segment_count_mean(genome);
@@ -6176,6 +6439,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         median_progress,
         median_upright,
         median_straightness,
+        median_active_joint_fraction,
+        median_top_joint_energy_share,
+        median_actuation_entropy,
         invalid_startup_trials,
         invalid_startup_trial_rate,
         all_trials_invalid_startup,

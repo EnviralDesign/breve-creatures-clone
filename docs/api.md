@@ -50,6 +50,11 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `run`, `window`, `trends`
     - `run` includes `generation`, `populationSize`, `trialCount`, `runSpeed`, `paused`, `morphologyMode`, `morphologyPreset`
     - `generations` with per-generation fitness/selection/diversity/breeding stats
+    - `generations[*].actuation` with per-generation controller-use rollups:
+      - `activeJointFractionMean`, `activeJointFractionP50`
+      - `topJointEnergyShareMean`, `topJointEnergyShareP50`
+      - `actuationEntropyMean`, `actuationEntropyP50`
+      - `dominantJointShareRate`, `lowEntropyRate`
     - `generations[*].breeding.speciesDistribution`:
       - grouped by `enabledLimbCount`
       - each item includes `enabledLimbCount`, `count`, `bestFitness`
@@ -71,7 +76,8 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `stagnationGenerations`, `diversityState`
     - `mutationPressure`
     - `convergence`
-    - `signals`
+    - `signals` (includes `actuation_concentrated` when concentration/entropy thresholds are exceeded)
+    - `latestActuation`, `recentActuation` (same shape as `generations[*].actuation`)
     - `latestTopology`
     - `bestEverTopology`
     - `bestNTopologies` (deduped by topology fingerprint)
@@ -80,8 +86,13 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
   - Returns server-side diagnosis of run health and likely next actions.
   - Includes:
     - `generation`, `timestampUnixMs`
-    - `states` (`plateauState`, `volatilityState`, `noveltyState`, `trendState`)
-    - `metrics` (recent-window best/novelty stats, slopes, mutation pressure)
+    - `states` (`plateauState`, `volatilityState`, `noveltyState`, `trendState`, `actuationState`)
+    - `metrics` (recent-window best/novelty stats, slopes, mutation pressure, plus actuation concentration telemetry):
+      - `lastRecentActiveJointFractionMean`
+      - `lastRecentTopJointEnergyShareMean`
+      - `lastRecentActuationEntropyMean`
+      - `lastRecentDominantJointShareRate`
+      - `lastRecentLowEntropyRate`
     - `topology` (distinct + coarse fingerprint ratios, enabled-limb-count mix, representative topologies)
     - `findings` (coded diagnostics)
     - `recommendedActions`
@@ -154,6 +165,10 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
   - Each result includes:
     - `fitness`, `descriptor`, `trialCount`
     - `medianProgress`, `medianUpright`, `medianStraightness`
+    - actuation telemetry medians:
+      - `medianActiveJointFraction`
+      - `medianTopJointEnergyShare`
+      - `medianActuationEntropy`
     - startup-reject telemetry:
       - `invalidStartupTrials`, `invalidStartupTrialRate`
       - `allTrialsInvalidStartup`
@@ -172,6 +187,10 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
   - `trial_complete.result.metrics` includes:
     - `quality`, `progress`, `uprightAvg`, `avgHeight`
     - `instabilityNorm`, `energyNorm`, `fallenRatio`
+    - actuation telemetry:
+      - `activeJointFraction`
+      - `topJointEnergyShare`
+      - `actuationEntropy`
     - `straightness`, `netDistance`
     - `invalidStartup`
 
