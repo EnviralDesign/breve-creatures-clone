@@ -45,8 +45,10 @@ const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
 const MAX_MOTOR_SPEED: f32 = 6.8;
 const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
-const EMERGENCY_MAX_BODY_ANGULAR_SPEED: f32 = 80.0;
-const EMERGENCY_MAX_BODY_LINEAR_SPEED: f32 = 120.0;
+const EMERGENCY_MAX_BODY_ANGULAR_SPEED: f32 = 20.0;
+const EMERGENCY_MAX_BODY_LINEAR_SPEED: f32 = 30.0;
+const QUADRATIC_ANGULAR_DRAG_COEFF: f32 = 0.22;
+const QUADRATIC_LINEAR_DRAG_COEFF: f32 = 0.08;
 const MOTOR_TORQUE_HIP: f32 = 85.0;
 const BALL_AXIS_TORQUE_SCALE_Y: f32 = 0.7;
 const BALL_AXIS_TORQUE_SCALE_Z: f32 = 0.7;
@@ -60,7 +62,7 @@ const FITNESS_PROGRESS_MIDPOINT_FRACTION: f32 = 0.5;
 const FITNESS_PROGRESS_LATE_FRACTION: f32 = 0.85;
 const FITNESS_PROGRESS_MID_WEIGHT: f32 = 1.35;
 const FITNESS_PROGRESS_LATE_WEIGHT: f32 = 2.0;
-const FITNESS_GROUNDED_BONUS_WEIGHT: f32 = 0.5;
+const FITNESS_GROUNDED_BONUS_WEIGHT: f32 = 1.0;
 const SETTLE_SECONDS: f32 = 2.25;
 const PASSIVE_SETTLE_FRICTION: f32 = 0.0;
 const ACTIVE_SURFACE_FRICTION: f32 = 1.08;
@@ -1629,12 +1631,30 @@ impl TrialSimulator {
                 {
                     passive_instability = true;
                 }
-                if av_len > EMERGENCY_MAX_BODY_ANGULAR_SPEED {
-                    body.set_angvel(av * (EMERGENCY_MAX_BODY_ANGULAR_SPEED / av_len), true);
+                if !av_len.is_finite() || !lv_len.is_finite() {
+                    body.set_angvel(vector![0.0, 0.0, 0.0], true);
+                    body.set_linvel(vector![0.0, 0.0, 0.0], true);
+                    continue;
                 }
-                if lv_len > EMERGENCY_MAX_BODY_LINEAR_SPEED {
-                    body.set_linvel(lv * (EMERGENCY_MAX_BODY_LINEAR_SPEED / lv_len), true);
+
+                // Apply continuous quadratic drag so high-speed spikes decay smoothly
+                // instead of only being chopped by the emergency clamp.
+                let angular_drag =
+                    1.0 / (1.0 + QUADRATIC_ANGULAR_DRAG_COEFF * av_len * av_len * dt);
+                let linear_drag = 1.0 / (1.0 + QUADRATIC_LINEAR_DRAG_COEFF * lv_len * lv_len * dt);
+                let mut next_av = av * angular_drag;
+                let mut next_lv = lv * linear_drag;
+
+                let next_av_len = next_av.norm();
+                if next_av_len > EMERGENCY_MAX_BODY_ANGULAR_SPEED {
+                    next_av *= EMERGENCY_MAX_BODY_ANGULAR_SPEED / next_av_len;
                 }
+                let next_lv_len = next_lv.norm();
+                if next_lv_len > EMERGENCY_MAX_BODY_LINEAR_SPEED {
+                    next_lv *= EMERGENCY_MAX_BODY_LINEAR_SPEED / next_lv_len;
+                }
+                body.set_angvel(next_av, true);
+                body.set_linvel(next_lv, true);
             }
         }
         if !can_actuate && passive_instability {
@@ -8939,7 +8959,7 @@ fn insert_box_body(
     let body = RigidBodyBuilder::dynamic()
         .translation(center)
         .linear_damping(0.19)
-        .angular_damping(2.0)
+        .angular_damping(4.5)
         .ccd_enabled(true)
         .build();
     let handle = bodies.insert(body);
