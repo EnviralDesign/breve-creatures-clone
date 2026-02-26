@@ -99,6 +99,8 @@ const TRIALS_PER_CANDIDATE: usize = 3;
 const DEFAULT_GENERATION_SECONDS: f32 = 16.0;
 const EVOLUTION_VIEW_FRAME_LIMIT: usize = 900;
 const CHECKPOINT_DIR: &str = "data/checkpoints";
+const CREATURE_DIR: &str = "data/creatures";
+const AUTHORED_CREATURE_FILE_VERSION: u32 = 1;
 const AUTOSAVE_EVERY_GENERATIONS: usize = 5;
 const DEFAULT_PERFORMANCE_WINDOW_GENERATIONS: usize = 120;
 const MAX_PERFORMANCE_WINDOW_GENERATIONS: usize = 400;
@@ -169,13 +171,13 @@ const DIAG_HIGH_CONTACT_CHURN_HZ_THRESHOLD: f32 = 2.4;
 const DIAG_HIGH_OVERLAP_RATIO_THRESHOLD: f32 = 0.22;
 const DIAG_HIGH_OVERLAP_ALERT_RATE: f32 = 0.35;
 const DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE: f32 = 0.12;
-const FIXED_PRESET_SPAWN_HEIGHT: f32 = 0.58;
+const CONSTRAINED_SPAWN_HEIGHT: f32 = 0.58;
 const RANDOM_SPAWN_EXTRA_HEIGHT_MIN: f32 = 1.2;
 const RANDOM_SPAWN_EXTRA_HEIGHT_MAX: f32 = 2.6;
-const FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS: f32 = 0.45;
-const FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS: f32 = 1.8;
-const FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX: f32 = 0.65;
-const FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX: f32 = 1.45;
+const CONSTRAINED_SETTLE_MIN_STABLE_SECONDS: f32 = 0.45;
+const CONSTRAINED_SETTLE_MAX_EXTRA_SECONDS: f32 = 1.8;
+const CONSTRAINED_SETTLE_LINEAR_SPEED_MAX: f32 = 0.65;
+const CONSTRAINED_SETTLE_ANGULAR_SPEED_MAX: f32 = 1.45;
 const STARTUP_INVALID_OVERLAP_RATIO: f32 = 0.34;
 const STARTUP_INVALID_LINEAR_SPEED: f32 = 20.0;
 const STARTUP_INVALID_ANGULAR_SPEED: f32 = 24.0;
@@ -185,7 +187,7 @@ const HOLDOUT_TRIALS_PER_CANDIDATE: usize = 5;
 const TRIAL_DIVERGENCE_PENALTY_WEIGHT: f32 = 0.22;
 const TRIAL_DIVERGENCE_PENALTY_FLOOR: f32 = 0.68;
 const ENV_EVOLUTION_MORPHOLOGY_MODE: &str = "EVOLUTION_MORPHOLOGY_MODE";
-const ENV_EVOLUTION_MORPHOLOGY_PRESET: &str = "EVOLUTION_MORPHOLOGY_PRESET";
+const ENV_EVOLUTION_CREATURE: &str = "EVOLUTION_CREATURE";
 static FRONTEND_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -962,9 +964,9 @@ impl TrialSimulator {
         let ground_collider =
             colliders.insert_with_parent(ground_collider, ground_handle, &mut bodies);
 
-        let use_fixed_preset_startup = config.fixed_startup;
-        let spawn = if use_fixed_preset_startup {
-            vector![0.0, FIXED_PRESET_SPAWN_HEIGHT, 0.0]
+        let use_constrained_startup = config.fixed_startup;
+        let spawn = if use_constrained_startup {
+            vector![0.0, CONSTRAINED_SPAWN_HEIGHT, 0.0]
         } else {
             vector![0.0, 0.05, 0.0]
         };
@@ -988,7 +990,7 @@ impl TrialSimulator {
             * MASS_DENSITY_MULTIPLIER)
             .max(0.7);
 
-        let drop_start = if use_fixed_preset_startup {
+        let drop_start = if use_constrained_startup {
             spawn
         } else {
             vector![
@@ -1013,7 +1015,7 @@ impl TrialSimulator {
             let torso_body = bodies
                 .get_mut(torso_handle)
                 .ok_or_else(|| "torso body missing".to_string())?;
-            let rot = if use_fixed_preset_startup {
+            let rot = if use_constrained_startup {
                 UnitQuaternion::from_euler_angles(0.0, rng_range(&mut rng, 0.0, PI * 2.0), 0.0)
             } else {
                 UnitQuaternion::from_euler_angles(
@@ -1729,8 +1731,8 @@ impl TrialSimulator {
             {
                 self.startup_invalid = true;
             }
-            if linear_speed <= FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX
-                && angular_speed <= FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX
+            if linear_speed <= CONSTRAINED_SETTLE_LINEAR_SPEED_MAX
+                && angular_speed <= CONSTRAINED_SETTLE_ANGULAR_SPEED_MAX
             {
                 self.settled_time_before_actuation += dt;
             } else {
@@ -1738,8 +1740,8 @@ impl TrialSimulator {
             }
 
             let max_wait_elapsed =
-                sim_time >= SETTLE_SECONDS + FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS;
-            if self.settled_time_before_actuation >= FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS
+                sim_time >= SETTLE_SECONDS + CONSTRAINED_SETTLE_MAX_EXTRA_SECONDS;
+            if self.settled_time_before_actuation >= CONSTRAINED_SETTLE_MIN_STABLE_SECONDS
                 || max_wait_elapsed
             {
                 self.actuation_started = true;
@@ -2012,9 +2014,9 @@ struct AppState {
 }
 
 impl AppState {
-    fn new() -> Self {
+    fn new(startup_authored: Option<AuthoredCreatureFile>) -> Self {
         let sim_worker_limit = resolve_sim_worker_limit();
-        let evolution = EvolutionController::new();
+        let evolution = EvolutionController::new(startup_authored);
         let satellite_pool = Arc::new(SatellitePool::new());
         start_evolution_worker(evolution.clone(), satellite_pool.clone(), sim_worker_limit);
         Self {
@@ -2043,30 +2045,75 @@ struct EvolutionControlRequest {
     run_speed: Option<f32>,
     fast_forward_use_primary_compute: Option<bool>,
     morphology_mode: Option<EvolutionMorphologyMode>,
-    morphology_preset: Option<MorphologyPreset>,
+    creature_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum EvolutionMorphologyMode {
     Random,
-    FixedPreset,
+    Authored,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum MorphologyPreset {
-    Spider4x2,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct PresetConstraintProfile {
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MorphologyLockProfile {
+    #[serde(default)]
     lock_topology: bool,
+    #[serde(default)]
     lock_joint_types: bool,
+    #[serde(default)]
     lock_joint_limits: bool,
+    #[serde(default)]
     lock_segment_dynamics: bool,
+    #[serde(default)]
     lock_controls: bool,
+    #[serde(default)]
     lock_visual_hue: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthoredCreatureFile {
+    #[serde(default = "default_authored_creature_file_version")]
+    version: u32,
+    id: String,
+    genome: Genome,
+    #[serde(default)]
+    locks: MorphologyLockProfile,
+    #[serde(default)]
+    notes: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatureSaveRequest {
+    id: String,
+    genome: Genome,
+    #[serde(default)]
+    locks: MorphologyLockProfile,
+    #[serde(default)]
+    notes: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatureSaveResponse {
+    id: String,
+    path: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatureListEntry {
+    id: String,
+    created_at_unix_ms: u128,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatureListResponse {
+    creatures: Vec<CreatureListEntry>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2333,7 +2380,6 @@ struct EvolutionPerformanceRun {
     run_speed: f32,
     paused: bool,
     morphology_mode: EvolutionMorphologyMode,
-    morphology_preset: MorphologyPreset,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2396,7 +2442,6 @@ struct EvolutionPerformanceSummaryResponse {
     recent_best_fitness: f32,
     stagnation_generations: usize,
     morphology_mode: EvolutionMorphologyMode,
-    morphology_preset: MorphologyPreset,
     diversity_state: String,
     mutation_pressure: EvolutionMutationPressure,
     convergence: Vec<EvolutionConvergenceSignal>,
@@ -2529,8 +2574,8 @@ struct EvolutionStatus {
     injection_queue_count: usize,
     #[serde(default = "default_morphology_mode")]
     morphology_mode: EvolutionMorphologyMode,
-    #[serde(default = "default_morphology_preset")]
-    morphology_preset: MorphologyPreset,
+    #[serde(default)]
+    authored_creature_id: Option<String>,
     #[serde(default)]
     connected_satellites: Vec<String>,
     #[serde(default)]
@@ -2612,7 +2657,7 @@ struct EvolutionCommandState {
     fast_forward_remaining: usize,
     fast_forward_use_primary_compute: bool,
     morphology_mode: EvolutionMorphologyMode,
-    morphology_preset: MorphologyPreset,
+    authored_creature: Option<AuthoredCreatureFile>,
     injection_queue: VecDeque<EvolutionInjection>,
     pending_loaded_checkpoint: Option<EvolutionRuntimeSnapshot>,
 }
@@ -2642,10 +2687,15 @@ struct EvolutionController {
 }
 
 impl EvolutionController {
-    fn new() -> Arc<Self> {
+    fn new(startup_authored: Option<AuthoredCreatureFile>) -> Arc<Self> {
         let initial_population_size = DEFAULT_POPULATION_SIZE;
-        let (initial_morphology_mode, initial_morphology_preset) =
-            resolve_initial_morphology_override();
+        let initial_morphology_mode = resolve_initial_morphology_override();
+        let mode = if startup_authored.is_some() {
+            EvolutionMorphologyMode::Authored
+        } else {
+            initial_morphology_mode
+        };
+        let authored_creature_id = startup_authored.as_ref().map(|creature| creature.id.clone());
         let initial_status = EvolutionStatus {
             min_population_size: MIN_POPULATION_SIZE,
             max_population_size: MAX_POPULATION_SIZE,
@@ -2669,8 +2719,8 @@ impl EvolutionController {
             fast_forward_active: false,
             fast_forward_use_primary_compute: true,
             injection_queue_count: 0,
-            morphology_mode: initial_morphology_mode,
-            morphology_preset: initial_morphology_preset,
+            morphology_mode: mode,
+            authored_creature_id,
             connected_satellites: Vec::new(),
             latest_invalid_startup_attempts: 0,
             latest_invalid_startup_attempt_rate: 0.0,
@@ -2688,8 +2738,8 @@ impl EvolutionController {
                 run_speed: 1.0,
                 fast_forward_remaining: 0,
                 fast_forward_use_primary_compute: true,
-                morphology_mode: initial_morphology_mode,
-                morphology_preset: initial_morphology_preset,
+                morphology_mode: mode,
+                authored_creature: startup_authored,
                 injection_queue: VecDeque::new(),
                 pending_loaded_checkpoint: None,
             })),
@@ -2717,7 +2767,7 @@ impl EvolutionController {
         f32,
         usize,
         EvolutionMorphologyMode,
-        MorphologyPreset,
+        Option<AuthoredCreatureFile>,
         bool,
     ) {
         let mut commands = self
@@ -2733,7 +2783,7 @@ impl EvolutionController {
             commands.run_speed,
             commands.fast_forward_remaining,
             commands.morphology_mode,
-            commands.morphology_preset,
+            commands.authored_creature.clone(),
             commands.fast_forward_use_primary_compute,
         )
     }
@@ -2972,11 +3022,34 @@ impl EvolutionController {
                     return Err("morphologyMode is required for set_morphology_mode".to_string());
                 };
                 commands.morphology_mode = mode;
-                if let Some(preset) = request.morphology_preset {
-                    commands.morphology_preset = preset;
-                } else if mode == EvolutionMorphologyMode::FixedPreset {
-                    commands.morphology_preset = default_morphology_preset();
+                match mode {
+                    EvolutionMorphologyMode::Random => {
+                        commands.authored_creature = None;
+                    }
+                    EvolutionMorphologyMode::Authored => {
+                        let creature_id = request
+                            .creature_id
+                            .as_deref()
+                            .or_else(|| commands.authored_creature.as_ref().map(|c| c.id.as_str()))
+                            .ok_or_else(|| {
+                                "creatureId is required for authored morphology mode".to_string()
+                            })?;
+                        let creature = load_authored_creature(Some(creature_id))?;
+                        commands.authored_creature = Some(creature);
+                    }
                 }
+                commands.restart_requested = true;
+                commands.fast_forward_remaining = 0;
+                commands.injection_queue.clear();
+            }
+            "set_authored_creature" => {
+                let creature_id = request
+                    .creature_id
+                    .as_deref()
+                    .ok_or_else(|| "creatureId is required for set_authored_creature".to_string())?;
+                let creature = load_authored_creature(Some(creature_id))?;
+                commands.morphology_mode = EvolutionMorphologyMode::Authored;
+                commands.authored_creature = Some(creature);
                 commands.restart_requested = true;
                 commands.fast_forward_remaining = 0;
                 commands.injection_queue.clear();
@@ -2989,7 +3062,7 @@ impl EvolutionController {
         let fast_forward_remaining = commands.fast_forward_remaining;
         let fast_forward_use_primary_compute = commands.fast_forward_use_primary_compute;
         let morphology_mode = commands.morphology_mode;
-        let morphology_preset = commands.morphology_preset;
+        let authored_creature_id = commands.authored_creature.as_ref().map(|item| item.id.clone());
         let injection_queue_count = commands.injection_queue.len();
         drop(commands);
 
@@ -3003,7 +3076,7 @@ impl EvolutionController {
             shared.status.fast_forward_use_primary_compute = fast_forward_use_primary_compute;
             shared.status.injection_queue_count = injection_queue_count;
             shared.status.morphology_mode = morphology_mode;
-            shared.status.morphology_preset = morphology_preset;
+            shared.status.authored_creature_id = authored_creature_id;
             shared.status.clone()
         };
         self.broadcast_status(status.clone());
@@ -3247,7 +3320,7 @@ fn start_evolution_worker(
         loop {
             controller.set_connected_satellites(satellite_pool.connected_ids());
             if let Some(loaded) = controller.take_pending_loaded_checkpoint() {
-                let loaded_status = loaded.status.clone();
+                let mut loaded_status = loaded.status.clone();
                 generation = loaded_status.generation.max(1);
                 population_size = loaded_status
                     .population_size
@@ -3268,6 +3341,7 @@ fn start_evolution_worker(
                 current_trial_index = loaded
                     .current_trial_index
                     .min(TRIALS_PER_CANDIDATE.saturating_sub(1));
+                let mut authored_unavailable = false;
                 {
                     let mut commands = controller
                         .commands
@@ -3280,8 +3354,34 @@ fn start_evolution_worker(
                     commands.fast_forward_use_primary_compute =
                         loaded_status.fast_forward_use_primary_compute;
                     commands.morphology_mode = loaded_status.morphology_mode;
-                    commands.morphology_preset = loaded_status.morphology_preset;
+                    commands.authored_creature = if loaded_status.morphology_mode
+                        == EvolutionMorphologyMode::Authored
+                    {
+                        match loaded_status.authored_creature_id.as_deref() {
+                            Some(id) => match load_authored_creature(Some(id)) {
+                                Ok(creature) => Some(creature),
+                                Err(err) => {
+                                    warn!(
+                                        "failed loading authored creature '{}' from checkpoint: {}",
+                                        id, err
+                                    );
+                                    authored_unavailable = true;
+                                    None
+                                }
+                            },
+                            None => {
+                                authored_unavailable = true;
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     commands.injection_queue = VecDeque::from(loaded.injection_queue.clone());
+                }
+                if authored_unavailable && loaded_status.morphology_mode == EvolutionMorphologyMode::Authored {
+                    loaded_status.morphology_mode = EvolutionMorphologyMode::Random;
+                    loaded_status.authored_creature_id = None;
                 }
                 controller.update_status(|status| {
                     *status = loaded_status.clone();
@@ -3316,10 +3416,10 @@ fn start_evolution_worker(
                 run_speed,
                 fast_forward_remaining,
                 morphology_mode,
-                morphology_preset,
+                authored_creature,
                 fast_forward_use_primary_compute,
             ) = controller.command_snapshot();
-            config.fixed_startup = matches!(morphology_mode, EvolutionMorphologyMode::FixedPreset);
+            config.fixed_startup = !matches!(morphology_mode, EvolutionMorphologyMode::Random);
             if restart_requested {
                 info!(
                     "evolution restart requested; resetting to generation=1, population_size={}",
@@ -3336,7 +3436,7 @@ fn start_evolution_worker(
                     pending_population_size,
                     generation,
                     morphology_mode,
-                    morphology_preset,
+                    authored_creature.as_ref(),
                     &mut population_size,
                     &mut batch_genomes,
                     &mut batch_results,
@@ -3394,7 +3494,7 @@ fn start_evolution_worker(
                     pending_population_size,
                     generation,
                     morphology_mode,
-                    morphology_preset,
+                    authored_creature.as_ref(),
                     &mut population_size,
                     &mut batch_genomes,
                     &mut batch_results,
@@ -3436,7 +3536,7 @@ fn start_evolution_worker(
                         pending_population_size,
                         generation,
                         morphology_mode,
-                        morphology_preset,
+                        authored_creature.as_ref(),
                         &mut population_size,
                         &mut batch_genomes,
                         &mut batch_results,
@@ -3475,7 +3575,7 @@ fn start_evolution_worker(
                     &mut rng,
                     1,
                     morphology_mode,
-                    morphology_preset,
+                    authored_creature.as_ref(),
                 );
                 if let Some(summary) = build_generation_fitness_summary(generation, &batch_results)
                 {
@@ -3501,7 +3601,7 @@ fn start_evolution_worker(
                     &config,
                     &performance_history,
                     morphology_mode,
-                    morphology_preset,
+                    authored_creature.as_ref(),
                 );
                 if let Some(summary) = performance {
                     controller.emit_generation_performance(summary);
@@ -3665,7 +3765,7 @@ fn start_evolution_worker(
                             &mut rng,
                             1,
                             morphology_mode,
-                            morphology_preset,
+                            authored_creature.as_ref(),
                         );
                         let performance_history = controller.snapshot_performance_history();
                         let performance = finalize_generation(
@@ -3687,7 +3787,7 @@ fn start_evolution_worker(
                             &config,
                             &performance_history,
                             morphology_mode,
-                            morphology_preset,
+                            authored_creature.as_ref(),
                         );
                         if let Some(summary) = performance {
                             controller.emit_generation_performance(summary);
@@ -3961,7 +4061,7 @@ fn reset_evolution_batch(
     target_population_size: usize,
     generation_index: usize,
     morphology_mode: EvolutionMorphologyMode,
-    morphology_preset: MorphologyPreset,
+    authored_creature: Option<&AuthoredCreatureFile>,
     population_size: &mut usize,
     batch_genomes: &mut Vec<Genome>,
     batch_results: &mut Vec<EvolutionCandidate>,
@@ -3975,7 +4075,7 @@ fn reset_evolution_batch(
     *batch_genomes = (0..clamped_size)
         .map(|_| {
             let genome = random_genome(rng);
-            apply_morphology_mode(genome, morphology_mode, morphology_preset, rng)
+            apply_morphology_mode(genome, morphology_mode, authored_creature, rng)
         })
         .collect();
     batch_results.clear();
@@ -3990,7 +4090,7 @@ fn dequeue_injected_genomes(
     rng: &mut SmallRng,
     max_count: usize,
     morphology_mode: EvolutionMorphologyMode,
-    morphology_preset: MorphologyPreset,
+    authored_creature: Option<&AuthoredCreatureFile>,
 ) -> Vec<Genome> {
     controller
         .take_injections(max_count)
@@ -4000,7 +4100,7 @@ fn dequeue_injected_genomes(
                 InjectMutationMode::None => injection.genome,
                 InjectMutationMode::Light => mutate_genome(injection.genome, 0.12, false, rng),
             };
-            apply_morphology_mode(genome, morphology_mode, morphology_preset, rng)
+            apply_morphology_mode(genome, morphology_mode, authored_creature, rng)
         })
         .collect()
 }
@@ -4333,7 +4433,7 @@ fn finalize_generation(
     config: &TrialConfig,
     performance_history: &[GenerationPerformanceSummary],
     morphology_mode: EvolutionMorphologyMode,
-    morphology_preset: MorphologyPreset,
+    authored_creature: Option<&AuthoredCreatureFile>,
 ) -> Option<GenerationPerformanceSummary> {
     apply_diversity_scores(batch_results, novelty_archive);
     update_novelty_archive(batch_results, novelty_archive);
@@ -4541,7 +4641,12 @@ fn finalize_generation(
     }
     for genome in &mut next_genomes {
         let constrained =
-            apply_morphology_mode(genome.clone(), morphology_mode, morphology_preset, rng);
+            apply_morphology_mode(
+                genome.clone(),
+                morphology_mode,
+                authored_creature,
+                rng,
+            );
         *genome = constrained;
     }
     let cross_species_mating_rate = if mating_count > 0 {
@@ -4708,7 +4813,6 @@ fn build_evolution_performance_response(
             run_speed: status.run_speed,
             paused: status.paused,
             morphology_mode: status.morphology_mode,
-            morphology_preset: status.morphology_preset,
         },
         window: EvolutionPerformanceWindow {
             from_generation,
@@ -4854,7 +4958,6 @@ fn build_evolution_performance_summary_response(
         recent_best_fitness,
         stagnation_generations: stagnation,
         morphology_mode: status.morphology_mode,
-        morphology_preset: status.morphology_preset,
         diversity_state: diversity_state.to_string(),
         mutation_pressure: EvolutionMutationPressure {
             current_rate: mutation_rate,
@@ -5988,7 +6091,8 @@ async fn main() {
         return;
     }
 
-    let state = AppState::new();
+    let startup_creature = resolve_startup_authored_creature(&args);
+    let state = AppState::new(startup_creature);
     info!(
         "simulation worker slots: {} (override with SIM_MAX_CONCURRENT_JOBS)",
         state.sim_worker_limit
@@ -6042,6 +6146,9 @@ async fn main() {
             "/api/evolution/checkpoint/load",
             post(evolution_checkpoint_load_handler),
         )
+        .route("/api/creatures", get(creature_list_handler))
+        .route("/api/creatures/save", post(creature_save_handler))
+        .route("/api/creatures/{id}", get(creature_get_handler))
         .route("/api/evolution/ws", get(ws_evolution_handler))
         .route("/api/satellite/ws", get(ws_satellite_handler))
         .route("/", get(frontend_root))
@@ -6260,6 +6367,26 @@ async fn evolution_checkpoint_load_handler(
     snapshot.status.fast_forward_active = false;
     state.evolution.set_pending_loaded_checkpoint(snapshot);
     Ok(Json(CheckpointLoadResponse { id }))
+}
+
+async fn creature_list_handler() -> Result<Json<CreatureListResponse>, (StatusCode, String)> {
+    let creatures = list_authored_creatures().map_err(internal_err)?;
+    Ok(Json(CreatureListResponse { creatures }))
+}
+
+async fn creature_get_handler(
+    Path(id): Path<String>,
+) -> Result<Json<AuthoredCreatureFile>, (StatusCode, String)> {
+    let creature = load_authored_creature(Some(&id))
+        .map_err(|message| (StatusCode::NOT_FOUND, message))?;
+    Ok(Json(creature))
+}
+
+async fn creature_save_handler(
+    Json(request): Json<CreatureSaveRequest>,
+) -> Result<Json<CreatureSaveResponse>, (StatusCode, String)> {
+    let saved = save_authored_creature(request).map_err(internal_err)?;
+    Ok(Json(saved))
 }
 
 async fn ws_evolution_handler(
@@ -7251,6 +7378,145 @@ fn load_checkpoint_snapshot(
     Ok((checkpoint.id, checkpoint.snapshot))
 }
 
+fn default_authored_creature_file_version() -> u32 {
+    AUTHORED_CREATURE_FILE_VERSION
+}
+
+fn creature_dir() -> PathBuf {
+    PathBuf::from(CREATURE_DIR)
+}
+
+fn ensure_creature_dir() -> Result<PathBuf, String> {
+    let dir = creature_dir();
+    fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed creating creature directory '{}': {err}", dir.display()))?;
+    Ok(dir)
+}
+
+fn sanitize_creature_id(id: &str) -> String {
+    let mut cleaned = String::new();
+    for ch in id.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            cleaned.push(ch);
+        } else if ch.is_ascii_whitespace() {
+            cleaned.push('-');
+        }
+    }
+    cleaned.trim_matches('-').to_string()
+}
+
+fn creature_file_from_id(id: &str) -> PathBuf {
+    creature_dir().join(format!("{id}.json"))
+}
+
+fn resolve_creature_path(id_or_path: &str) -> PathBuf {
+    let token = id_or_path.trim();
+    let looks_like_path = token.contains('\\')
+        || token.contains('/')
+        || token.contains(':')
+        || token.ends_with(".json");
+    if looks_like_path {
+        PathBuf::from(token)
+    } else {
+        creature_file_from_id(token)
+    }
+}
+
+fn write_creature_file(path: &FsPath, creature: &AuthoredCreatureFile) -> Result<(), String> {
+    let payload = serde_json::to_vec_pretty(creature)
+        .map_err(|err| format!("failed serializing creature: {err}"))?;
+    fs::write(path, payload)
+        .map_err(|err| format!("failed writing creature '{}': {err}", path.display()))
+}
+
+fn read_creature_file(path: &FsPath) -> Result<AuthoredCreatureFile, String> {
+    let payload = fs::read(path)
+        .map_err(|err| format!("failed reading creature '{}': {err}", path.display()))?;
+    serde_json::from_slice::<AuthoredCreatureFile>(&payload)
+        .map_err(|err| format!("failed parsing creature '{}': {err}", path.display()))
+}
+
+fn save_authored_creature(request: CreatureSaveRequest) -> Result<CreatureSaveResponse, String> {
+    let id = sanitize_creature_id(&request.id);
+    if id.is_empty() {
+        return Err("creature id must include at least one letter or number".to_string());
+    }
+    let path = ensure_creature_dir()?.join(format!("{id}.json"));
+    let creature = AuthoredCreatureFile {
+        version: default_authored_creature_file_version(),
+        id: id.clone(),
+        genome: request.genome,
+        locks: request.locks,
+        notes: request.notes,
+    };
+    write_creature_file(&path, &creature)?;
+    Ok(CreatureSaveResponse {
+        id,
+        path: path.to_string_lossy().to_string(),
+    })
+}
+
+fn list_authored_creatures() -> Result<Vec<CreatureListEntry>, String> {
+    let dir = ensure_creature_dir()?;
+    let entries = fs::read_dir(&dir)
+        .map_err(|err| format!("failed listing creatures in '{}': {err}", dir.display()))?;
+    let mut creatures = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("failed reading creature entry: {err}"))?;
+        let path = entry.path();
+        let is_json = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("json"))
+            .unwrap_or(false);
+        if !is_json {
+            continue;
+        }
+        let Some(file_stem) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let created_at_unix_ms = fs::metadata(&path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let id = match read_creature_file(&path) {
+            Ok(creature) if !creature.id.trim().is_empty() => creature.id,
+            _ => file_stem.to_string(),
+        };
+        creatures.push(CreatureListEntry {
+            id,
+            created_at_unix_ms,
+        });
+    }
+    creatures.sort_by(|a, b| b.created_at_unix_ms.cmp(&a.created_at_unix_ms));
+    Ok(creatures)
+}
+
+fn load_authored_creature(id_or_path: Option<&str>) -> Result<AuthoredCreatureFile, String> {
+    let token = id_or_path.ok_or_else(|| "creature id is required".to_string())?;
+    let path = resolve_creature_path(token);
+    if !path.exists() {
+        return Err(format!("creature file '{}' not found", path.display()));
+    }
+    let mut creature = read_creature_file(&path)?;
+    if creature.id.trim().is_empty() {
+        let fallback = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("creature");
+        creature.id = sanitize_creature_id(fallback);
+    }
+    creature.version = default_authored_creature_file_version();
+    creature.genome.version = default_genome_version();
+    let mut rng = SmallRng::seed_from_u64(0x9bad_f00d);
+    ensure_graph_valid(&mut creature.genome.graph, &mut rng);
+    project_graph_to_legacy(&mut creature.genome);
+    ensure_active_body_plan(&mut creature.genome, &mut rng);
+    Ok(creature)
+}
+
 fn actuation_selection_penalty(top_joint_energy_share: f32, actuation_entropy: f32) -> f32 {
     let top_share = finite_or_zero(top_joint_energy_share);
     let entropy = finite_or_zero(actuation_entropy);
@@ -7551,85 +7817,61 @@ fn default_morphology_mode() -> EvolutionMorphologyMode {
     EvolutionMorphologyMode::Random
 }
 
-fn default_morphology_preset() -> MorphologyPreset {
-    MorphologyPreset::Spider4x2
-}
-
 fn parse_morphology_mode_token(token: &str) -> Option<EvolutionMorphologyMode> {
     let normalized = token.trim().to_ascii_lowercase().replace('-', "_");
     match normalized.as_str() {
         "random" => Some(EvolutionMorphologyMode::Random),
-        "fixed" | "fixed_preset" | "preset" => Some(EvolutionMorphologyMode::FixedPreset),
+        "authored" | "creature" => Some(EvolutionMorphologyMode::Authored),
         _ => None,
     }
 }
 
-fn parse_morphology_preset_token(token: &str) -> Option<MorphologyPreset> {
-    let normalized = token.trim().to_ascii_lowercase().replace('-', "_");
-    match normalized.as_str() {
-        "spider4x2" | "spider_4x2" | "spider" => Some(MorphologyPreset::Spider4x2),
-        _ => None,
-    }
-}
-
-fn resolve_initial_morphology_override() -> (EvolutionMorphologyMode, MorphologyPreset) {
+fn resolve_initial_morphology_override() -> EvolutionMorphologyMode {
     let mut mode = default_morphology_mode();
-    let mut preset = default_morphology_preset();
-    let mut mode_explicitly_set = false;
 
     if let Ok(raw_mode) = std::env::var(ENV_EVOLUTION_MORPHOLOGY_MODE) {
         if let Some(parsed) = parse_morphology_mode_token(&raw_mode) {
-            mode = parsed;
-            mode_explicitly_set = true;
+            if parsed == EvolutionMorphologyMode::Authored
+                && std::env::var(ENV_EVOLUTION_CREATURE)
+                    .map(|value| value.trim().is_empty())
+                    .unwrap_or(true)
+            {
+                warn!(
+                    "{}='authored' requires {} to be set; falling back to random",
+                    ENV_EVOLUTION_MORPHOLOGY_MODE, ENV_EVOLUTION_CREATURE
+                );
+                mode = EvolutionMorphologyMode::Random;
+            } else {
+                mode = parsed;
+            }
         } else {
             warn!(
-                "{} has invalid value '{}'; expected 'random' or 'fixed_preset'",
+                "{} has invalid value '{}'; expected 'random' or 'authored'",
                 ENV_EVOLUTION_MORPHOLOGY_MODE, raw_mode
             );
         }
     }
 
-    if let Ok(raw_preset) = std::env::var(ENV_EVOLUTION_MORPHOLOGY_PRESET) {
-        if let Some(parsed) = parse_morphology_preset_token(&raw_preset) {
-            preset = parsed;
-            if !mode_explicitly_set {
-                mode = EvolutionMorphologyMode::FixedPreset;
-            }
-        } else {
-            warn!(
-                "{} has invalid value '{}'; expected 'spider4x2'",
-                ENV_EVOLUTION_MORPHOLOGY_PRESET, raw_preset
-            );
-        }
-    }
-
     info!(
-        "evolution morphology startup: mode={}, preset={} (override with {} and {})",
+        "evolution morphology startup: mode={} (override with {} and {})",
         morphology_mode_label(mode),
-        morphology_preset_label(preset),
         ENV_EVOLUTION_MORPHOLOGY_MODE,
-        ENV_EVOLUTION_MORPHOLOGY_PRESET
+        ENV_EVOLUTION_CREATURE
     );
-    (mode, preset)
+    mode
 }
 
 fn morphology_mode_label(mode: EvolutionMorphologyMode) -> &'static str {
     match mode {
         EvolutionMorphologyMode::Random => "random",
-        EvolutionMorphologyMode::FixedPreset => "fixed_preset",
-    }
-}
-
-fn morphology_preset_label(preset: MorphologyPreset) -> &'static str {
-    match preset {
-        MorphologyPreset::Spider4x2 => "spider4x2",
+        EvolutionMorphologyMode::Authored => "authored",
     }
 }
 
 fn apply_morphology_mode(
     genome: Genome,
     mode: EvolutionMorphologyMode,
-    preset: MorphologyPreset,
+    authored_creature: Option<&AuthoredCreatureFile>,
     rng: &mut SmallRng,
 ) -> Genome {
     match mode {
@@ -7638,162 +7880,144 @@ fn apply_morphology_mode(
             ensure_active_body_plan(&mut adjusted, rng);
             adjusted
         }
-        EvolutionMorphologyMode::FixedPreset => {
-            constrain_genome_to_morphology_preset(genome, preset, rng)
+        EvolutionMorphologyMode::Authored => {
+            if let Some(creature) = authored_creature {
+                constrain_genome_to_authored_creature(genome, creature, rng)
+            } else {
+                warn!(
+                    "authored morphology mode selected but no creature is loaded; falling back to random"
+                );
+                let mut adjusted = genome;
+                ensure_active_body_plan(&mut adjusted, rng);
+                adjusted
+            }
         }
     }
 }
 
-fn constrain_genome_to_morphology_preset(
+fn constrain_genome_to_authored_creature(
     source: Genome,
-    preset: MorphologyPreset,
+    creature: &AuthoredCreatureFile,
     rng: &mut SmallRng,
 ) -> Genome {
-    let mut constrained = morphology_preset_template_genome(preset);
-    let profile = morphology_preset_constraint_profile(preset);
+    constrain_genome_with_template(source, &creature.genome, creature.locks, rng)
+}
 
-    if !profile.lock_topology {
-        copy_topology_genes(&source, &mut constrained);
-    }
-    if !profile.lock_joint_types {
-        copy_joint_type_genes(&source, &mut constrained);
-    }
-    if !profile.lock_joint_limits {
-        copy_joint_limit_genes(&source, &mut constrained);
-    }
-    if !profile.lock_segment_dynamics {
-        copy_segment_dynamics_genes(&source, &mut constrained);
-    }
-    if !profile.lock_controls {
-        copy_control_genes(&source, &mut constrained);
-    }
-    if !profile.lock_visual_hue {
-        constrained.hue = source.hue;
-    }
+fn constrain_genome_with_template(
+    source: Genome,
+    template: &Genome,
+    locks: MorphologyLockProfile,
+    rng: &mut SmallRng,
+) -> Genome {
+    let mut constrained = source.clone();
     constrained.version = default_genome_version();
-    constrained.graph = if profile.lock_topology {
-        let mut graph = morphology_preset_template_genome(preset).graph;
-        if !profile.lock_controls {
-            graph.global_brain = source.graph.global_brain.clone();
-            let copy_count = graph.nodes.len().min(source.graph.nodes.len());
-            for index in 0..copy_count {
-                graph.nodes[index].brain = source.graph.nodes[index].brain.clone();
-            }
-        }
-        graph.max_parts = graph.max_parts.clamp(6, MAX_GRAPH_PARTS);
-        graph
+
+    if locks.lock_topology {
+        constrained.graph = template.graph.clone();
     } else {
-        source.graph.clone()
+        constrained.graph = source.graph.clone();
+    }
+
+    if locks.lock_topology {
+        if !locks.lock_joint_types {
+            copy_graph_joint_type_genes(&source.graph, &mut constrained.graph);
+        }
+        if !locks.lock_joint_limits {
+            copy_graph_joint_limit_genes(&source.graph, &mut constrained.graph);
+        }
+        if !locks.lock_segment_dynamics {
+            copy_graph_segment_dynamics_genes(&source.graph, &mut constrained.graph);
+        }
+        if !locks.lock_controls {
+            copy_graph_control_genes(&source.graph, &mut constrained.graph);
+        }
+    } else {
+        if locks.lock_joint_types {
+            copy_graph_joint_type_genes(&template.graph, &mut constrained.graph);
+        }
+        if locks.lock_joint_limits {
+            copy_graph_joint_limit_genes(&template.graph, &mut constrained.graph);
+        }
+        if locks.lock_segment_dynamics {
+            copy_graph_segment_dynamics_genes(&template.graph, &mut constrained.graph);
+        }
+        if locks.lock_controls {
+            copy_graph_control_genes(&template.graph, &mut constrained.graph);
+        }
+    }
+
+    constrained.mass_scale = if locks.lock_segment_dynamics {
+        template.mass_scale
+    } else {
+        source.mass_scale
     };
+    constrained.hue = if locks.lock_visual_hue {
+        template.hue
+    } else {
+        source.hue
+    };
+
     ensure_graph_valid(&mut constrained.graph, rng);
     project_graph_to_legacy(&mut constrained);
     ensure_active_body_plan(&mut constrained, rng);
     constrained
 }
 
-fn morphology_preset_template_genome(preset: MorphologyPreset) -> Genome {
-    match preset {
-        MorphologyPreset::Spider4x2 => spider4x2_template_genome(),
-    }
-}
-
-fn morphology_preset_constraint_profile(preset: MorphologyPreset) -> PresetConstraintProfile {
-    match preset {
-        MorphologyPreset::Spider4x2 => PresetConstraintProfile {
-            lock_topology: true,
-            lock_joint_types: true,
-            lock_joint_limits: false,
-            lock_segment_dynamics: true,
-            lock_controls: false,
-            lock_visual_hue: false,
-        },
-    }
-}
-
-fn copy_topology_genes(source: &Genome, target: &mut Genome) {
-    target.torso = source.torso.clone();
-    target.mass_scale = source.mass_scale;
-    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
-        let Some(source_limb) = source.limbs.get(limb_index) else {
-            continue;
-        };
-        target_limb.enabled = source_limb.enabled;
-        target_limb.segment_count = source_limb.segment_count;
-        target_limb.anchor_x = source_limb.anchor_x;
-        target_limb.anchor_y = source_limb.anchor_y;
-        target_limb.anchor_z = source_limb.anchor_z;
-        target_limb.axis_y = source_limb.axis_y;
-        target_limb.axis_z = source_limb.axis_z;
-        target_limb.dir_x = source_limb.dir_x;
-        target_limb.dir_y = source_limb.dir_y;
-        target_limb.dir_z = source_limb.dir_z;
-        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
-            let Some(source_segment) = source_limb.segments.get(segment_index) else {
-                continue;
-            };
-            target_segment.length = source_segment.length;
-            target_segment.thickness = source_segment.thickness;
-            target_segment.mass = source_segment.mass;
+fn copy_graph_joint_type_genes(source: &GraphGene, target: &mut GraphGene) {
+    let node_count = source.nodes.len().min(target.nodes.len());
+    for node_index in 0..node_count {
+        let source_edges = &source.nodes[node_index].edges;
+        let target_edges = &mut target.nodes[node_index].edges;
+        let edge_count = source_edges.len().min(target_edges.len());
+        for edge_index in 0..edge_count {
+            target_edges[edge_index].joint_type = source_edges[edge_index].joint_type;
         }
     }
 }
 
-fn copy_joint_type_genes(source: &Genome, target: &mut Genome) {
-    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
-        let Some(source_limb) = source.limbs.get(limb_index) else {
-            continue;
-        };
-        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
-            let Some(source_segment) = source_limb.segments.get(segment_index) else {
-                continue;
-            };
-            target_segment.joint_type = source_segment.joint_type;
+fn copy_graph_joint_limit_genes(source: &GraphGene, target: &mut GraphGene) {
+    let node_count = source.nodes.len().min(target.nodes.len());
+    for node_index in 0..node_count {
+        let source_edges = &source.nodes[node_index].edges;
+        let target_edges = &mut target.nodes[node_index].edges;
+        let edge_count = source_edges.len().min(target_edges.len());
+        for edge_index in 0..edge_count {
+            target_edges[edge_index].limit_x = source_edges[edge_index].limit_x;
+            target_edges[edge_index].limit_y = source_edges[edge_index].limit_y;
+            target_edges[edge_index].limit_z = source_edges[edge_index].limit_z;
         }
     }
 }
 
-fn copy_joint_limit_genes(source: &Genome, target: &mut Genome) {
-    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
-        let Some(source_limb) = source.limbs.get(limb_index) else {
-            continue;
-        };
-        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
-            let Some(source_segment) = source_limb.segments.get(segment_index) else {
-                continue;
-            };
-            target_segment.limit_x = source_segment.limit_x;
-            target_segment.limit_y = source_segment.limit_y;
-            target_segment.limit_z = source_segment.limit_z;
+fn copy_graph_segment_dynamics_genes(source: &GraphGene, target: &mut GraphGene) {
+    let node_count = source.nodes.len().min(target.nodes.len());
+    for node_index in 0..node_count {
+        target.nodes[node_index].part = source.nodes[node_index].part.clone();
+        let source_edges = &source.nodes[node_index].edges;
+        let target_edges = &mut target.nodes[node_index].edges;
+        let edge_count = source_edges.len().min(target_edges.len());
+        for edge_index in 0..edge_count {
+            target_edges[edge_index].anchor_x = source_edges[edge_index].anchor_x;
+            target_edges[edge_index].anchor_y = source_edges[edge_index].anchor_y;
+            target_edges[edge_index].anchor_z = source_edges[edge_index].anchor_z;
+            target_edges[edge_index].axis_y = source_edges[edge_index].axis_y;
+            target_edges[edge_index].axis_z = source_edges[edge_index].axis_z;
+            target_edges[edge_index].dir_x = source_edges[edge_index].dir_x;
+            target_edges[edge_index].dir_y = source_edges[edge_index].dir_y;
+            target_edges[edge_index].dir_z = source_edges[edge_index].dir_z;
+            target_edges[edge_index].scale = source_edges[edge_index].scale;
+            target_edges[edge_index].motor_strength = source_edges[edge_index].motor_strength;
+            target_edges[edge_index].joint_stiffness = source_edges[edge_index].joint_stiffness;
         }
     }
+    target.max_parts = source.max_parts;
 }
 
-fn copy_segment_dynamics_genes(source: &Genome, target: &mut Genome) {
-    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
-        let Some(source_limb) = source.limbs.get(limb_index) else {
-            continue;
-        };
-        for (segment_index, target_segment) in target_limb.segments.iter_mut().enumerate() {
-            let Some(source_segment) = source_limb.segments.get(segment_index) else {
-                continue;
-            };
-            target_segment.motor_strength = source_segment.motor_strength;
-            target_segment.joint_stiffness = source_segment.joint_stiffness;
-        }
-    }
-}
-
-fn copy_control_genes(source: &Genome, target: &mut Genome) {
-    for (limb_index, target_limb) in target.limbs.iter_mut().enumerate() {
-        let Some(source_limb) = source.limbs.get(limb_index) else {
-            continue;
-        };
-        for (control_index, target_control) in target_limb.controls.iter_mut().enumerate() {
-            let Some(source_control) = source_limb.controls.get(control_index) else {
-                continue;
-            };
-            *target_control = source_control.clone();
-        }
+fn copy_graph_control_genes(source: &GraphGene, target: &mut GraphGene) {
+    target.global_brain = source.global_brain.clone();
+    let node_count = source.nodes.len().min(target.nodes.len());
+    for node_index in 0..node_count {
+        target.nodes[node_index].brain = source.nodes[node_index].brain.clone();
     }
 }
 
@@ -7951,294 +8175,6 @@ fn random_graph_gene(rng: &mut SmallRng) -> GraphGene {
     }
 }
 
-fn spider_graph_gene_template() -> GraphGene {
-    let global_brain = default_global_brain_gene();
-    let global_dim = global_brain.neurons.len();
-    let torso_brain = LocalBrainGene {
-        neurons: vec![
-            random_neural_unit_gene(
-                &mut SmallRng::seed_from_u64(11),
-                LOCAL_SENSOR_DIM,
-                4,
-                global_dim,
-            ),
-            random_neural_unit_gene(
-                &mut SmallRng::seed_from_u64(12),
-                LOCAL_SENSOR_DIM,
-                4,
-                global_dim,
-            ),
-            random_neural_unit_gene(
-                &mut SmallRng::seed_from_u64(13),
-                LOCAL_SENSOR_DIM,
-                4,
-                global_dim,
-            ),
-            random_neural_unit_gene(
-                &mut SmallRng::seed_from_u64(14),
-                LOCAL_SENSOR_DIM,
-                4,
-                global_dim,
-            ),
-        ],
-        effector_x: default_joint_effector_gene(),
-        effector_y: default_joint_effector_gene(),
-        effector_z: default_joint_effector_gene(),
-    };
-    let leg_brain = LocalBrainGene {
-        neurons: (0..5)
-            .map(|offset| {
-                random_neural_unit_gene(
-                    &mut SmallRng::seed_from_u64(100 + offset as u64),
-                    LOCAL_SENSOR_DIM,
-                    5,
-                    global_dim,
-                )
-            })
-            .collect(),
-        effector_x: JointEffectorGene {
-            local_weights: vec![1.1, -0.6, 0.8, 0.0, 0.0],
-            global_weights: vec![0.35; global_dim],
-            bias: 0.0,
-            gain: 1.25,
-        },
-        effector_y: JointEffectorGene {
-            local_weights: vec![0.6, 0.3, -0.4, 0.2, 0.0],
-            global_weights: vec![0.1; global_dim],
-            bias: 0.0,
-            gain: 0.85,
-        },
-        effector_z: JointEffectorGene {
-            local_weights: vec![-0.5, 0.7, 0.2, -0.3, 0.0],
-            global_weights: vec![0.08; global_dim],
-            bias: 0.0,
-            gain: 0.85,
-        },
-    };
-    let tip_brain = LocalBrainGene {
-        neurons: (0..4)
-            .map(|offset| {
-                random_neural_unit_gene(
-                    &mut SmallRng::seed_from_u64(200 + offset as u64),
-                    LOCAL_SENSOR_DIM,
-                    4,
-                    global_dim,
-                )
-            })
-            .collect(),
-        effector_x: JointEffectorGene {
-            local_weights: vec![1.0, -0.2, 0.4, 0.3],
-            global_weights: vec![0.1; global_dim],
-            bias: -0.1,
-            gain: 1.1,
-        },
-        effector_y: default_joint_effector_gene(),
-        effector_z: default_joint_effector_gene(),
-    };
-    let root = MorphNodeGene {
-        part: GraphPartGene {
-            w: 1.68,
-            h: 0.66,
-            d: 1.22,
-            mass: 1.08,
-        },
-        edges: vec![
-            MorphEdgeGene {
-                to: 1,
-                anchor_x: 0.72,
-                anchor_y: -0.18,
-                anchor_z: 0.46,
-                axis_y: 0.14,
-                axis_z: 0.16,
-                dir_x: 0.92,
-                dir_y: 0.0,
-                dir_z: 0.38,
-                scale: 1.0,
-                reflect_x: false,
-                recursive_limit: 1,
-                terminal_only: false,
-                joint_type: JointTypeGene::Ball,
-                limit_x: 1.57,
-                limit_y: 1.08,
-                limit_z: 1.08,
-                motor_strength: 1.0,
-                joint_stiffness: 48.0,
-            },
-            MorphEdgeGene {
-                to: 1,
-                anchor_x: -0.72,
-                anchor_y: -0.18,
-                anchor_z: 0.46,
-                axis_y: 0.14,
-                axis_z: -0.16,
-                dir_x: -0.92,
-                dir_y: 0.0,
-                dir_z: 0.38,
-                scale: 1.0,
-                reflect_x: false,
-                recursive_limit: 1,
-                terminal_only: false,
-                joint_type: JointTypeGene::Ball,
-                limit_x: 1.57,
-                limit_y: 1.08,
-                limit_z: 1.08,
-                motor_strength: 1.0,
-                joint_stiffness: 48.0,
-            },
-            MorphEdgeGene {
-                to: 1,
-                anchor_x: 0.72,
-                anchor_y: -0.18,
-                anchor_z: -0.46,
-                axis_y: -0.14,
-                axis_z: 0.16,
-                dir_x: 0.92,
-                dir_y: 0.0,
-                dir_z: -0.38,
-                scale: 1.0,
-                reflect_x: false,
-                recursive_limit: 1,
-                terminal_only: false,
-                joint_type: JointTypeGene::Ball,
-                limit_x: 1.57,
-                limit_y: 1.08,
-                limit_z: 1.08,
-                motor_strength: 1.0,
-                joint_stiffness: 48.0,
-            },
-            MorphEdgeGene {
-                to: 1,
-                anchor_x: -0.72,
-                anchor_y: -0.18,
-                anchor_z: -0.46,
-                axis_y: -0.14,
-                axis_z: -0.16,
-                dir_x: -0.92,
-                dir_y: 0.0,
-                dir_z: -0.38,
-                scale: 1.0,
-                reflect_x: false,
-                recursive_limit: 1,
-                terminal_only: false,
-                joint_type: JointTypeGene::Ball,
-                limit_x: 1.57,
-                limit_y: 1.08,
-                limit_z: 1.08,
-                motor_strength: 1.0,
-                joint_stiffness: 48.0,
-            },
-        ],
-        brain: torso_brain,
-    };
-    let leg = MorphNodeGene {
-        part: GraphPartGene {
-            w: 0.24,
-            h: 1.33,
-            d: 0.24,
-            mass: 0.8,
-        },
-        edges: vec![MorphEdgeGene {
-            to: 2,
-            anchor_x: 0.0,
-            anchor_y: -0.48,
-            anchor_z: 0.0,
-            axis_y: 0.0,
-            axis_z: 0.0,
-            dir_x: 0.0,
-            dir_y: -1.0,
-            dir_z: 0.0,
-            scale: 1.0,
-            reflect_x: false,
-            recursive_limit: 1,
-            terminal_only: false,
-            joint_type: JointTypeGene::Hinge,
-            limit_x: 2.09,
-            limit_y: 1.22,
-            limit_z: 1.22,
-            motor_strength: 0.9,
-            joint_stiffness: 44.0,
-        }],
-        brain: leg_brain,
-    };
-    let tip = MorphNodeGene {
-        part: GraphPartGene {
-            w: 0.21,
-            h: 1.33,
-            d: 0.21,
-            mass: 0.58,
-        },
-        edges: Vec::new(),
-        brain: tip_brain,
-    };
-    GraphGene {
-        root: 0,
-        nodes: vec![root, leg, tip],
-        global_brain,
-        max_parts: 16,
-    }
-}
-
-fn spider4x2_template_genome() -> Genome {
-    let torso = TorsoGene {
-        w: 1.68,
-        h: 0.66,
-        d: 1.22,
-        mass: 1.08,
-    };
-    let mut limbs = vec![disabled_limb_template(); MAX_LIMBS];
-    let anchor_y = -0.18;
-    let freq = 1.7;
-    limbs[0] = spider_leg_template(
-        0.72,
-        anchor_y,
-        0.46,
-        0.14,
-        0.16,
-        [0.92, 0.0, 0.38],
-        0.0,
-        freq,
-    );
-    limbs[1] = spider_leg_template(
-        -0.72,
-        anchor_y,
-        0.46,
-        0.14,
-        -0.16,
-        [-0.92, 0.0, 0.38],
-        PI,
-        freq,
-    );
-    limbs[2] = spider_leg_template(
-        0.72,
-        anchor_y,
-        -0.46,
-        -0.14,
-        0.16,
-        [0.92, 0.0, -0.38],
-        PI,
-        freq,
-    );
-    limbs[3] = spider_leg_template(
-        -0.72,
-        anchor_y,
-        -0.46,
-        -0.14,
-        -0.16,
-        [-0.92, 0.0, -0.38],
-        0.0,
-        freq,
-    );
-    let graph = spider_graph_gene_template();
-    Genome {
-        version: default_genome_version(),
-        graph,
-        torso,
-        limbs,
-        hue: 0.0,
-        mass_scale: 1.0,
-    }
-}
-
 fn disabled_limb_template() -> LimbGene {
     LimbGene {
         enabled: false,
@@ -8267,111 +8203,6 @@ fn disabled_limb_template() -> LimbGene {
         controls: (0..MAX_SEGMENTS_PER_LIMB)
             .map(|_| default_control_gene())
             .collect(),
-    }
-}
-
-fn spider_leg_template(
-    anchor_x: f32,
-    anchor_y: f32,
-    anchor_z: f32,
-    axis_y: f32,
-    axis_z: f32,
-    dir: [f32; 3],
-    phase: f32,
-    freq: f32,
-) -> LimbGene {
-    let mut segments = vec![
-        SegmentGene {
-            length: 1.33,
-            thickness: 0.24,
-            mass: 0.8,
-            limit_x: 1.57,
-            limit_y: 1.08,
-            limit_z: 1.08,
-            joint_type: JointTypeGene::Ball,
-            motor_strength: 1.0,
-            joint_stiffness: 48.0,
-        },
-        SegmentGene {
-            length: 1.33,
-            thickness: 0.21,
-            mass: 0.58,
-            limit_x: 2.09,
-            limit_y: 1.22,
-            limit_z: 1.22,
-            joint_type: JointTypeGene::Hinge,
-            motor_strength: 0.9,
-            joint_stiffness: 44.0,
-        },
-    ];
-    while segments.len() < MAX_SEGMENTS_PER_LIMB {
-        segments.push(SegmentGene {
-            length: 0.56,
-            thickness: 0.20,
-            mass: 0.52,
-            limit_x: 2.09,
-            limit_y: 1.22,
-            limit_z: 1.22,
-            joint_type: JointTypeGene::Hinge,
-            motor_strength: 0.88,
-            joint_stiffness: 40.0,
-        });
-    }
-
-    let mut controls = vec![
-        ControlGene {
-            amp: 2.9,
-            freq,
-            phase,
-            bias: 0.0,
-            harm2_amp: 0.8,
-            harm2_phase: wrap_phase(phase + PI * 0.5),
-            amp_y: 2.1,
-            freq_y: freq * 0.92,
-            phase_y: wrap_phase(phase + PI * 0.28),
-            bias_y: 0.0,
-            amp_z: 1.8,
-            freq_z: freq * 1.08,
-            phase_z: wrap_phase(phase + PI * 0.66),
-            bias_z: 0.0,
-        },
-        ControlGene {
-            amp: 2.2,
-            freq,
-            phase: wrap_phase(phase + PI * 0.45),
-            bias: -0.16,
-            harm2_amp: 0.45,
-            harm2_phase: wrap_phase(phase + PI * 0.8),
-            amp_y: 0.0,
-            freq_y: default_secondary_control_freq(),
-            phase_y: default_secondary_control_phase(),
-            bias_y: default_secondary_control_bias(),
-            amp_z: 0.0,
-            freq_z: default_secondary_control_freq(),
-            phase_z: default_secondary_control_phase(),
-            bias_z: default_secondary_control_bias(),
-        },
-    ];
-    while controls.len() < MAX_SEGMENTS_PER_LIMB {
-        let mut control = default_control_gene();
-        control.freq = freq;
-        control.phase = phase;
-        controls.push(control);
-    }
-
-    LimbGene {
-        enabled: true,
-        segment_count: 2,
-        anchor_x,
-        anchor_y,
-        anchor_z,
-        axis_y,
-        axis_z,
-        dir_x: dir[0],
-        dir_y: dir[1],
-        dir_z: dir[2],
-        segments,
-        controls,
     }
 }
 
@@ -9996,6 +9827,39 @@ fn parse_satellite_arg(args: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+fn parse_creature_arg(args: &[String]) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == "--creature" {
+            if let Some(id) = args.get(i + 1) {
+                return Some(id.clone());
+            }
+        }
+    }
+    None
+}
+
+fn resolve_startup_authored_creature(args: &[String]) -> Option<AuthoredCreatureFile> {
+    let cli_creature = parse_creature_arg(args);
+    let env_creature = std::env::var(ENV_EVOLUTION_CREATURE).ok();
+    let token = cli_creature.or(env_creature)?;
+    match load_authored_creature(Some(&token)) {
+        Ok(creature) => {
+            info!(
+                "authored creature startup: id={} (override via --creature or {})",
+                creature.id, ENV_EVOLUTION_CREATURE
+            );
+            Some(creature)
+        }
+        Err(err) => {
+            warn!(
+                "failed loading authored creature '{}': {}; starting with non-authored morphology mode",
+                token, err
+            );
+            None
+        }
+    }
 }
 
 async fn run_satellite_client(primary_url: String) {

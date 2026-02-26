@@ -19,7 +19,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `runSpeed`
     - `fastForwardRemaining`, `fastForwardActive`
     - `injectionQueueCount`
-    - `morphologyMode`, `morphologyPreset`
+    - `morphologyMode`, `authoredCreatureId`
     - `connectedSatellites`
     - startup-reject telemetry from the latest completed generation:
       - `latestInvalidStartupAttempts`, `latestInvalidStartupAttemptRate`
@@ -48,7 +48,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `includeTopology` (optional, default `true`)
   - Includes:
     - `run`, `window`, `trends`
-    - `run` includes `generation`, `populationSize`, `trialCount`, `runSpeed`, `paused`, `morphologyMode`, `morphologyPreset`
+    - `run` includes `generation`, `populationSize`, `trialCount`, `runSpeed`, `paused`, `morphologyMode`
     - `generations` with per-generation fitness/selection/diversity/breeding stats
     - `generations[*].actuation` with per-generation controller-use rollups:
       - `activeJointFractionMean`, `activeJointFractionP50`
@@ -80,7 +80,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
   - Returns compact summary fields suitable for AI control loops.
   - Includes:
     - `generation`, `bestEverFitness`, `recentBestFitness`
-    - `morphologyMode`, `morphologyPreset`
+    - `morphologyMode`
     - `stagnationGenerations`, `diversityState`
     - `mutationPressure`
     - `convergence`
@@ -122,9 +122,11 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `restart`
       - `set_population_size` (requires `populationSize`)
       - `set_run_speed` (requires `runSpeed`)
+      - `set_fast_forward_primary_compute` (requires `fastForwardUsePrimaryCompute`)
       - `queue_fast_forward` (requires `fastForwardGenerations`)
       - `stop_fast_forward`
-      - `set_morphology_mode` (requires `morphologyMode`, optional `morphologyPreset`)
+      - `set_morphology_mode` (requires `morphologyMode`; if `authored`, requires `creatureId`)
+      - `set_authored_creature` (requires `creatureId`; also switches mode to `authored`)
   - Returns updated evolution status.
   - Notes:
     - `set_population_size` is clamped to backend min/max (`minPopulationSize`/`maxPopulationSize`).

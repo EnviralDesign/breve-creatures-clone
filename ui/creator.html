@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Breve Creature Creator</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1418;
+      --panel: #182127;
+      --panel-2: #121a1f;
+      --text: #d9e6dc;
+      --muted: #9eb3a5;
+      --accent: #7fcf6f;
+      --warn: #e8b56f;
+      --err: #dc6e6e;
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: "Consolas", "Fira Code", monospace;
+    }
+
+    body {
+      margin: 0;
+      background: linear-gradient(160deg, #11191d 0%, #0e1419 50%, #152218 100%);
+      color: var(--text);
+      padding: 16px;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) minmax(420px, 1fr);
+      gap: 14px;
+      height: calc(100vh - 32px);
+    }
+
+    .card {
+      background: color-mix(in srgb, var(--panel) 88%, black);
+      border: 1px solid #2d3b35;
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 0;
+    }
+
+    h1,
+    h2 {
+      margin: 0 0 10px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    h1 {
+      font-size: 16px;
+    }
+
+    h2 {
+      font-size: 14px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+
+    input[type="text"],
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid #304139;
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 7px;
+      padding: 8px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 420px;
+      resize: none;
+      line-height: 1.3;
+    }
+
+    #notesInput {
+      min-height: 72px;
+      max-height: 180px;
+      resize: vertical;
+    }
+
+    button {
+      border: 1px solid #3b5349;
+      background: #1c2a24;
+      color: var(--text);
+      border-radius: 7px;
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: #6c946e;
+      color: #e8f7e7;
+    }
+
+    button.primary {
+      border-color: color-mix(in srgb, var(--accent) 65%, #2b4430);
+      background: #1f3422;
+    }
+
+    .locks {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 10px 0;
+    }
+
+    .locks label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      white-space: pre-wrap;
+    }
+
+    .status.ok {
+      color: var(--accent);
+    }
+
+    .status.warn {
+      color: var(--warn);
+    }
+
+    .status.err {
+      color: var(--err);
+    }
+
+    .tiny {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .note {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 4px 0 10px;
+      line-height: 1.35;
+    }
+
+    .section {
+      background: color-mix(in srgb, var(--panel-2) 88%, black);
+      border: 1px solid #2a3832;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+
+    .section h2 {
+      margin: 0 0 8px;
+    }
+
+    .modeBadge {
+      font-size: 12px;
+      color: var(--text);
+      border: 1px solid #33433b;
+      background: #132019;
+      border-radius: 6px;
+      padding: 6px 8px;
+      width: 100%;
+    }
+
+    .legend {
+      margin: 6px 0 10px;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .legend code {
+      color: var(--text);
+    }
+
+    @media (max-width: 1020px) {
+      body {
+        height: auto;
+        overflow: auto;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="layout">
+    <div class="card" style="overflow-y:auto;">
+      <h1>Creature Authoring (V1 MVP)</h1>
+
+      <div class="section">
+        <h2>1) Source genome</h2>
+        <div class="row">
+          <button id="loadCurrentBtn" type="button">Load current genome</button>
+          <button id="loadBestBtn" type="button">Load best genome</button>
+        </div>
+        <div class="row">
+          <select id="creatureList"></select>
+        </div>
+        <div class="row">
+          <button id="refreshCreaturesBtn" type="button">Refresh saved list</button>
+          <button id="loadSelectedBtn" type="button">Load saved creature</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>2) Creature definition</h2>
+        <div class="row">
+          <input id="creatureIdInput" type="text" placeholder="creature id (example: hopper_v1)">
+        </div>
+        <div class="row">
+          <textarea id="notesInput" placeholder="optional notes"></textarea>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>3) Lock profile (authored mode only)</h2>
+        <div class="note">
+          Checked means fixed by template. Unchecked means evolvable.
+        </div>
+        <div class="row">
+          <button id="presetGaitOnlyBtn" type="button">Preset: gait/controller-only</button>
+          <button id="presetGaitAndLimitsBtn" type="button">Preset: gait + joint limits</button>
+        </div>
+        <ul class="legend">
+          <li><code>Body graph</code>: number of parts + how they connect.</li>
+          <li><code>Joint kind</code>: hinge vs ball choice per joint.</li>
+          <li><code>Joint limits</code>: allowed rotation ranges per joint.</li>
+          <li><code>Body shape + joint power</code>: part sizes/mass, anchor placement, growth direction, joint strength/stiffness.</li>
+          <li><code>Neural controller</code>: brain neurons/weights/effectors (the gait/control policy).</li>
+          <li><code>Color</code>: visual hue only.</li>
+        </ul>
+        <div class="locks">
+          <label><input id="lockTopology" type="checkbox"> lock body graph</label>
+          <label><input id="lockJointTypes" type="checkbox"> lock joint kind (hinge/ball)</label>
+          <label><input id="lockJointLimits" type="checkbox"> lock joint limits</label>
+          <label><input id="lockSegmentDynamics" type="checkbox"> lock body shape + joint power</label>
+          <label><input id="lockControls" type="checkbox"> lock neural controller</label>
+          <label><input id="lockVisualHue" type="checkbox"> lock color</label>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>4) Save + apply</h2>
+        <div class="note">
+          Save writes a creature file. Mode buttons switch backend mode and restart evolution.
+        </div>
+        <div class="row">
+          <button id="saveCreatureBtn" type="button" class="primary">Save creature file</button>
+        </div>
+        <div class="row">
+          <div id="modeStatus" class="modeBadge">Current backend mode: unknown</div>
+        </div>
+        <div class="row">
+          <button id="activateAuthoredBtn" type="button" class="primary">Set mode: authored + restart</button>
+        </div>
+        <div class="row">
+          <button id="setRandomBtn" type="button">Set mode: random + restart</button>
+        </div>
+      </div>
+      <div id="status" class="status">Ready.</div>
+      <div class="tiny">Launch directly with: <code>cargo run --release -- --creature your_id</code></div>
+    </div>
+    <div class="card" style="display:flex; flex-direction:column; min-height:0; overflow:hidden;">
+      <h2>Genome JSON</h2>
+      <textarea id="genomeEditor" spellcheck="false" style="flex:1; min-height:0;"></textarea>
+    </div>
+  </div>
+
+  <script>
+    const backend = `${window.location.protocol}//${window.location.host}`;
+    const urls = {
+      currentGenome: `${backend}/api/evolution/genome/current`,
+      bestGenome: `${backend}/api/evolution/genome/best`,
+      control: `${backend}/api/evolution/control`,
+      evolutionState: `${backend}/api/evolution/state`,
+      creatureList: `${backend}/api/creatures`,
+      creatureSave: `${backend}/api/creatures/save`,
+      creatureGet: (id) => `${backend}/api/creatures/${encodeURIComponent(id)}`,
+    };
+
+    const statusEl = document.getElementById("status");
+    const genomeEditor = document.getElementById("genomeEditor");
+    const creatureIdInput = document.getElementById("creatureIdInput");
+    const notesInput = document.getElementById("notesInput");
+    const creatureList = document.getElementById("creatureList");
+    const modeStatus = document.getElementById("modeStatus");
+    const lockTopology = document.getElementById("lockTopology");
+    const lockJointTypes = document.getElementById("lockJointTypes");
+    const lockJointLimits = document.getElementById("lockJointLimits");
+    const lockSegmentDynamics = document.getElementById("lockSegmentDynamics");
+    const lockControls = document.getElementById("lockControls");
+    const lockVisualHue = document.getElementById("lockVisualHue");
+    const presetGaitOnlyBtn = document.getElementById("presetGaitOnlyBtn");
+    const presetGaitAndLimitsBtn = document.getElementById("presetGaitAndLimitsBtn");
+
+    function setStatus(message, cls = "") {
+      statusEl.className = `status ${cls}`.trim();
+      statusEl.textContent = message;
+    }
+
+    function lockPayload() {
+      return {
+        lockTopology: Boolean(lockTopology.checked),
+        lockJointTypes: Boolean(lockJointTypes.checked),
+        lockJointLimits: Boolean(lockJointLimits.checked),
+        lockSegmentDynamics: Boolean(lockSegmentDynamics.checked),
+        lockControls: Boolean(lockControls.checked),
+        lockVisualHue: Boolean(lockVisualHue.checked),
+      };
+    }
+
+    function applyLocks(locks) {
+      const src = locks || {};
+      lockTopology.checked = Boolean(src.lockTopology);
+      lockJointTypes.checked = Boolean(src.lockJointTypes);
+      lockJointLimits.checked = Boolean(src.lockJointLimits);
+      lockSegmentDynamics.checked = Boolean(src.lockSegmentDynamics);
+      lockControls.checked = Boolean(src.lockControls);
+      lockVisualHue.checked = Boolean(src.lockVisualHue);
+    }
+
+    function applyGaitOnlyPreset() {
+      lockTopology.checked = true;
+      lockJointTypes.checked = true;
+      lockJointLimits.checked = true;
+      lockSegmentDynamics.checked = true;
+      lockControls.checked = false;
+      lockVisualHue.checked = true;
+      setStatus("Applied preset: morphology fixed, neural controller evolvable (gait/controller-only).", "ok");
+    }
+
+    function applyGaitAndLimitsPreset() {
+      lockTopology.checked = true;
+      lockJointTypes.checked = true;
+      lockJointLimits.checked = false;
+      lockSegmentDynamics.checked = true;
+      lockControls.checked = false;
+      lockVisualHue.checked = true;
+      setStatus("Applied preset: morphology fixed, controller + joint limits evolvable.", "ok");
+    }
+
+    function parseGenomeEditor() {
+      const raw = genomeEditor.value.trim();
+      if (!raw) throw new Error("Genome JSON is empty.");
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("Genome JSON must be an object.");
+      }
+      return parsed;
+    }
+
+    async function fetchJson(url, init) {
+      const response = await fetch(url, init);
+      if (!response.ok) {
+        const message = await response.text().catch(() => "");
+        throw new Error(`${response.status} ${response.statusText}${message ? `: ${message}` : ""}`);
+      }
+      return await response.json();
+    }
+
+    function labelMorphMode(mode) {
+      if (mode === "authored") return "authored";
+      if (mode === "random") return "random";
+      return String(mode || "unknown");
+    }
+
+    async function refreshModeStatus() {
+      try {
+        const state = await fetchJson(urls.evolutionState);
+        const mode = labelMorphMode(state?.morphologyMode ?? state?.morphology_mode);
+        const authoredId = state?.authoredCreatureId ?? state?.authored_creature_id;
+        if (mode === "authored") {
+          modeStatus.textContent = `Current backend mode: authored (${authoredId || "no creature id"})`;
+        } else {
+          modeStatus.textContent = `Current backend mode: ${mode}`;
+        }
+      } catch (error) {
+        modeStatus.textContent = `Current backend mode: unavailable (${error.message})`;
+      }
+    }
+
+    async function loadGenome(url, label) {
+      try {
+        const genome = await fetchJson(url);
+        genomeEditor.value = JSON.stringify(genome, null, 2);
+        setStatus(`Loaded ${label} genome.`, "ok");
+      } catch (error) {
+        setStatus(`Failed loading ${label} genome: ${error.message}`, "err");
+      }
+    }
+
+    async function refreshCreatureList(selectId) {
+      try {
+        const payload = await fetchJson(urls.creatureList);
+        const creatures = Array.isArray(payload?.creatures) ? payload.creatures : [];
+        creatureList.innerHTML = "";
+        for (const creature of creatures) {
+          const option = document.createElement("option");
+          option.value = creature.id;
+          option.textContent = creature.id;
+          creatureList.appendChild(option);
+        }
+        if (selectId) {
+          creatureList.value = selectId;
+        }
+        if (!creatureList.value && creatureList.options.length > 0) {
+          creatureList.selectedIndex = 0;
+        }
+      } catch (error) {
+        setStatus(`Failed refreshing creature list: ${error.message}`, "err");
+      }
+    }
+
+    async function saveCreature() {
+      const id = creatureIdInput.value.trim();
+      if (!id) {
+        setStatus("Creature id is required.", "warn");
+        return;
+      }
+      let genome;
+      try {
+        genome = parseGenomeEditor();
+      } catch (error) {
+        setStatus(error.message, "warn");
+        return;
+      }
+      try {
+        const payload = await fetchJson(urls.creatureSave, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id,
+            genome,
+            notes: notesInput.value || "",
+            locks: lockPayload(),
+          }),
+        });
+        creatureIdInput.value = payload.id || id;
+        await refreshCreatureList(payload.id || id);
+        setStatus(`Saved creature '${payload.id}'.`, "ok");
+      } catch (error) {
+        setStatus(`Save failed: ${error.message}`, "err");
+      }
+    }
+
+    async function loadSelectedCreature() {
+      const id = creatureList.value.trim();
+      if (!id) {
+        setStatus("Select a creature first.", "warn");
+        return;
+      }
+      try {
+        const creature = await fetchJson(urls.creatureGet(id));
+        creatureIdInput.value = creature.id || id;
+        notesInput.value = creature.notes || "";
+        applyLocks(creature.locks);
+        genomeEditor.value = JSON.stringify(creature.genome, null, 2);
+        setStatus(`Loaded creature '${id}'.`, "ok");
+      } catch (error) {
+        setStatus(`Load failed: ${error.message}`, "err");
+      }
+    }
+
+    async function sendControl(payload) {
+      await fetchJson(urls.control, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    async function activateAuthoredMode() {
+      const id = creatureIdInput.value.trim() || creatureList.value.trim();
+      if (!id) {
+        setStatus("Creature id is required to activate authored mode.", "warn");
+        return;
+      }
+      try {
+        await sendControl({
+          action: "set_morphology_mode",
+          morphologyMode: "authored",
+          creatureId: id,
+        });
+        await refreshModeStatus();
+        setStatus(`Activated authored mode with '${id}'. Evolution restarted.`, "ok");
+      } catch (error) {
+        setStatus(`Failed to activate authored mode: ${error.message}`, "err");
+      }
+    }
+
+    async function setRandomMode() {
+      try {
+        await sendControl({ action: "set_morphology_mode", morphologyMode: "random" });
+        await refreshModeStatus();
+        setStatus("Switched morphology mode to random. Evolution restarted.", "ok");
+      } catch (error) {
+        setStatus(`Failed switching to random mode: ${error.message}`, "err");
+      }
+    }
+
+    document.getElementById("loadCurrentBtn").addEventListener("click", () => {
+      void loadGenome(urls.currentGenome, "current");
+    });
+    document.getElementById("loadBestBtn").addEventListener("click", () => {
+      void loadGenome(urls.bestGenome, "best");
+    });
+    document.getElementById("saveCreatureBtn").addEventListener("click", () => {
+      void saveCreature();
+    });
+    document.getElementById("refreshCreaturesBtn").addEventListener("click", () => {
+      void refreshCreatureList();
+    });
+    document.getElementById("loadSelectedBtn").addEventListener("click", () => {
+      void loadSelectedCreature();
+    });
+    document.getElementById("activateAuthoredBtn").addEventListener("click", () => {
+      void activateAuthoredMode();
+    });
+    document.getElementById("setRandomBtn").addEventListener("click", () => {
+      void setRandomMode();
+    });
+    presetGaitOnlyBtn.addEventListener("click", () => {
+      applyGaitOnlyPreset();
+    });
+    presetGaitAndLimitsBtn.addEventListener("click", () => {
+      applyGaitAndLimitsPreset();
+    });
+
+    genomeEditor.value = "{\n  \"graph\": {\n    \"nodes\": []\n  }\n}";
+    void refreshCreatureList();
+    void refreshModeStatus();
+  </script>
+</body>
+
+</html>

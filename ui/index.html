@@ -302,6 +302,10 @@
         <button id="saveCheckpointBtn" type="button">Save</button>
         <button id="loadCheckpointBtn" type="button">Load latest</button>
       </div>
+      <div class="ctrl">
+        Creature
+        <button id="openCreatorBtn" type="button">Open creator</button>
+      </div>
       <label class="ctrl">
         Batch size
         <input id="populationSlider" type="range" min="1" max="384" step="1" value="160">
@@ -474,6 +478,7 @@
     const importGenomeInput = document.getElementById("importGenomeInput");
     const saveCheckpointBtn = document.getElementById("saveCheckpointBtn");
     const loadCheckpointBtn = document.getElementById("loadCheckpointBtn");
+    const openCreatorBtn = document.getElementById("openCreatorBtn");
     const toggleHudBtn = document.getElementById("toggleHudBtn");
     const toggleGenomeBtn = document.getElementById("toggleGenomeBtn");
     const hud = document.getElementById("hud");
@@ -609,6 +614,9 @@
       if (accepted) {
         void loadLatestCheckpoint();
       }
+    });
+    openCreatorBtn.addEventListener("click", () => {
+      window.open("/creator.html", "_blank", "noopener");
     });
     toggleHudBtn.addEventListener("click", () => {
       setHudCollapsed(!hudCollapsed);
