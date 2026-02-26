@@ -132,8 +132,9 @@ const GRAPH_MUTATION_MAX_PARTS_MIN: usize = 8;
 const GRAPH_NODE_DIM_MAX_WD: f32 = 2.2;
 const GRAPH_NODE_DIM_MAX_H: f32 = 2.8;
 const GRAPH_NODE_MASS_MAX: f32 = 2.8;
-const EDGE_ANCHOR_RANDOM_ABS_MAX: f32 = 0.78;
 const EDGE_ANCHOR_ABS_MAX: f32 = 0.86;
+const EDGE_ANCHOR_PRIMARY_MIN: f32 = 0.7;
+const EDGE_ANCHOR_SECONDARY_ABS_MAX: f32 = 0.3;
 const EDGE_AXIS_RANDOM_ABS_MAX: f32 = 0.48;
 const EDGE_AXIS_ABS_MAX: f32 = 0.65;
 const EDGE_DIR_RANDOM_XZ_ABS_MAX: f32 = 0.9;
@@ -7872,11 +7873,12 @@ fn random_local_brain_gene(rng: &mut SmallRng, global_dim: usize) -> LocalBrainG
 }
 
 fn random_graph_edge_gene(rng: &mut SmallRng, to: usize) -> MorphEdgeGene {
+    let [anchor_x, anchor_y, anchor_z] = random_surface_anchor(rng);
     MorphEdgeGene {
         to,
-        anchor_x: rng_range(rng, -EDGE_ANCHOR_RANDOM_ABS_MAX, EDGE_ANCHOR_RANDOM_ABS_MAX),
-        anchor_y: rng_range(rng, -EDGE_ANCHOR_RANDOM_ABS_MAX, EDGE_ANCHOR_RANDOM_ABS_MAX),
-        anchor_z: rng_range(rng, -EDGE_ANCHOR_RANDOM_ABS_MAX, EDGE_ANCHOR_RANDOM_ABS_MAX),
+        anchor_x,
+        anchor_y,
+        anchor_z,
         axis_y: rng_range(rng, -EDGE_AXIS_RANDOM_ABS_MAX, EDGE_AXIS_RANDOM_ABS_MAX),
         axis_z: rng_range(rng, -EDGE_AXIS_RANDOM_ABS_MAX, EDGE_AXIS_RANDOM_ABS_MAX),
         dir_x: rng_range(rng, -EDGE_DIR_RANDOM_XZ_ABS_MAX, EDGE_DIR_RANDOM_XZ_ABS_MAX),
@@ -8596,9 +8598,7 @@ fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng) {
         node.edges.truncate(MAX_GRAPH_EDGES_PER_NODE);
         for edge in &mut node.edges {
             edge.to = edge.to.min(node_len.saturating_sub(1));
-            edge.anchor_x = clamp(edge.anchor_x, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
-            edge.anchor_y = clamp(edge.anchor_y, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
-            edge.anchor_z = clamp(edge.anchor_z, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
+            clamp_surface_anchor(edge, rng);
             edge.axis_y = clamp(edge.axis_y, -EDGE_AXIS_ABS_MAX, EDGE_AXIS_ABS_MAX);
             edge.axis_z = clamp(edge.axis_z, -EDGE_AXIS_ABS_MAX, EDGE_AXIS_ABS_MAX);
             edge.dir_x = clamp(edge.dir_x, -EDGE_DIR_XZ_ABS_MAX, EDGE_DIR_XZ_ABS_MAX);
@@ -8960,6 +8960,7 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, structural: bool, rng: 
                 EDGE_ANCHOR_MUTATION_VARIANCE,
                 rng,
             );
+            clamp_surface_anchor(edge, rng);
             edge.axis_y = mutate_number(
                 edge.axis_y,
                 -EDGE_AXIS_ABS_MAX,
@@ -10449,6 +10450,67 @@ fn rng_range(rng: &mut SmallRng, min: f32, max: f32) -> f32 {
 
 fn clamp(value: f32, min: f32, max: f32) -> f32 {
     value.max(min).min(max)
+}
+
+fn random_surface_anchor(rng: &mut SmallRng) -> [f32; 3] {
+    let dominant_axis = rng.random_range(0..3);
+    let sign = if rng.random::<f32>() < 0.5 { -1.0 } else { 1.0 };
+    let mut anchor = [
+        rng_range(
+            rng,
+            -EDGE_ANCHOR_SECONDARY_ABS_MAX,
+            EDGE_ANCHOR_SECONDARY_ABS_MAX,
+        ),
+        rng_range(
+            rng,
+            -EDGE_ANCHOR_SECONDARY_ABS_MAX,
+            EDGE_ANCHOR_SECONDARY_ABS_MAX,
+        ),
+        rng_range(
+            rng,
+            -EDGE_ANCHOR_SECONDARY_ABS_MAX,
+            EDGE_ANCHOR_SECONDARY_ABS_MAX,
+        ),
+    ];
+    anchor[dominant_axis] = sign * rng_range(rng, EDGE_ANCHOR_PRIMARY_MIN, EDGE_ANCHOR_ABS_MAX);
+    anchor
+}
+
+fn clamp_surface_anchor(edge: &mut MorphEdgeGene, rng: &mut SmallRng) {
+    let mut anchor = [
+        clamp(edge.anchor_x, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX),
+        clamp(edge.anchor_y, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX),
+        clamp(edge.anchor_z, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX),
+    ];
+    let mut dominant_axis = 0usize;
+    let mut dominant_abs = anchor[0].abs();
+    for (axis, value) in anchor.iter().enumerate().skip(1) {
+        let value_abs = value.abs();
+        if value_abs > dominant_abs {
+            dominant_abs = value_abs;
+            dominant_axis = axis;
+        }
+    }
+    let dominant_sign = if anchor[dominant_axis].abs() > 1e-5 {
+        anchor[dominant_axis].signum()
+    } else if rng.random::<f32>() < 0.5 {
+        -1.0
+    } else {
+        1.0
+    };
+    anchor[dominant_axis] = dominant_sign * dominant_abs.max(EDGE_ANCHOR_PRIMARY_MIN);
+    for (axis, value) in anchor.iter_mut().enumerate() {
+        if axis != dominant_axis {
+            *value = clamp(
+                *value,
+                -EDGE_ANCHOR_SECONDARY_ABS_MAX,
+                EDGE_ANCHOR_SECONDARY_ABS_MAX,
+            );
+        }
+    }
+    edge.anchor_x = anchor[0];
+    edge.anchor_y = anchor[1];
+    edge.anchor_z = anchor[2];
 }
 
 fn slew_limit(previous: f32, target: f32, max_delta: f32) -> f32 {
