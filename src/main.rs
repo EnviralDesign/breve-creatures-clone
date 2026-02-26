@@ -142,6 +142,7 @@ const EDGE_DIR_RANDOM_Y_MAX: f32 = 0.08;
 const EDGE_DIR_XZ_ABS_MAX: f32 = 1.15;
 const EDGE_DIR_Y_MIN: f32 = -1.2;
 const EDGE_DIR_Y_MAX: f32 = 0.85;
+const EDGE_OUTWARD_GROWTH_MIN_DOT: f32 = 0.22;
 const EDGE_SCALE_RANDOM_MIN: f32 = 0.72;
 const EDGE_SCALE_RANDOM_MAX: f32 = 1.16;
 const EDGE_SCALE_MIN: f32 = 0.45;
@@ -1065,10 +1066,17 @@ impl TrialSimulator {
                 edge.anchor_z * parent_size[2] * 0.5
             ];
             let axis_local = normalized_axis(edge.axis_y, edge.axis_z);
-            let local_growth = normalized_dir(
-                edge.dir_x * reflect_sign,
-                edge.dir_y,
-                edge.dir_z * reflect_sign,
+            let local_growth = outward_biased_growth_dir(
+                vector![
+                    edge.dir_x * reflect_sign,
+                    edge.dir_y,
+                    edge.dir_z * reflect_sign
+                ],
+                vector![
+                    edge.anchor_x * reflect_sign,
+                    edge.anchor_y,
+                    edge.anchor_z * reflect_sign
+                ],
             );
             let anchor_world = parent_translation + parent_rotation * pivot_from_parent;
             let part_w = (node.part.w * edge.scale).abs().clamp(0.14, 2.8);
@@ -10233,9 +10241,17 @@ fn joint_area_strength_scale(parent_size: [f32; 3], child_size: [f32; 3]) -> f32
     )
 }
 
-fn normalized_dir(x: f32, y: f32, z: f32) -> Vector3<f32> {
-    let dir = vector![x, y, z];
-    dir.try_normalize(1e-6).unwrap_or(vector![0.0, -1.0, 0.0])
+fn outward_biased_growth_dir(raw_dir: Vector3<f32>, anchor_hint: Vector3<f32>) -> Vector3<f32> {
+    let mut dir = raw_dir
+        .try_normalize(1e-6)
+        .unwrap_or(vector![0.0, -1.0, 0.0]);
+    let outward = anchor_hint.try_normalize(1e-6).unwrap_or(vector![0.0, -1.0, 0.0]);
+    let dot = dir.dot(&outward);
+    if dot < EDGE_OUTWARD_GROWTH_MIN_DOT {
+        let correction = outward * (EDGE_OUTWARD_GROWTH_MIN_DOT - dot);
+        dir = (dir + correction).try_normalize(1e-6).unwrap_or(outward);
+    }
+    dir
 }
 
 fn default_genome_version() -> u32 {
