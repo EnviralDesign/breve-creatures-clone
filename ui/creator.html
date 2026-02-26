@@ -431,6 +431,40 @@
       min-width: 0;
     }
 
+    .inspectorFieldName {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .inspectorFieldName.hasHelp {
+      text-decoration: underline dotted rgba(158, 179, 165, 0.65);
+      text-underline-offset: 2px;
+      cursor: help;
+    }
+
+    .inspectorNumericCombo {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    #inspectorContent .inspectorSlider {
+      flex: 1 1 auto;
+      min-width: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    #inspectorContent .inspectorNumberInput {
+      width: 88px;
+      min-width: 88px;
+      flex: 0 0 88px;
+      text-align: right;
+    }
+
     #inspectorContent input[type="text"],
     #inspectorContent input[type="number"],
     #inspectorContent textarea,
@@ -486,6 +520,7 @@
       font-size: 11px;
       color: var(--muted);
       line-height: 1.3;
+      opacity: 0.92;
     }
 
     .inspectorFieldError {
@@ -503,6 +538,10 @@
     .inspectorFieldRow.invalid textarea,
     .inspectorFieldRow.invalid select {
       border-color: #b35d5d;
+    }
+
+    .inspectorFieldRow.invalid .inspectorSlider {
+      accent-color: #d78282;
     }
 
     .inspectorFooter {

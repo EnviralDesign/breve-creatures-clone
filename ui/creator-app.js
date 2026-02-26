@@ -27,35 +27,201 @@ const state = {
 
 const JOINT_TYPE_OPTIONS = ["hinge", "ball"];
 const FIELD_SCHEMAS = {
-  "node.part.w": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
-  "node.part.h": { type: "number", min: 0.2, max: 2.8, step: 0.01 },
-  "node.part.d": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
-  "node.part.mass": { type: "number", min: 0.08, max: 2.8, step: 0.01 },
-  "node.brain.effectorX.gain": { type: "number", min: 0.2, max: 2.0, step: 0.01 },
-  "node.brain.effectorY.gain": { type: "number", min: 0.2, max: 2.0, step: 0.01 },
-  "node.brain.effectorZ.gain": { type: "number", min: 0.2, max: 2.0, step: 0.01 },
-  "part.part.w": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
-  "part.part.h": { type: "number", min: 0.2, max: 2.8, step: 0.01 },
-  "part.part.d": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
-  "part.part.mass": { type: "number", min: 0.08, max: 2.8, step: 0.01 },
-  "part.edge.scale": { type: "number", min: 0.45, max: 1.55, step: 0.01 },
-  "part.edge.anchorX": { type: "number", min: -0.86, max: 0.86, step: 0.01 },
-  "part.edge.anchorY": { type: "number", min: -0.86, max: 0.86, step: 0.01 },
-  "part.edge.anchorZ": { type: "number", min: -0.86, max: 0.86, step: 0.01 },
-  "part.edge.dirX": { type: "number", min: -1.15, max: 1.15, step: 0.01 },
-  "part.edge.dirY": { type: "number", min: -1.2, max: 0.85, step: 0.01 },
-  "part.edge.dirZ": { type: "number", min: -1.15, max: 1.15, step: 0.01 },
-  "part.edge.axisY": { type: "number", min: -0.65, max: 0.65, step: 0.01 },
-  "part.edge.axisZ": { type: "number", min: -0.65, max: 0.65, step: 0.01 },
-  "joint.edge.jointType": { type: "enum", options: JOINT_TYPE_OPTIONS },
-  "joint.edge.limitX": { type: "number", min: 0.12, max: Math.PI * 0.95, step: 0.01 },
-  "joint.edge.limitY": { type: "number", min: 0.1, max: Math.PI * 0.75, step: 0.01 },
-  "joint.edge.limitZ": { type: "number", min: 0.1, max: Math.PI * 0.75, step: 0.01 },
-  "joint.edge.motorStrength": { type: "number", min: 0.3, max: 4.5, step: 0.01 },
-  "joint.edge.stiffness": { type: "number", min: 12.0, max: 160.0, step: 0.1 },
-  "joint.edge.recursiveLimit": { type: "int", min: 1, max: 5, step: 1 },
-  "joint.edge.terminalOnly": { type: "bool" },
-  "joint.edge.reflectX": { type: "bool" },
+  "node.part.w": {
+    type: "number",
+    min: 0.14,
+    max: 2.2,
+    step: 0.01,
+    description: "Base width for this node template part.",
+  },
+  "node.part.h": {
+    type: "number",
+    min: 0.2,
+    max: 2.8,
+    step: 0.01,
+    description: "Base height for this node template part.",
+  },
+  "node.part.d": {
+    type: "number",
+    min: 0.14,
+    max: 2.2,
+    step: 0.01,
+    description: "Base depth for this node template part.",
+  },
+  "node.part.mass": {
+    type: "number",
+    min: 0.08,
+    max: 2.8,
+    step: 0.01,
+    description: "Mass used by physics for this node template part.",
+  },
+  "node.brain.effectorX.gain": {
+    type: "number",
+    min: 0.2,
+    max: 2.0,
+    step: 0.01,
+    description: "Drive gain for local effector X.",
+  },
+  "node.brain.effectorY.gain": {
+    type: "number",
+    min: 0.2,
+    max: 2.0,
+    step: 0.01,
+    description: "Drive gain for local effector Y.",
+  },
+  "node.brain.effectorZ.gain": {
+    type: "number",
+    min: 0.2,
+    max: 2.0,
+    step: 0.01,
+    description: "Drive gain for local effector Z.",
+  },
+  "part.part.w": {
+    type: "number",
+    min: 0.14,
+    max: 2.2,
+    step: 0.01,
+    description: "Width of the source node part for this selected part.",
+  },
+  "part.part.h": {
+    type: "number",
+    min: 0.2,
+    max: 2.8,
+    step: 0.01,
+    description: "Height of the source node part for this selected part.",
+  },
+  "part.part.d": {
+    type: "number",
+    min: 0.14,
+    max: 2.2,
+    step: 0.01,
+    description: "Depth of the source node part for this selected part.",
+  },
+  "part.part.mass": {
+    type: "number",
+    min: 0.08,
+    max: 2.8,
+    step: 0.01,
+    description: "Mass of the source node part for this selected part.",
+  },
+  "part.edge.scale": {
+    type: "number",
+    min: 0.45,
+    max: 1.55,
+    step: 0.01,
+    description: "Relative size scaling applied to this branch.",
+  },
+  "part.edge.anchorX": {
+    type: "number",
+    min: -0.86,
+    max: 0.86,
+    step: 0.01,
+    description: "Attachment offset on parent part along local X.",
+  },
+  "part.edge.anchorY": {
+    type: "number",
+    min: -0.86,
+    max: 0.86,
+    step: 0.01,
+    description: "Attachment offset on parent part along local Y.",
+  },
+  "part.edge.anchorZ": {
+    type: "number",
+    min: -0.86,
+    max: 0.86,
+    step: 0.01,
+    description: "Attachment offset on parent part along local Z.",
+  },
+  "part.edge.dirX": {
+    type: "number",
+    min: -1.15,
+    max: 1.15,
+    step: 0.01,
+    description: "Growth direction component along X.",
+  },
+  "part.edge.dirY": {
+    type: "number",
+    min: -1.2,
+    max: 0.85,
+    step: 0.01,
+    description: "Growth direction component along Y.",
+  },
+  "part.edge.dirZ": {
+    type: "number",
+    min: -1.15,
+    max: 1.15,
+    step: 0.01,
+    description: "Growth direction component along Z.",
+  },
+  "part.edge.axisY": {
+    type: "number",
+    min: -0.65,
+    max: 0.65,
+    step: 0.01,
+    description: "Orientation helper axis component Y.",
+  },
+  "part.edge.axisZ": {
+    type: "number",
+    min: -0.65,
+    max: 0.65,
+    step: 0.01,
+    description: "Orientation helper axis component Z.",
+  },
+  "joint.edge.jointType": {
+    type: "enum",
+    options: JOINT_TYPE_OPTIONS,
+    description: "Constraint type used between parent and child parts.",
+  },
+  "joint.edge.limitX": {
+    type: "number",
+    min: 0.12,
+    max: Math.PI * 0.95,
+    step: 0.01,
+    description: "Angular travel limit around local X (radians).",
+  },
+  "joint.edge.limitY": {
+    type: "number",
+    min: 0.1,
+    max: Math.PI * 0.75,
+    step: 0.01,
+    description: "Angular travel limit around local Y (radians).",
+  },
+  "joint.edge.limitZ": {
+    type: "number",
+    min: 0.1,
+    max: Math.PI * 0.75,
+    step: 0.01,
+    description: "Angular travel limit around local Z (radians).",
+  },
+  "joint.edge.motorStrength": {
+    type: "number",
+    min: 0.3,
+    max: 4.5,
+    step: 0.01,
+    description: "Motor drive strength for this joint.",
+  },
+  "joint.edge.stiffness": {
+    type: "number",
+    min: 12.0,
+    max: 160.0,
+    step: 0.1,
+    description: "Spring stiffness of the joint constraint.",
+  },
+  "joint.edge.recursiveLimit": {
+    type: "int",
+    min: 1,
+    max: 5,
+    step: 1,
+    description: "Maximum branch recursion depth spawned from this edge.",
+  },
+  "joint.edge.terminalOnly": {
+    type: "bool",
+    description: "Spawn this edge only when the parent part is terminal.",
+  },
+  "joint.edge.reflectX": {
+    type: "bool",
+    description: "Mirror this branch across local X.",
+  },
 };
 
 const statusEl = document.getElementById("status");
@@ -870,9 +1036,14 @@ function fieldClampHint(field) {
     return "";
   }
   if (schema.type === "number" || schema.type === "int") {
+    const parts = [schema.type];
     if (Number.isFinite(schema.min) && Number.isFinite(schema.max)) {
-      return `${schema.type} [${schema.min} .. ${schema.max}]`;
+      parts.push(`[${schema.min} .. ${schema.max}]`);
     }
+    if (Number.isFinite(schema.step)) {
+      parts.push(`step ${schema.step}`);
+    }
+    return parts.join(" ");
   }
   if (schema.type === "enum") {
     return `enum: ${schema.options.join(" | ")}`;
@@ -883,11 +1054,59 @@ function fieldClampHint(field) {
   return "";
 }
 
+function fieldDescription(field) {
+  const schema = FIELD_SCHEMAS[field];
+  if (!schema || typeof schema.description !== "string") {
+    return "";
+  }
+  return schema.description.trim();
+}
+
+function fieldTooltipText(field) {
+  const rangeHint = fieldClampHint(field);
+  const description = fieldDescription(field);
+  if (rangeHint && description) {
+    return `${rangeHint}\n${description}`;
+  }
+  return description || rangeHint;
+}
+
+function fieldClampNumberValue(schema, rawValue) {
+  const min = Number.isFinite(schema.min) ? schema.min : -Number.MAX_VALUE;
+  const max = Number.isFinite(schema.max) ? schema.max : Number.MAX_VALUE;
+  const fallback = Number.isFinite(schema.min) ? schema.min : 0;
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) {
+    return schema.type === "int"
+      ? clampInt(fallback, min, max)
+      : clamp(fallback, min, max);
+  }
+  return schema.type === "int"
+    ? clampInt(parsed, min, max)
+    : clamp(parsed, min, max);
+}
+
+function parseNumberDraftForSlider(schema, rawValue) {
+  const text = String(rawValue ?? "").trim();
+  if (!text.length) {
+    return null;
+  }
+  if (schema.type === "int" && !/^-?\d+$/.test(text)) {
+    return null;
+  }
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return fieldClampNumberValue(schema, parsed);
+}
+
 function editableFieldInput(selection, field, value) {
   const schema = FIELD_SCHEMAS[field];
   if (!schema) {
     return null;
   }
+  const tooltipText = fieldTooltipText(field);
   if (schema.type === "enum") {
     const select = document.createElement("select");
     for (const optionValue of schema.options) {
@@ -897,6 +1116,9 @@ function editableFieldInput(selection, field, value) {
       select.appendChild(option);
     }
     select.value = String(value ?? schema.options[0] ?? "");
+    if (tooltipText) {
+      select.title = tooltipText;
+    }
     select.addEventListener("change", () => {
       applyFieldEdit(selection, field, select.value);
     });
@@ -910,6 +1132,11 @@ function editableFieldInput(selection, field, value) {
     checkbox.checked = Boolean(value);
     const text = document.createElement("span");
     text.textContent = checkbox.checked ? "true" : "false";
+    if (tooltipText) {
+      wrapper.title = tooltipText;
+      checkbox.title = tooltipText;
+      text.title = tooltipText;
+    }
     checkbox.addEventListener("change", () => {
       text.textContent = checkbox.checked ? "true" : "false";
       applyFieldEdit(selection, field, checkbox.checked);
@@ -918,6 +1145,80 @@ function editableFieldInput(selection, field, value) {
     wrapper.appendChild(text);
     return wrapper;
   }
+  if ((schema.type === "number" || schema.type === "int")
+    && Number.isFinite(schema.min)
+    && Number.isFinite(schema.max)) {
+    const combo = document.createElement("div");
+    combo.className = "inspectorNumericCombo";
+    if (tooltipText) {
+      combo.title = tooltipText;
+    }
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "inspectorSlider";
+    slider.min = String(schema.min);
+    slider.max = String(schema.max);
+    if (Number.isFinite(schema.step)) {
+      slider.step = String(schema.step);
+    }
+
+    const numberInput = document.createElement("input");
+    numberInput.type = "number";
+    numberInput.className = "inspectorNumberInput";
+    numberInput.placeholder = fieldClampHint(field);
+    if (Number.isFinite(schema.step)) {
+      numberInput.step = String(schema.step);
+    }
+    if (Number.isFinite(schema.min)) {
+      numberInput.min = String(schema.min);
+    }
+    if (Number.isFinite(schema.max)) {
+      numberInput.max = String(schema.max);
+    }
+    if (tooltipText) {
+      slider.title = tooltipText;
+      numberInput.title = tooltipText;
+    }
+
+    const initial = fieldClampNumberValue(schema, value);
+    const initialText = String(initial);
+    slider.value = initialText;
+    numberInput.value = initialText;
+
+    slider.addEventListener("input", () => {
+      numberInput.value = slider.value;
+    });
+    slider.addEventListener("change", () => {
+      numberInput.value = slider.value;
+      applyFieldEdit(selection, field, slider.value);
+    });
+
+    numberInput.addEventListener("input", () => {
+      const sliderValue = parseNumberDraftForSlider(schema, numberInput.value);
+      if (sliderValue === null) {
+        return;
+      }
+      slider.value = String(sliderValue);
+    });
+
+    const commitNumberInput = () => {
+      applyFieldEdit(selection, field, numberInput.value);
+    };
+    numberInput.addEventListener("change", commitNumberInput);
+    numberInput.addEventListener("blur", commitNumberInput);
+    numberInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitNumberInput();
+      }
+    });
+
+    combo.appendChild(slider);
+    combo.appendChild(numberInput);
+    return combo;
+  }
+
   const input = document.createElement("input");
   input.type = "number";
   input.value = Number.isFinite(Number(value)) ? String(value) : "";
@@ -930,6 +1231,9 @@ function editableFieldInput(selection, field, value) {
   }
   if (Number.isFinite(schema.max)) {
     input.max = String(schema.max);
+  }
+  if (tooltipText) {
+    input.title = tooltipText;
   }
   const commit = () => {
     applyFieldEdit(selection, field, input.value);
@@ -951,20 +1255,22 @@ function appendEditableField(container, selection, key, field, value) {
   const keyEl = document.createElement("div");
   keyEl.className = "k inspectorFieldLabel";
   const keyText = document.createElement("div");
+  keyText.className = "inspectorFieldName";
   keyText.textContent = key;
-  keyEl.appendChild(keyText);
-  const clampHint = fieldClampHint(field);
-  if (clampHint) {
-    const hint = document.createElement("div");
-    hint.className = "inspectorFieldHint";
-    hint.textContent = clampHint;
-    keyEl.appendChild(hint);
+  const tooltipText = fieldTooltipText(field);
+  if (tooltipText) {
+    keyText.classList.add("hasHelp");
+    keyText.title = tooltipText;
   }
+  keyEl.appendChild(keyText);
 
   const valEl = document.createElement("div");
   valEl.className = "v inspectorFieldValue";
   const controlWrap = document.createElement("div");
   controlWrap.className = "inspectorFieldControl";
+  if (tooltipText) {
+    controlWrap.title = tooltipText;
+  }
   const input = editableFieldInput(selection, field, value);
   if (input) {
     controlWrap.appendChild(input);
@@ -1638,7 +1944,6 @@ class CreatorVisualView {
     const key = this.makeSelectionKey(selection.kind, selection.id);
     object3d.userData.selection = { kind: selection.kind, id: selection.id };
     object3d.userData.selectionKey = key;
-    object3d.userData.baseScale = object3d.scale.clone();
     if (object3d.material && !Array.isArray(object3d.material)) {
       const material = object3d.material;
       object3d.userData.baseColor = material.color?.getHex?.();
@@ -1729,7 +2034,6 @@ class CreatorVisualView {
   applySelectionHighlight() {
     for (const objects of this.selectionObjects.values()) {
       for (const object3d of objects) {
-        object3d.scale.copy(object3d.userData.baseScale || new THREE.Vector3(1, 1, 1));
         const material = object3d.material;
         if (material && !Array.isArray(material)) {
           if (material.color && object3d.userData.baseColor !== undefined) {
@@ -1754,7 +2058,6 @@ class CreatorVisualView {
     for (const key of highlightKeys) {
       const objects = this.selectionObjects.get(key) || [];
       for (const object3d of objects) {
-        object3d.scale.multiplyScalar(1.08);
         const material = object3d.material;
         if (material && !Array.isArray(material)) {
           if (material.color) {
