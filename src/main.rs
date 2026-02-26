@@ -112,7 +112,7 @@ const BREEDING_CROSSOVER_PARAMETRIC_SHARE: f32 = 0.10;
 const BREEDING_STRUCTURAL_MUTATION_SHARE: f32 = 0.06;
 const BREEDING_GRAFT_PARAMETRIC_SHARE: f32 = 0.04;
 const BREEDING_CROSS_SPECIES_MATING_CHANCE: f32 = 0.10;
-const ENABLE_ACTUATION_SELECTION_PENALTY: bool = false;
+const ENABLE_ACTUATION_SELECTION_PENALTY: bool = true;
 const ENABLE_EFFICIENCY_SELECTION_PRESSURE: bool = true;
 const ENABLE_STARTUP_INVALID_SELECTION_PENALTY: bool = true;
 const ENABLE_MORPH_OVERLAP_SELECTION_PENALTY: bool = true;
@@ -126,6 +126,29 @@ const STARTUP_INVALID_SELECTION_GRACE_RATE: f32 = 0.10;
 const STARTUP_INVALID_SELECTION_WEIGHT: f32 = 0.18;
 const MORPH_OVERLAP_SELECTION_GRACE_RATIO: f32 = 0.10;
 const MORPH_OVERLAP_SELECTION_WEIGHT: f32 = 0.14;
+const GRAPH_RANDOM_MAX_PARTS_MIN: usize = 10;
+const GRAPH_RANDOM_MAX_PARTS_MAX: usize = 14;
+const GRAPH_MUTATION_MAX_PARTS_MIN: usize = 8;
+const GRAPH_NODE_DIM_MAX_WD: f32 = 2.2;
+const GRAPH_NODE_DIM_MAX_H: f32 = 2.8;
+const GRAPH_NODE_MASS_MAX: f32 = 2.8;
+const EDGE_ANCHOR_RANDOM_ABS_MAX: f32 = 0.78;
+const EDGE_ANCHOR_ABS_MAX: f32 = 0.86;
+const EDGE_AXIS_RANDOM_ABS_MAX: f32 = 0.48;
+const EDGE_AXIS_ABS_MAX: f32 = 0.65;
+const EDGE_DIR_RANDOM_XZ_ABS_MAX: f32 = 0.9;
+const EDGE_DIR_RANDOM_Y_MAX: f32 = 0.08;
+const EDGE_DIR_XZ_ABS_MAX: f32 = 1.15;
+const EDGE_DIR_Y_MIN: f32 = -1.2;
+const EDGE_DIR_Y_MAX: f32 = 0.85;
+const EDGE_SCALE_RANDOM_MIN: f32 = 0.72;
+const EDGE_SCALE_RANDOM_MAX: f32 = 1.16;
+const EDGE_SCALE_MIN: f32 = 0.45;
+const EDGE_SCALE_MAX: f32 = 1.55;
+const EDGE_ANCHOR_MUTATION_VARIANCE: f32 = 0.14;
+const EDGE_AXIS_MUTATION_VARIANCE: f32 = 0.14;
+const EDGE_DIR_MUTATION_VARIANCE: f32 = 0.16;
+const EDGE_SCALE_MUTATION_VARIANCE: f32 = 0.12;
 const MIN_BREEDING_MUTATION_RATE: f32 = 0.22;
 const MAX_BREEDING_MUTATION_RATE: f32 = 0.78;
 const FITNESS_STAGNATION_EPSILON: f32 = 1e-4;
@@ -7851,15 +7874,15 @@ fn random_local_brain_gene(rng: &mut SmallRng, global_dim: usize) -> LocalBrainG
 fn random_graph_edge_gene(rng: &mut SmallRng, to: usize) -> MorphEdgeGene {
     MorphEdgeGene {
         to,
-        anchor_x: rng_range(rng, -0.95, 0.95),
-        anchor_y: rng_range(rng, -0.95, 0.95),
-        anchor_z: rng_range(rng, -0.95, 0.95),
-        axis_y: rng_range(rng, -0.55, 0.55),
-        axis_z: rng_range(rng, -0.55, 0.55),
-        dir_x: rng_range(rng, -1.0, 1.0),
-        dir_y: rng_range(rng, -1.0, 0.2),
-        dir_z: rng_range(rng, -1.0, 1.0),
-        scale: rng_range(rng, 0.65, 1.25),
+        anchor_x: rng_range(rng, -EDGE_ANCHOR_RANDOM_ABS_MAX, EDGE_ANCHOR_RANDOM_ABS_MAX),
+        anchor_y: rng_range(rng, -EDGE_ANCHOR_RANDOM_ABS_MAX, EDGE_ANCHOR_RANDOM_ABS_MAX),
+        anchor_z: rng_range(rng, -EDGE_ANCHOR_RANDOM_ABS_MAX, EDGE_ANCHOR_RANDOM_ABS_MAX),
+        axis_y: rng_range(rng, -EDGE_AXIS_RANDOM_ABS_MAX, EDGE_AXIS_RANDOM_ABS_MAX),
+        axis_z: rng_range(rng, -EDGE_AXIS_RANDOM_ABS_MAX, EDGE_AXIS_RANDOM_ABS_MAX),
+        dir_x: rng_range(rng, -EDGE_DIR_RANDOM_XZ_ABS_MAX, EDGE_DIR_RANDOM_XZ_ABS_MAX),
+        dir_y: rng_range(rng, -1.0, EDGE_DIR_RANDOM_Y_MAX),
+        dir_z: rng_range(rng, -EDGE_DIR_RANDOM_XZ_ABS_MAX, EDGE_DIR_RANDOM_XZ_ABS_MAX),
+        scale: rng_range(rng, EDGE_SCALE_RANDOM_MIN, EDGE_SCALE_RANDOM_MAX),
         reflect_x: rng.random::<f32>() < 0.28,
         recursive_limit: rng.random_range(1..=3),
         terminal_only: rng.random::<f32>() < 0.2,
@@ -7884,10 +7907,10 @@ fn random_graph_gene(rng: &mut SmallRng) -> GraphGene {
     for _ in 0..node_count {
         nodes.push(MorphNodeGene {
             part: GraphPartGene {
-                w: rng_range(rng, 0.28, 1.45),
-                h: rng_range(rng, 0.34, 1.9),
-                d: rng_range(rng, 0.28, 1.45),
-                mass: rng_range(rng, 0.32, 1.45),
+                w: rng_range(rng, 0.28, 1.3),
+                h: rng_range(rng, 0.34, 1.75),
+                d: rng_range(rng, 0.28, 1.3),
+                mass: rng_range(rng, 0.3, 1.35),
             },
             edges: Vec::new(),
             brain: random_local_brain_gene(rng, global_dim),
@@ -7912,7 +7935,9 @@ fn random_graph_gene(rng: &mut SmallRng) -> GraphGene {
         root: 0,
         nodes,
         global_brain,
-        max_parts: rng.random_range(12..=MAX_GRAPH_PARTS.min(16)),
+        max_parts: rng.random_range(
+            GRAPH_RANDOM_MAX_PARTS_MIN..=GRAPH_RANDOM_MAX_PARTS_MAX.min(MAX_GRAPH_PARTS),
+        ),
     }
 }
 
@@ -8564,22 +8589,22 @@ fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng) {
     let node_len = graph.nodes.len().max(1);
     for node in &mut graph.nodes {
         resize_local_brain(&mut node.brain, global_count, None, rng);
-        node.part.w = clamp(node.part.w, 0.14, 2.8);
-        node.part.h = clamp(node.part.h, 0.2, 3.4);
-        node.part.d = clamp(node.part.d, 0.14, 2.8);
-        node.part.mass = clamp(node.part.mass, 0.08, 3.4);
+        node.part.w = clamp(node.part.w, 0.14, GRAPH_NODE_DIM_MAX_WD);
+        node.part.h = clamp(node.part.h, 0.2, GRAPH_NODE_DIM_MAX_H);
+        node.part.d = clamp(node.part.d, 0.14, GRAPH_NODE_DIM_MAX_WD);
+        node.part.mass = clamp(node.part.mass, 0.08, GRAPH_NODE_MASS_MAX);
         node.edges.truncate(MAX_GRAPH_EDGES_PER_NODE);
         for edge in &mut node.edges {
             edge.to = edge.to.min(node_len.saturating_sub(1));
-            edge.anchor_x = clamp(edge.anchor_x, -0.98, 0.98);
-            edge.anchor_y = clamp(edge.anchor_y, -0.98, 0.98);
-            edge.anchor_z = clamp(edge.anchor_z, -0.98, 0.98);
-            edge.axis_y = clamp(edge.axis_y, -0.75, 0.75);
-            edge.axis_z = clamp(edge.axis_z, -0.75, 0.75);
-            edge.dir_x = clamp(edge.dir_x, -1.4, 1.4);
-            edge.dir_y = clamp(edge.dir_y, -1.4, 1.0);
-            edge.dir_z = clamp(edge.dir_z, -1.4, 1.4);
-            edge.scale = clamp(edge.scale, 0.3, 1.8);
+            edge.anchor_x = clamp(edge.anchor_x, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
+            edge.anchor_y = clamp(edge.anchor_y, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
+            edge.anchor_z = clamp(edge.anchor_z, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
+            edge.axis_y = clamp(edge.axis_y, -EDGE_AXIS_ABS_MAX, EDGE_AXIS_ABS_MAX);
+            edge.axis_z = clamp(edge.axis_z, -EDGE_AXIS_ABS_MAX, EDGE_AXIS_ABS_MAX);
+            edge.dir_x = clamp(edge.dir_x, -EDGE_DIR_XZ_ABS_MAX, EDGE_DIR_XZ_ABS_MAX);
+            edge.dir_y = clamp(edge.dir_y, EDGE_DIR_Y_MIN, EDGE_DIR_Y_MAX);
+            edge.dir_z = clamp(edge.dir_z, -EDGE_DIR_XZ_ABS_MAX, EDGE_DIR_XZ_ABS_MAX);
+            edge.scale = clamp(edge.scale, EDGE_SCALE_MIN, EDGE_SCALE_MAX);
             edge.recursive_limit = edge.recursive_limit.max(1).min(5);
             edge.limit_x = clamp(edge.limit_x, 0.12, PI * 0.95);
             edge.limit_y = clamp(edge.limit_y, 0.10, PI * 0.75);
@@ -8757,8 +8782,9 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, structural: bool, rng: 
         }
     }
     if structural && rng.random::<f32>() < chance * 0.4 {
-        graph.max_parts = (graph.max_parts as i32 + if rng.random::<f32>() < 0.5 { -3 } else { 3 })
-            .clamp(6, MAX_GRAPH_PARTS as i32) as usize;
+        graph.max_parts = (graph.max_parts as i32 + if rng.random::<f32>() < 0.5 { -2 } else { 2 })
+            .clamp(GRAPH_MUTATION_MAX_PARTS_MIN as i32, MAX_GRAPH_PARTS as i32)
+            as usize;
     }
     let mut global_target = graph
         .global_brain
@@ -8788,10 +8814,38 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, structural: bool, rng: 
     let global_dim = graph.global_brain.neurons.len();
     let node_len = graph.nodes.len().max(1);
     for node in &mut graph.nodes {
-        node.part.w = mutate_number(node.part.w, 0.14, 2.8, local_chance, 0.14, rng);
-        node.part.h = mutate_number(node.part.h, 0.2, 3.4, local_chance, 0.14, rng);
-        node.part.d = mutate_number(node.part.d, 0.14, 2.8, local_chance, 0.14, rng);
-        node.part.mass = mutate_number(node.part.mass, 0.08, 3.4, local_chance, 0.18, rng);
+        node.part.w = mutate_number(
+            node.part.w,
+            0.14,
+            GRAPH_NODE_DIM_MAX_WD,
+            local_chance,
+            0.14,
+            rng,
+        );
+        node.part.h = mutate_number(
+            node.part.h,
+            0.2,
+            GRAPH_NODE_DIM_MAX_H,
+            local_chance,
+            0.14,
+            rng,
+        );
+        node.part.d = mutate_number(
+            node.part.d,
+            0.14,
+            GRAPH_NODE_DIM_MAX_WD,
+            local_chance,
+            0.14,
+            rng,
+        );
+        node.part.mass = mutate_number(
+            node.part.mass,
+            0.08,
+            GRAPH_NODE_MASS_MAX,
+            local_chance,
+            0.18,
+            rng,
+        );
         let mut local_target = node
             .brain
             .neurons
@@ -8882,15 +8936,78 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, structural: bool, rng: 
             );
         }
         for edge in &mut node.edges {
-            edge.anchor_x = mutate_number(edge.anchor_x, -0.98, 0.98, local_chance, 0.18, rng);
-            edge.anchor_y = mutate_number(edge.anchor_y, -0.98, 0.98, local_chance, 0.18, rng);
-            edge.anchor_z = mutate_number(edge.anchor_z, -0.98, 0.98, local_chance, 0.18, rng);
-            edge.axis_y = mutate_number(edge.axis_y, -0.75, 0.75, local_chance, 0.18, rng);
-            edge.axis_z = mutate_number(edge.axis_z, -0.75, 0.75, local_chance, 0.18, rng);
-            edge.dir_x = mutate_number(edge.dir_x, -1.4, 1.4, local_chance, 0.2, rng);
-            edge.dir_y = mutate_number(edge.dir_y, -1.4, 1.0, local_chance, 0.2, rng);
-            edge.dir_z = mutate_number(edge.dir_z, -1.4, 1.4, local_chance, 0.2, rng);
-            edge.scale = mutate_number(edge.scale, 0.3, 1.8, local_chance, 0.16, rng);
+            edge.anchor_x = mutate_number(
+                edge.anchor_x,
+                -EDGE_ANCHOR_ABS_MAX,
+                EDGE_ANCHOR_ABS_MAX,
+                local_chance,
+                EDGE_ANCHOR_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.anchor_y = mutate_number(
+                edge.anchor_y,
+                -EDGE_ANCHOR_ABS_MAX,
+                EDGE_ANCHOR_ABS_MAX,
+                local_chance,
+                EDGE_ANCHOR_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.anchor_z = mutate_number(
+                edge.anchor_z,
+                -EDGE_ANCHOR_ABS_MAX,
+                EDGE_ANCHOR_ABS_MAX,
+                local_chance,
+                EDGE_ANCHOR_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.axis_y = mutate_number(
+                edge.axis_y,
+                -EDGE_AXIS_ABS_MAX,
+                EDGE_AXIS_ABS_MAX,
+                local_chance,
+                EDGE_AXIS_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.axis_z = mutate_number(
+                edge.axis_z,
+                -EDGE_AXIS_ABS_MAX,
+                EDGE_AXIS_ABS_MAX,
+                local_chance,
+                EDGE_AXIS_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.dir_x = mutate_number(
+                edge.dir_x,
+                -EDGE_DIR_XZ_ABS_MAX,
+                EDGE_DIR_XZ_ABS_MAX,
+                local_chance,
+                EDGE_DIR_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.dir_y = mutate_number(
+                edge.dir_y,
+                EDGE_DIR_Y_MIN,
+                EDGE_DIR_Y_MAX,
+                local_chance,
+                EDGE_DIR_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.dir_z = mutate_number(
+                edge.dir_z,
+                -EDGE_DIR_XZ_ABS_MAX,
+                EDGE_DIR_XZ_ABS_MAX,
+                local_chance,
+                EDGE_DIR_MUTATION_VARIANCE,
+                rng,
+            );
+            edge.scale = mutate_number(
+                edge.scale,
+                EDGE_SCALE_MIN,
+                EDGE_SCALE_MAX,
+                local_chance,
+                EDGE_SCALE_MUTATION_VARIANCE,
+                rng,
+            );
             edge.limit_x = mutate_number(edge.limit_x, 0.12, PI * 0.95, local_chance, 0.14, rng);
             edge.limit_y = mutate_number(edge.limit_y, 0.10, PI * 0.75, local_chance, 0.14, rng);
             edge.limit_z = mutate_number(edge.limit_z, 0.10, PI * 0.75, local_chance, 0.14, rng);
