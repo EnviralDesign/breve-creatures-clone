@@ -54,6 +54,9 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `activeJointFractionMean`, `activeJointFractionP50`
       - `topJointEnergyShareMean`, `topJointEnergyShareP50`
       - `actuationEntropyMean`, `actuationEntropyP50`
+      - `targetDeltaMeanMean`, `targetDeltaMeanP50`
+      - `targetFlipRateHzMean`, `targetFlipRateHzP50`
+      - `contactChurnHzMean`, `contactChurnHzP50`
       - `dominantJointShareRate`, `lowEntropyRate`
     - `generations[*].viability` with per-generation viability/morphology rollups:
       - `startupInvalidTrialRate`
@@ -81,7 +84,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `stagnationGenerations`, `diversityState`
     - `mutationPressure`
     - `convergence`
-    - `signals` (includes `actuation_concentrated`, `startup_invalid_elevated`, `overlap_heavy_morphologies` when thresholds are exceeded)
+    - `signals` (includes `actuation_concentrated`, `actuation_high_frequency`, `contact_churn_elevated`, `startup_invalid_elevated`, `overlap_heavy_morphologies` when thresholds are exceeded)
     - `latestActuation`, `recentActuation` (same shape as `generations[*].actuation`)
     - `latestViability`, `recentViability` (same shape as `generations[*].viability`)
     - `latestTopology`
@@ -97,6 +100,9 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `lastRecentActiveJointFractionMean`
       - `lastRecentTopJointEnergyShareMean`
       - `lastRecentActuationEntropyMean`
+      - `lastRecentTargetDeltaMean`
+      - `lastRecentTargetFlipRateHzMean`
+      - `lastRecentContactChurnHzMean`
       - `lastRecentDominantJointShareRate`
       - `lastRecentLowEntropyRate`
       - `lastRecentStartupInvalidTrialRate`
@@ -180,6 +186,9 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `medianActiveJointFraction`
       - `medianTopJointEnergyShare`
       - `medianActuationEntropy`
+      - `medianTargetDeltaMean`
+      - `medianTargetFlipRateHz`
+      - `medianContactChurnHz`
     - startup-reject telemetry:
       - `invalidStartupTrials`, `invalidStartupTrialRate`
       - `allTrialsInvalidStartup`
@@ -203,6 +212,9 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `activeJointFraction`
       - `topJointEnergyShare`
       - `actuationEntropy`
+      - `targetDeltaMean`
+      - `targetFlipRateHz`
+      - `contactChurnHz`
     - `straightness`, `netDistance`
     - `invalidStartup`
 

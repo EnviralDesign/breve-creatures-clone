@@ -44,7 +44,9 @@ const BRAIN_SUBSTEPS_PER_PHYSICS_STEP: usize = 2;
 const FIXED_SIM_DT: f32 = 1.0 / 120.0;
 const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
 const MAX_MOTOR_SPEED: f32 = 6.8;
+const MOTOR_TARGET_LOW_PASS_ALPHA: f32 = 0.34;
 const MOTOR_TARGET_MAX_SLEW_RATE_RAD_PER_SEC: f32 = 4.0;
+const TARGET_DELTA_SIGN_EPS: f32 = 1e-4;
 const MAX_BODY_ANGULAR_SPEED: f32 = 15.0;
 const MAX_BODY_LINEAR_SPEED: f32 = 22.0;
 const EMERGENCY_MAX_BODY_ANGULAR_SPEED: f32 = 20.0;
@@ -136,6 +138,9 @@ const DIAG_DOMINANT_JOINT_SHARE_THRESHOLD: f32 = 0.65;
 const DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD: f32 = 0.45;
 const DIAG_DOMINANT_JOINT_ALERT_RATE: f32 = 0.5;
 const DIAG_LOW_ENTROPY_ALERT_RATE: f32 = 0.5;
+const DIAG_HIGH_TARGET_DELTA_MEAN_THRESHOLD: f32 = 0.08;
+const DIAG_HIGH_TARGET_FLIP_RATE_HZ_THRESHOLD: f32 = 5.0;
+const DIAG_HIGH_CONTACT_CHURN_HZ_THRESHOLD: f32 = 2.4;
 const DIAG_HIGH_OVERLAP_RATIO_THRESHOLD: f32 = 0.22;
 const DIAG_HIGH_OVERLAP_ALERT_RATE: f32 = 0.35;
 const DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE: f32 = 0.12;
@@ -146,6 +151,7 @@ const FIXED_PRESET_SETTLE_MIN_STABLE_SECONDS: f32 = 0.45;
 const FIXED_PRESET_SETTLE_MAX_EXTRA_SECONDS: f32 = 1.8;
 const FIXED_PRESET_SETTLE_LINEAR_SPEED_MAX: f32 = 0.65;
 const FIXED_PRESET_SETTLE_ANGULAR_SPEED_MAX: f32 = 1.45;
+const STARTUP_INVALID_OVERLAP_RATIO: f32 = 0.34;
 const STARTUP_INVALID_LINEAR_SPEED: f32 = 20.0;
 const STARTUP_INVALID_ANGULAR_SPEED: f32 = 24.0;
 const TRAIN_TRIAL_SEED_BANK_TAG: u32 = 0x9e37_79b9;
@@ -417,6 +423,12 @@ struct GenerationEvalResult {
     median_active_joint_fraction: f32,
     median_top_joint_energy_share: f32,
     median_actuation_entropy: f32,
+    #[serde(default)]
+    median_target_delta_mean: f32,
+    #[serde(default)]
+    median_target_flip_rate_hz: f32,
+    #[serde(default)]
+    median_contact_churn_hz: f32,
     invalid_startup_trials: usize,
     invalid_startup_trial_rate: f32,
     all_trials_invalid_startup: bool,
@@ -454,6 +466,12 @@ struct TrialMetrics {
     top_joint_energy_share: f32,
     #[serde(default)]
     actuation_entropy: f32,
+    #[serde(default)]
+    target_delta_mean: f32,
+    #[serde(default)]
+    target_flip_rate_hz: f32,
+    #[serde(default)]
+    contact_churn_hz: f32,
     fallen_ratio: f32,
     straightness: f32,
     net_distance: f32,
@@ -587,6 +605,10 @@ struct TrialAccumulator {
     height_integral: f32,
     instability_integral: f32,
     energy_integral: f32,
+    target_delta_abs_integral: f32,
+    target_axis_samples: usize,
+    target_sign_flip_count: usize,
+    contact_toggle_count: usize,
     fallen_time: f32,
     net_dx: f32,
     net_dz: f32,
@@ -594,6 +616,7 @@ struct TrialAccumulator {
     live_score: f32,
     active_limb_count: usize,
     mean_segment_count: f32,
+    part_count: usize,
 }
 
 impl TrialAccumulator {
@@ -622,6 +645,10 @@ impl TrialAccumulator {
             height_integral: 0.0,
             instability_integral: 0.0,
             energy_integral: 0.0,
+            target_delta_abs_integral: 0.0,
+            target_axis_samples: 0,
+            target_sign_flip_count: 0,
+            contact_toggle_count: 0,
             fallen_time: 0.0,
             net_dx: 0.0,
             net_dz: 0.0,
@@ -629,11 +656,31 @@ impl TrialAccumulator {
             live_score: 0.0,
             active_limb_count,
             mean_segment_count,
+            part_count: 1,
         }
+    }
+
+    fn set_part_count(&mut self, value: usize) {
+        self.part_count = value.max(1);
     }
 
     fn add_energy(&mut self, value: f32) {
         self.energy_integral += value.max(0.0);
+    }
+
+    fn add_target_delta_sample(&mut self, delta: f32, flipped: bool) {
+        if !delta.is_finite() {
+            return;
+        }
+        self.target_delta_abs_integral += delta.abs();
+        self.target_axis_samples += 1;
+        if flipped {
+            self.target_sign_flip_count += 1;
+        }
+    }
+
+    fn add_contact_toggles(&mut self, count: usize) {
+        self.contact_toggle_count += count;
     }
 
     fn update(
@@ -726,6 +773,31 @@ impl TrialAccumulator {
             0.0,
             3.0,
         );
+        let target_delta_mean = if self.target_axis_samples > 0 {
+            clamp(
+                self.target_delta_abs_integral / self.target_axis_samples as f32,
+                0.0,
+                6.0,
+            )
+        } else {
+            0.0
+        };
+        let target_flip_rate_hz = if self.target_axis_samples > 0 {
+            clamp(
+                (self.target_sign_flip_count as f32 / self.target_axis_samples as f32)
+                    / FIXED_SIM_DT.max(1e-6),
+                0.0,
+                120.0,
+            )
+        } else {
+            0.0
+        };
+        let contact_churn_hz = clamp(
+            self.contact_toggle_count as f32
+                / (sample_time * self.part_count.max(1) as f32).max(1e-6),
+            0.0,
+            120.0,
+        );
         let fallen_ratio = clamp(self.fallen_time / effective_duration, 0.0, 1.0);
         let net_distance = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
         let straightness = if self.path_length > 1e-4 {
@@ -763,6 +835,9 @@ impl TrialAccumulator {
             active_joint_fraction: 0.0,
             top_joint_energy_share: 0.0,
             actuation_entropy: 0.0,
+            target_delta_mean,
+            target_flip_rate_hz,
+            contact_churn_hz,
             fallen_ratio,
             straightness,
             net_distance,
@@ -794,6 +869,8 @@ struct TrialSimulator {
     metrics: TrialAccumulator,
     joint_energy_integrals: Vec<f32>,
     joint_target_positions: Vec<[f32; 3]>,
+    joint_target_delta_signs: Vec<[i8; 3]>,
+    previous_ground_contacts: Vec<bool>,
     elapsed: f32,
     duration: f32,
     require_settled_before_actuation: bool,
@@ -1185,6 +1262,10 @@ impl TrialSimulator {
         );
 
         let controller_count = controllers.len();
+        let part_count = parts.len();
+        let startup_invalid = morphology_overlap_ratio >= STARTUP_INVALID_OVERLAP_RATIO;
+        let mut metrics = TrialAccumulator::new(spawn, genome);
+        metrics.set_part_count(part_count);
         let mut sim = Self {
             pipeline,
             gravity,
@@ -1205,9 +1286,11 @@ impl TrialSimulator {
             ground_collider,
             torso_handle,
             genome: genome.clone(),
-            metrics: TrialAccumulator::new(spawn, genome),
+            metrics,
             joint_energy_integrals: vec![0.0; controller_count],
             joint_target_positions: vec![[0.0; 3]; controller_count],
+            joint_target_delta_signs: vec![[0; 3]; controller_count],
+            previous_ground_contacts: vec![false; part_count],
             elapsed: 0.0,
             duration: config.duration_seconds,
             require_settled_before_actuation: true,
@@ -1216,7 +1299,7 @@ impl TrialSimulator {
             brain_step_counter: 0,
             surface_friction_is_passive: true,
             active_surface_friction: trial_active_surface_friction,
-            startup_invalid: false,
+            startup_invalid,
             morphology_overlap_ratio,
         };
         sim.set_surface_friction(PASSIVE_SETTLE_FRICTION);
@@ -1326,6 +1409,9 @@ impl TrialSimulator {
             metrics.active_joint_fraction = 0.0;
             metrics.top_joint_energy_share = 0.0;
             metrics.actuation_entropy = 0.0;
+            metrics.target_delta_mean = 0.0;
+            metrics.target_flip_rate_hz = 0.0;
+            metrics.contact_churn_hz = 0.0;
             metrics.invalid_startup = true;
         }
         let descriptor = self.metrics.descriptor(&metrics);
@@ -1354,6 +1440,28 @@ impl TrialSimulator {
             }
         }
         -1.0
+    }
+
+    fn update_contact_churn(&mut self, count_toggles: bool) {
+        let mut toggles = 0usize;
+        for part_index in 0..self.parts.len() {
+            let in_contact = self.part_contact_value(part_index) > 0.0;
+            if let Some(previous) = self.previous_ground_contacts.get_mut(part_index) {
+                if *previous != in_contact {
+                    if count_toggles {
+                        toggles += 1;
+                    }
+                    *previous = in_contact;
+                }
+            }
+        }
+        if count_toggles && toggles > 0 {
+            self.metrics.add_contact_toggles(toggles);
+        }
+    }
+
+    fn should_stop_early(&self) -> bool {
+        self.startup_invalid
     }
 
     fn joint_state_for_child(&self, child_part_index: usize) -> ([f32; 3], [f32; 3]) {
@@ -1622,6 +1730,7 @@ impl TrialSimulator {
                 self.update_brains(sim_time, dt);
             }
             let mut energy_step = 0.0;
+            let low_pass_alpha = clamp(MOTOR_TARGET_LOW_PASS_ALPHA, 0.0, 1.0);
             for (controller_index, controller) in self.controllers.iter().enumerate() {
                 let brain_gene = self
                     .genome
@@ -1679,17 +1788,48 @@ impl TrialSimulator {
                     .copied()
                     .unwrap_or([0.0; 3]);
                 let max_delta = MOTOR_TARGET_MAX_SLEW_RATE_RAD_PER_SEC * dt.max(1e-6);
-                let target_x = slew_limit(target_prev[0], raw_target_x, max_delta);
+                let target_x = slew_limit(
+                    target_prev[0],
+                    low_pass_target(target_prev[0], raw_target_x, low_pass_alpha),
+                    max_delta,
+                );
                 let target_y = if matches!(controller.joint_type, JointTypeGene::Ball) {
-                    slew_limit(target_prev[1], raw_target_y, max_delta)
+                    slew_limit(
+                        target_prev[1],
+                        low_pass_target(target_prev[1], raw_target_y, low_pass_alpha),
+                        max_delta,
+                    )
                 } else {
                     0.0
                 };
                 let target_z = if matches!(controller.joint_type, JointTypeGene::Ball) {
-                    slew_limit(target_prev[2], raw_target_z, max_delta)
+                    slew_limit(
+                        target_prev[2],
+                        low_pass_target(target_prev[2], raw_target_z, low_pass_alpha),
+                        max_delta,
+                    )
                 } else {
                     0.0
                 };
+                let mut sign_state = self
+                    .joint_target_delta_signs
+                    .get(controller_index)
+                    .copied()
+                    .unwrap_or([0; 3]);
+                let delta_x = target_x - target_prev[0];
+                let flipped_x = update_delta_sign(&mut sign_state[0], delta_x);
+                self.metrics.add_target_delta_sample(delta_x, flipped_x);
+                if matches!(controller.joint_type, JointTypeGene::Ball) {
+                    let delta_y = target_y - target_prev[1];
+                    let delta_z = target_z - target_prev[2];
+                    let flipped_y = update_delta_sign(&mut sign_state[1], delta_y);
+                    let flipped_z = update_delta_sign(&mut sign_state[2], delta_z);
+                    self.metrics.add_target_delta_sample(delta_y, flipped_y);
+                    self.metrics.add_target_delta_sample(delta_z, flipped_z);
+                }
+                if let Some(state) = self.joint_target_delta_signs.get_mut(controller_index) {
+                    *state = sign_state;
+                }
                 if let Some(target_state) = self.joint_target_positions.get_mut(controller_index) {
                     *target_state = [target_x, target_y, target_z];
                 }
@@ -1813,6 +1953,7 @@ impl TrialSimulator {
             self.elapsed += dt;
             return Ok(());
         }
+        self.update_contact_churn(can_actuate);
 
         let torso = self
             .bodies
@@ -2026,6 +2167,18 @@ struct GenerationActuationStats {
     top_joint_energy_share_p50: f32,
     actuation_entropy_mean: f32,
     actuation_entropy_p50: f32,
+    #[serde(default)]
+    target_delta_mean_mean: f32,
+    #[serde(default)]
+    target_delta_mean_p50: f32,
+    #[serde(default)]
+    target_flip_rate_hz_mean: f32,
+    #[serde(default)]
+    target_flip_rate_hz_p50: f32,
+    #[serde(default)]
+    contact_churn_hz_mean: f32,
+    #[serde(default)]
+    contact_churn_hz_p50: f32,
     dominant_joint_share_rate: f32,
     low_entropy_rate: f32,
 }
@@ -2266,6 +2419,9 @@ struct EvolutionDiagnosisMetrics {
     last_recent_active_joint_fraction_mean: f32,
     last_recent_top_joint_energy_share_mean: f32,
     last_recent_actuation_entropy_mean: f32,
+    last_recent_target_delta_mean: f32,
+    last_recent_target_flip_rate_hz_mean: f32,
+    last_recent_contact_churn_hz_mean: f32,
     last_recent_dominant_joint_share_rate: f32,
     last_recent_low_entropy_rate: f32,
     last_recent_startup_invalid_trial_rate: f32,
@@ -3007,6 +3163,12 @@ struct EvolutionCandidate {
     #[serde(default)]
     median_actuation_entropy: f32,
     #[serde(default)]
+    median_target_delta_mean: f32,
+    #[serde(default)]
+    median_target_flip_rate_hz: f32,
+    #[serde(default)]
+    median_contact_churn_hz: f32,
+    #[serde(default)]
     median_energy_norm: f32,
     #[serde(default)]
     median_overlap_ratio: f32,
@@ -3453,6 +3615,9 @@ fn start_evolution_worker(
                                 median_top_joint_energy_share: result
                                     .median_top_joint_energy_share,
                                 median_actuation_entropy: result.median_actuation_entropy,
+                                median_target_delta_mean: result.median_target_delta_mean,
+                                median_target_flip_rate_hz: result.median_target_flip_rate_hz,
+                                median_contact_churn_hz: result.median_contact_churn_hz,
                                 median_energy_norm: result.median_energy_norm,
                                 median_overlap_ratio: result.median_overlap_ratio,
                                 median_progress: result.median_progress,
@@ -3628,6 +3793,9 @@ fn start_evolution_worker(
                     aborted = true;
                     break;
                 }
+                if sim.should_stop_early() {
+                    break;
+                }
                 if (step + 1) % snapshot_every == 0 || step + 1 == steps {
                     controller.push_snapshot(sim.current_frame());
                 }
@@ -3711,6 +3879,9 @@ fn start_evolution_worker(
                 median_active_joint_fraction: summary.median_active_joint_fraction,
                 median_top_joint_energy_share: summary.median_top_joint_energy_share,
                 median_actuation_entropy: summary.median_actuation_entropy,
+                median_target_delta_mean: summary.median_target_delta_mean,
+                median_target_flip_rate_hz: summary.median_target_flip_rate_hz,
+                median_contact_churn_hz: summary.median_contact_churn_hz,
                 median_energy_norm: summary.median_energy_norm,
                 median_overlap_ratio: summary.median_overlap_ratio,
                 median_progress: summary.median_progress,
@@ -3930,6 +4101,18 @@ fn build_generation_performance_summary(
         .iter()
         .map(|item| finite_or_zero(item.median_actuation_entropy))
         .collect();
+    let target_delta_means: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_target_delta_mean))
+        .collect();
+    let target_flip_rates_hz: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_target_flip_rate_hz))
+        .collect();
+    let contact_churn_rates_hz: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_contact_churn_hz))
+        .collect();
     let overlap_ratios: Vec<f32> = batch_results
         .iter()
         .map(|item| finite_or_zero(item.median_overlap_ratio))
@@ -4027,6 +4210,12 @@ fn build_generation_performance_summary(
             top_joint_energy_share_p50: quantile(&top_joint_energy_shares, 0.5),
             actuation_entropy_mean: mean(&actuation_entropies),
             actuation_entropy_p50: quantile(&actuation_entropies, 0.5),
+            target_delta_mean_mean: mean(&target_delta_means),
+            target_delta_mean_p50: quantile(&target_delta_means, 0.5),
+            target_flip_rate_hz_mean: mean(&target_flip_rates_hz),
+            target_flip_rate_hz_p50: quantile(&target_flip_rates_hz, 0.5),
+            contact_churn_hz_mean: mean(&contact_churn_rates_hz),
+            contact_churn_hz_p50: quantile(&contact_churn_rates_hz, 0.5),
             dominant_joint_share_rate,
             low_entropy_rate,
         },
@@ -4612,6 +4801,14 @@ fn build_evolution_performance_summary_response(
     {
         signals.push("actuation_concentrated".to_string());
     }
+    if recent_actuation.target_delta_mean_mean >= DIAG_HIGH_TARGET_DELTA_MEAN_THRESHOLD
+        && recent_actuation.target_flip_rate_hz_mean >= DIAG_HIGH_TARGET_FLIP_RATE_HZ_THRESHOLD
+    {
+        signals.push("actuation_high_frequency".to_string());
+    }
+    if recent_actuation.contact_churn_hz_mean >= DIAG_HIGH_CONTACT_CHURN_HZ_THRESHOLD {
+        signals.push("contact_churn_elevated".to_string());
+    }
     if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
         signals.push("startup_invalid_elevated".to_string());
     }
@@ -4744,6 +4941,10 @@ fn build_evolution_performance_diagnose_response(
         && recent_actuation.actuation_entropy_mean <= DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD
     {
         "concentrated"
+    } else if recent_actuation.target_delta_mean_mean >= DIAG_HIGH_TARGET_DELTA_MEAN_THRESHOLD
+        && recent_actuation.target_flip_rate_hz_mean >= DIAG_HIGH_TARGET_FLIP_RATE_HZ_THRESHOLD
+    {
+        "high_frequency"
     } else if recent_actuation.dominant_joint_share_rate >= 0.35 {
         "watch"
     } else {
@@ -4843,11 +5044,26 @@ fn build_evolution_performance_diagnose_response(
             severity: "warn".to_string(),
             message: "Actuation is concentrated into a small set of joints; high-energy single-joint strategies may be dominating.".to_string(),
         });
+    } else if recent_actuation.target_delta_mean_mean >= DIAG_HIGH_TARGET_DELTA_MEAN_THRESHOLD
+        && recent_actuation.target_flip_rate_hz_mean >= DIAG_HIGH_TARGET_FLIP_RATE_HZ_THRESHOLD
+    {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "actuation_high_frequency".to_string(),
+            severity: "warn".to_string(),
+            message: "Joint targets are changing rapidly with frequent direction flips; vibration-driven locomotion may be dominating.".to_string(),
+        });
     } else if recent_actuation.dominant_joint_share_rate >= 0.35 {
         findings.push(EvolutionDiagnosisFinding {
             code: "actuation_concentration_watch".to_string(),
             severity: "info".to_string(),
             message: "Actuation concentration is elevated; monitor whether multi-joint coordination continues to improve.".to_string(),
+        });
+    }
+    if recent_actuation.contact_churn_hz_mean >= DIAG_HIGH_CONTACT_CHURN_HZ_THRESHOLD {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "contact_churn_elevated".to_string(),
+            severity: "info".to_string(),
+            message: "Ground contact is toggling rapidly; this often correlates with jittery high-frequency actuation strategies.".to_string(),
         });
     }
     if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
@@ -4895,6 +5111,13 @@ fn build_evolution_performance_diagnose_response(
             "Inspect actuation concentration telemetry and consider additional anti-dominance pressure if one-joint strategies persist.".to_string(),
         );
     }
+    if recent_actuation.target_delta_mean_mean >= DIAG_HIGH_TARGET_DELTA_MEAN_THRESHOLD
+        && recent_actuation.target_flip_rate_hz_mean >= DIAG_HIGH_TARGET_FLIP_RATE_HZ_THRESHOLD
+    {
+        recommended_actions.push(
+            "Lower motor command bandwidth (low-pass alpha and/or slew rate) if high-frequency target flipping remains elevated for 10+ generations.".to_string(),
+        );
+    }
     if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
         recommended_actions.push(
             "Tighten morphology generation bounds or mutation amplitudes if startup-invalid trial rate stays elevated for 10+ generations.".to_string(),
@@ -4936,6 +5159,9 @@ fn build_evolution_performance_diagnose_response(
             last_recent_top_joint_energy_share_mean: recent_actuation
                 .top_joint_energy_share_mean,
             last_recent_actuation_entropy_mean: recent_actuation.actuation_entropy_mean,
+            last_recent_target_delta_mean: recent_actuation.target_delta_mean_mean,
+            last_recent_target_flip_rate_hz_mean: recent_actuation.target_flip_rate_hz_mean,
+            last_recent_contact_churn_hz_mean: recent_actuation.contact_churn_hz_mean,
             last_recent_dominant_joint_share_rate: recent_actuation.dominant_joint_share_rate,
             last_recent_low_entropy_rate: recent_actuation.low_entropy_rate,
             last_recent_startup_invalid_trial_rate: recent_viability.startup_invalid_trial_rate,
@@ -5190,6 +5416,12 @@ fn aggregate_actuation_stats(points: &[GenerationActuationStats]) -> GenerationA
         out.top_joint_energy_share_p50 += point.top_joint_energy_share_p50;
         out.actuation_entropy_mean += point.actuation_entropy_mean;
         out.actuation_entropy_p50 += point.actuation_entropy_p50;
+        out.target_delta_mean_mean += point.target_delta_mean_mean;
+        out.target_delta_mean_p50 += point.target_delta_mean_p50;
+        out.target_flip_rate_hz_mean += point.target_flip_rate_hz_mean;
+        out.target_flip_rate_hz_p50 += point.target_flip_rate_hz_p50;
+        out.contact_churn_hz_mean += point.contact_churn_hz_mean;
+        out.contact_churn_hz_p50 += point.contact_churn_hz_p50;
         out.dominant_joint_share_rate += point.dominant_joint_share_rate;
         out.low_entropy_rate += point.low_entropy_rate;
     }
@@ -5199,6 +5431,12 @@ fn aggregate_actuation_stats(points: &[GenerationActuationStats]) -> GenerationA
     out.top_joint_energy_share_p50 *= inv;
     out.actuation_entropy_mean *= inv;
     out.actuation_entropy_p50 *= inv;
+    out.target_delta_mean_mean *= inv;
+    out.target_delta_mean_p50 *= inv;
+    out.target_flip_rate_hz_mean *= inv;
+    out.target_flip_rate_hz_p50 *= inv;
+    out.contact_churn_hz_mean *= inv;
+    out.contact_churn_hz_p50 *= inv;
     out.dominant_joint_share_rate *= inv;
     out.low_entropy_rate *= inv;
     out
@@ -6279,6 +6517,9 @@ fn run_trial_stream(
 
     for step in 0..steps {
         sim.step()?;
+        if sim.should_stop_early() {
+            break;
+        }
         if (step + 1) % snapshot_every == 0 || step + 1 == steps {
             tx.blocking_send(StreamEvent::Snapshot {
                 frame: sim.current_frame(),
@@ -6666,6 +6907,9 @@ fn run_trial_unpaced_with_wall_limit(
             break;
         }
         sim.step()?;
+        if sim.should_stop_early() {
+            break;
+        }
     }
     Ok(sim.final_result())
 }
@@ -6708,6 +6952,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
             median_active_joint_fraction: 0.0,
             median_top_joint_energy_share: 0.0,
             median_actuation_entropy: 0.0,
+            median_target_delta_mean: 0.0,
+            median_target_flip_rate_hz: 0.0,
+            median_contact_churn_hz: 0.0,
             invalid_startup_trials: 0,
             invalid_startup_trial_rate: 0.0,
             all_trials_invalid_startup: false,
@@ -6741,6 +6988,18 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         .iter()
         .map(|trial| trial.metrics.actuation_entropy)
         .collect();
+    let target_delta_means: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.target_delta_mean)
+        .collect();
+    let target_flip_rates_hz: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.target_flip_rate_hz)
+        .collect();
+    let contact_churn_rates_hz: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.contact_churn_hz)
+        .collect();
     let invalid_startup_trials = trials
         .iter()
         .filter(|trial| trial.metrics.invalid_startup)
@@ -6769,6 +7028,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     let median_active_joint_fraction = quantile(&active_joint_fractions, 0.5);
     let median_top_joint_energy_share = quantile(&top_joint_energy_shares, 0.5);
     let median_actuation_entropy = quantile(&actuation_entropies, 0.5);
+    let median_target_delta_mean = quantile(&target_delta_means, 0.5);
+    let median_target_flip_rate_hz = quantile(&target_flip_rates_hz, 0.5);
+    let median_contact_churn_hz = quantile(&contact_churn_rates_hz, 0.5);
 
     let active_limbs = enabled_limb_count(genome);
     let mean_segment_count = feature_segment_count_mean(genome);
@@ -6797,6 +7059,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         median_active_joint_fraction,
         median_top_joint_energy_share,
         median_actuation_entropy,
+        median_target_delta_mean,
+        median_target_flip_rate_hz,
+        median_contact_churn_hz,
         invalid_startup_trials,
         invalid_startup_trial_rate,
         all_trials_invalid_startup,
@@ -9770,6 +10035,9 @@ fn run_satellite_trial(
                         message: format!("sim step failed: {err}"),
                     };
                 }
+                if sim.should_stop_early() {
+                    break;
+                }
             }
             let result = sim.final_result();
             let elapsed = start.elapsed();
@@ -10071,6 +10339,21 @@ fn slew_limit(previous: f32, target: f32, max_delta: f32) -> f32 {
         return target;
     }
     previous + clamp(target - previous, -max_delta, max_delta)
+}
+
+fn low_pass_target(previous: f32, target: f32, alpha: f32) -> f32 {
+    let a = clamp(alpha, 0.0, 1.0);
+    previous + (target - previous) * a
+}
+
+fn update_delta_sign(previous_sign: &mut i8, delta: f32) -> bool {
+    if !delta.is_finite() || delta.abs() <= TARGET_DELTA_SIGN_EPS {
+        return false;
+    }
+    let sign = if delta > 0.0 { 1 } else { -1 };
+    let flipped = *previous_sign != 0 && *previous_sign != sign;
+    *previous_sign = sign;
+    flipped
 }
 
 fn quantile(values: &[f32], q: f32) -> f32 {
