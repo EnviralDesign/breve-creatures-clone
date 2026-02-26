@@ -19,7 +19,9 @@ const urls = {
 
 const state = {
   currentGenome: null,
+  visualModel: null,
   editorMode: "visual",
+  selection: null,
 };
 
 const statusEl = document.getElementById("status");
@@ -35,6 +37,11 @@ const showJsonBtn = document.getElementById("showJsonBtn");
 const rebuildVisualBtn = document.getElementById("rebuildVisualBtn");
 const visualInfo = document.getElementById("visualInfo");
 const visualViewportEl = document.getElementById("visualViewport");
+const outlinerSearch = document.getElementById("outlinerSearch");
+const outlinerList = document.getElementById("outlinerList");
+const selectionBreadcrumb = document.getElementById("selectionBreadcrumb");
+const inspectorContent = document.getElementById("inspectorContent");
+const focusSelectedBtn = document.getElementById("focusSelectedBtn");
 
 const lockTopology = document.getElementById("lockTopology");
 const lockJointTypes = document.getElementById("lockJointTypes");
@@ -70,6 +77,24 @@ function deepCloneJson(value) {
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function selectionToken(selection) {
+  if (!selection || !selection.kind || !selection.id) {
+    return "";
+  }
+  return `${selection.kind}:${selection.id}`;
+}
+
+function fixed(value, digits = 3) {
+  return Number.isFinite(value) ? value.toFixed(digits) : "n/a";
+}
+
+function formatVec3(v, digits = 3) {
+  if (!v) {
+    return "n/a";
+  }
+  return `[${fixed(v.x, digits)}, ${fixed(v.y, digits)}, ${fixed(v.z, digits)}]`;
 }
 
 function parseGenomeEditor() {
@@ -184,15 +209,261 @@ function setGenomeState(genome) {
   genomeEditor.value = JSON.stringify(state.currentGenome, null, 2);
 }
 
+function findSelectionEntity(model, selection) {
+  if (!model || !selection) {
+    return null;
+  }
+  if (selection.kind === "node") {
+    return model.nodes.find((item) => item.id === selection.id) || null;
+  }
+  if (selection.kind === "part") {
+    return model.parts.find((item) => item.id === selection.id) || null;
+  }
+  if (selection.kind === "joint") {
+    return model.joints.find((item) => item.id === selection.id) || null;
+  }
+  return null;
+}
+
+function setSelection(selection, source = "app") {
+  const model = state.visualModel;
+  let nextSelection = null;
+  if (selection && selection.kind && selection.id && findSelectionEntity(model, selection)) {
+    nextSelection = { kind: selection.kind, id: selection.id };
+  }
+  const changed = selectionToken(state.selection) !== selectionToken(nextSelection);
+  state.selection = nextSelection;
+  if (visualView) {
+    visualView.setSelection(state.selection);
+  }
+  renderOutliner();
+  if (source === "viewport") {
+    const selectedRow = outlinerList.querySelector(".outlinerItem.selected");
+    selectedRow?.scrollIntoView({ block: "nearest" });
+  }
+  if (source === "outliner" && visualView && state.selection) {
+    visualView.focusSelection(state.selection);
+  }
+  renderInspector();
+  if (changed && source === "viewport") {
+    setStatus(`Selected ${state.selection?.kind || "none"}.`, "ok");
+  }
+}
+
+function syncSelectionToModel() {
+  if (state.selection && !findSelectionEntity(state.visualModel, state.selection)) {
+    state.selection = null;
+  }
+}
+
 function rebuildVisualFromCurrentGenome() {
   if (!visualView) {
     return;
   }
   if (!state.currentGenome) {
     visualInfo.textContent = "No genome loaded.";
+    state.visualModel = null;
+    setSelection(null);
     return;
   }
-  visualView.rebuild(state.currentGenome);
+  state.visualModel = visualView.rebuild(state.currentGenome);
+  syncSelectionToModel();
+  setSelection(state.selection);
+}
+
+function appendEmpty(container, message) {
+  container.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "emptyState";
+  empty.textContent = message;
+  container.appendChild(empty);
+}
+
+function renderOutliner() {
+  const model = state.visualModel;
+  if (!model || (!model.nodes.length && !model.parts.length)) {
+    appendEmpty(outlinerList, "No visual entities. Load or rebuild a genome first.");
+    return;
+  }
+
+  const query = outlinerSearch.value.trim().toLowerCase();
+  outlinerList.innerHTML = "";
+  let rendered = 0;
+  const selectedToken = selectionToken(state.selection);
+
+  const addSection = (label) => {
+    const section = document.createElement("div");
+    section.className = "outlinerSectionTitle";
+    section.textContent = label;
+    outlinerList.appendChild(section);
+  };
+
+  const addItem = ({ kind, id, label, details, depth = 0, searchText = "" }) => {
+    const haystack = `${label} ${details || ""} ${searchText}`.toLowerCase();
+    if (query && !haystack.includes(query)) {
+      return;
+    }
+    rendered += 1;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `outlinerItem ${kind}`;
+    button.style.paddingLeft = `${7 + depth * 14}px`;
+    button.dataset.kind = kind;
+    button.dataset.id = id;
+
+    const line1 = document.createElement("div");
+    line1.className = "line1";
+    const labelSpan = document.createElement("span");
+    labelSpan.textContent = label;
+    const idSpan = document.createElement("span");
+    idSpan.className = "tiny";
+    idSpan.textContent = id;
+    line1.appendChild(labelSpan);
+    line1.appendChild(idSpan);
+
+    const line2 = document.createElement("div");
+    line2.className = "line2";
+    line2.textContent = details || "";
+
+    button.appendChild(line1);
+    button.appendChild(line2);
+    if (selectedToken === selectionToken({ kind, id })) {
+      button.classList.add("selected");
+    }
+    button.addEventListener("click", () => {
+      setSelection({ kind, id }, "outliner");
+    });
+    outlinerList.appendChild(button);
+  };
+
+  addSection(`Graph Nodes (${model.nodes.length})`);
+  for (const node of model.nodes) {
+    const brainNeurons = asArray(node.brain?.neurons).length;
+    addItem({
+      kind: "node",
+      id: node.id,
+      label: `Node ${node.nodeIndex}`,
+      details: `${node.partIds.length} part instances | ${node.edgeCount} edges | ${brainNeurons} local neurons`,
+      depth: 0,
+      searchText: `node ${node.nodeIndex}`,
+    });
+  }
+
+  addSection(`Expanded Parts (${model.parts.length})`);
+  for (const part of model.parts) {
+    const parentText = part.parentPartId ? `parent ${part.parentPartId}` : "root";
+    addItem({
+      kind: "part",
+      id: part.id,
+      label: `${part.id} (node ${part.nodeIndex})`,
+      details: `${parentText} | size ${fixed(part.size[0], 2)} x ${fixed(part.size[1], 2)} x ${fixed(part.size[2], 2)}`,
+      depth: Math.max(0, part.depth || 0),
+      searchText: `part node ${part.nodeIndex} ${parentText}`,
+    });
+  }
+
+  addSection(`Joints (${model.joints.length})`);
+  for (const joint of model.joints) {
+    addItem({
+      kind: "joint",
+      id: joint.id,
+      label: `${joint.id} (${joint.jointType})`,
+      details: `${joint.parentPartId} -> ${joint.childPartId}`,
+      depth: 0,
+      searchText: `joint ${joint.jointType} ${joint.parentPartId} ${joint.childPartId}`,
+    });
+  }
+
+  if (!rendered) {
+    appendEmpty(outlinerList, "No matches for current outliner filter.");
+  }
+}
+
+function appendField(container, key, value) {
+  const row = document.createElement("div");
+  row.className = "fieldRow";
+  const keyEl = document.createElement("div");
+  keyEl.className = "k";
+  keyEl.textContent = key;
+  const valEl = document.createElement("div");
+  valEl.className = "v";
+  valEl.textContent = value;
+  row.appendChild(keyEl);
+  row.appendChild(valEl);
+  container.appendChild(row);
+}
+
+function renderInspector() {
+  inspectorContent.innerHTML = "";
+  const model = state.visualModel;
+  const selection = state.selection;
+
+  if (!model) {
+    selectionBreadcrumb.textContent = "Nothing selected.";
+    appendEmpty(inspectorContent, "No model loaded.");
+    return;
+  }
+
+  if (!selection) {
+    selectionBreadcrumb.textContent = "Nothing selected.";
+    appendEmpty(inspectorContent, "Select a node, part, or joint in the viewport or outliner.");
+    return;
+  }
+
+  const entity = findSelectionEntity(model, selection);
+  if (!entity) {
+    selectionBreadcrumb.textContent = "Nothing selected.";
+    appendEmpty(inspectorContent, "Selection is stale after rebuild.");
+    return;
+  }
+
+  selectionBreadcrumb.textContent = `Selected: ${selection.kind} / ${selection.id}`;
+
+  if (selection.kind === "node") {
+    appendField(inspectorContent, "node index", String(entity.nodeIndex));
+    appendField(inspectorContent, "part instances", String(entity.partIds.length));
+    appendField(inspectorContent, "edge genes", String(entity.edgeCount));
+    appendField(inspectorContent, "part dims", `${fixed(entity.part?.w, 3)} x ${fixed(entity.part?.h, 3)} x ${fixed(entity.part?.d, 3)}`);
+    appendField(inspectorContent, "part mass", fixed(toFinite(entity.part?.mass, entity.part?.m), 3));
+    appendField(inspectorContent, "part ids", entity.partIds.join(", ") || "none");
+    appendField(inspectorContent, "brain neurons", String(asArray(entity.brain?.neurons).length));
+    appendField(inspectorContent, "brain effectors", String(asArray(entity.brain?.effectors).length));
+    return;
+  }
+
+  if (selection.kind === "part") {
+    appendField(inspectorContent, "part id", entity.id);
+    appendField(inspectorContent, "expanded index", String(entity.expandedIndex));
+    appendField(inspectorContent, "node index", String(entity.nodeIndex));
+    appendField(inspectorContent, "parent", entity.parentPartId || "none (root)");
+    appendField(inspectorContent, "depth", String(entity.depth || 0));
+    appendField(inspectorContent, "size w/h/d", `${fixed(entity.size[0], 3)} x ${fixed(entity.size[1], 3)} x ${fixed(entity.size[2], 3)}`);
+    appendField(inspectorContent, "center", formatVec3(entity.center, 3));
+    if (entity.incomingEdge) {
+      appendField(inspectorContent, "incoming joint", String(entity.incomingEdge.jointType || "hinge"));
+      appendField(inspectorContent, "incoming scale", fixed(toFinite(entity.incomingEdge.scale, 1), 3));
+      appendField(inspectorContent, "anchor", `[${fixed(toFinite(entity.incomingEdge.anchorX, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.anchorY, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.anchorZ, 0), 3)}]`);
+      appendField(inspectorContent, "growth dir", `[${fixed(toFinite(entity.incomingEdge.dirX, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.dirY, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.dirZ, 0), 3)}]`);
+      appendField(inspectorContent, "axis yz", `[${fixed(toFinite(entity.incomingEdge.axisY, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.axisZ, 0), 3)}]`);
+    }
+    return;
+  }
+
+  if (selection.kind === "joint") {
+    appendField(inspectorContent, "joint id", entity.id);
+    appendField(inspectorContent, "type", entity.jointType);
+    appendField(inspectorContent, "parent part", entity.parentPartId);
+    appendField(inspectorContent, "child part", entity.childPartId);
+    appendField(inspectorContent, "anchor world", formatVec3(entity.anchorWorld, 3));
+    appendField(inspectorContent, "axis world", formatVec3(entity.axisWorld, 3));
+    appendField(inspectorContent, "recursive limit", String(clampInt(entity.edge?.recursiveLimit ?? 1, 1, 9999)));
+    appendField(inspectorContent, "terminal only", String(Boolean(entity.edge?.terminalOnly)));
+    appendField(inspectorContent, "reflect x", String(Boolean(entity.edge?.reflectX)));
+    appendField(inspectorContent, "motor strength", fixed(toFinite(entity.edge?.motorStrength, 0), 3));
+    appendField(inspectorContent, "stiffness", fixed(toFinite(entity.edge?.stiffness, 0), 3));
+    appendField(inspectorContent, "joint limit min xyz", `[${fixed(toFinite(entity.edge?.jointLimitMinX, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMinY, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMinZ, 0), 3)}]`);
+    appendField(inspectorContent, "joint limit max xyz", `[${fixed(toFinite(entity.edge?.jointLimitMaxX, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMaxY, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMaxZ, 0), 3)}]`);
+  }
 }
 
 function rebuildVisualFromEditor() {
@@ -371,8 +642,8 @@ function expandGraph(graph) {
   }
   const root = clampInt(graph?.root ?? 0, 0, nodes.length - 1);
   const maxParts = clampInt(graph?.maxParts ?? 32, 1, MAX_GRAPH_PARTS);
-  const expanded = [{ nodeIndex: root, parentIndex: null, incomingEdge: null }];
-  const queue = [{ expandedIndex: 0, nodeIndex: root, ancestry: [root] }];
+  const expanded = [{ nodeIndex: root, parentIndex: null, incomingEdge: null, depth: 0 }];
+  const queue = [{ expandedIndex: 0, nodeIndex: root, ancestry: [root], depth: 0 }];
   while (queue.length && expanded.length < maxParts) {
     const current = queue.shift();
     const node = nodes[current.nodeIndex];
@@ -405,11 +676,13 @@ function expandGraph(graph) {
         nodeIndex: to,
         parentIndex: current.expandedIndex,
         incomingEdge: { ...edge },
+        depth: current.depth + 1,
       });
       queue.push({
         expandedIndex: childExpandedIndex,
         nodeIndex: to,
         ancestry: childAncestry,
+        depth: current.depth + 1,
       });
     }
   }
@@ -422,6 +695,7 @@ function expandGraph(graph) {
         nodeIndex: to,
         parentIndex: 0,
         incomingEdge: { ...firstEdge },
+        depth: 1,
       });
     }
   }
@@ -433,8 +707,16 @@ function buildVisualModel(genome) {
   const nodes = asArray(graph?.nodes);
   const expanded = expandGraph(graph);
   if (!nodes.length || !expanded.length) {
-    return { parts: [], joints: [], nodeCount: nodes.length };
+    return { nodes: [], parts: [], joints: [], nodeCount: nodes.length };
   }
+  const nodeEntries = nodes.map((node, nodeIndex) => ({
+    id: `node-${nodeIndex}`,
+    nodeIndex,
+    edgeCount: asArray(node?.edges).length,
+    part: node?.part || {},
+    brain: node?.brain || null,
+    partIds: [],
+  }));
   const parts = [];
   const joints = [];
   const partByExpanded = new Map();
@@ -443,13 +725,21 @@ function buildVisualModel(genome) {
   const rootNodeIndex = clampInt(rootExpanded.nodeIndex ?? 0, 0, nodes.length - 1);
   const rootNode = nodes[rootNodeIndex] || {};
   const rootSize = scaledPartSize(rootNode.part, 1.0);
+  const rootId = "part-0";
   parts.push({
+    id: rootId,
+    expandedIndex: 0,
+    depth: 0,
+    nodeId: nodeEntries[rootNodeIndex].id,
     nodeIndex: rootNodeIndex,
+    parentPartId: null,
     parentPartIndex: null,
+    incomingEdge: null,
     size: rootSize,
     center: new THREE.Vector3(0, rootSize[1] * 0.5, 0),
     quaternion: new THREE.Quaternion(),
   });
+  nodeEntries[rootNodeIndex].partIds.push(rootId);
   partByExpanded.set(0, 0);
 
   for (let expandedIndex = 1; expandedIndex < expanded.length; expandedIndex += 1) {
@@ -496,27 +786,44 @@ function buildVisualModel(genome) {
     const childRotation = parent.quaternion.clone().multiply(segLocalRot);
 
     const childPartIndex = parts.length;
+    const childPartId = `part-${childPartIndex}`;
+    const incomingEdge = { ...edge };
     parts.push({
+      id: childPartId,
+      expandedIndex,
+      depth: expandedPart.depth ?? 0,
+      nodeId: nodeEntries[nodeIndex].id,
       nodeIndex,
+      parentPartId: parent.id,
       parentPartIndex,
+      incomingEdge,
       size: childSize,
       center,
       quaternion: childRotation,
     });
+    nodeEntries[nodeIndex].partIds.push(childPartId);
     partByExpanded.set(expandedIndex, childPartIndex);
 
     const axisWorld = axisLocal.applyQuaternion(parent.quaternion.clone()).normalize();
+    const jointId = `joint-${joints.length}`;
     joints.push({
+      id: jointId,
       parentPartIndex,
       childPartIndex,
+      parentPartId: parent.id,
+      childPartId: childPartId,
+      parentNodeIndex: parent.nodeIndex,
+      childNodeIndex: nodeIndex,
       parentCenter: parent.center.clone(),
       anchorWorld,
       axisWorld,
       jointType: String(edge.jointType || "hinge"),
+      edge: incomingEdge,
     });
   }
 
   return {
+    nodes: nodeEntries,
     parts,
     joints,
     nodeCount: nodes.length,
@@ -527,6 +834,15 @@ class CreatorVisualView {
   constructor(container, infoEl) {
     this.container = container;
     this.infoEl = infoEl;
+    this.latestModel = null;
+    this.currentSelection = null;
+    this.onSelect = null;
+    this.selectionObjects = new Map();
+    this.pickables = [];
+    this.pointerDown = null;
+    this.raycaster = new THREE.Raycaster();
+    this.pointerNdc = new THREE.Vector2(0, 0);
+
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(0x111922, 7, 50);
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.01, 200);
@@ -562,11 +878,20 @@ class CreatorVisualView {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
     this.resize();
+    this.installPointerHandlers();
 
     this.renderer.setAnimationLoop(() => {
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
     });
+  }
+
+  makeSelectionKey(kind, id) {
+    return `${kind}:${id}`;
+  }
+
+  setSelectionCallback(callback) {
+    this.onSelect = callback;
   }
 
   resize() {
@@ -611,8 +936,7 @@ class CreatorVisualView {
     }
   }
 
-  fitCamera() {
-    const bounds = new THREE.Box3().setFromObject(this.modelGroup);
+  focusBoundingBox(bounds) {
     if (!Number.isFinite(bounds.min.x) || !Number.isFinite(bounds.max.x)) {
       this.controls.target.set(0, 0.8, 0);
       this.camera.position.set(4.5, 3.2, 5.2);
@@ -635,15 +959,199 @@ class CreatorVisualView {
     this.controls.update();
   }
 
+  fitCamera() {
+    this.focusBoundingBox(new THREE.Box3().setFromObject(this.modelGroup));
+  }
+
+  registerSelectable(selection, object3d, pickable = true) {
+    const key = this.makeSelectionKey(selection.kind, selection.id);
+    object3d.userData.selection = { kind: selection.kind, id: selection.id };
+    object3d.userData.selectionKey = key;
+    object3d.userData.baseScale = object3d.scale.clone();
+    if (object3d.material && !Array.isArray(object3d.material)) {
+      const material = object3d.material;
+      object3d.userData.baseColor = material.color?.getHex?.();
+      object3d.userData.baseOpacity = material.opacity;
+      object3d.userData.baseEmissive = material.emissive?.getHex?.();
+    }
+    if (!this.selectionObjects.has(key)) {
+      this.selectionObjects.set(key, []);
+    }
+    this.selectionObjects.get(key).push(object3d);
+    if (pickable) {
+      this.pickables.push(object3d);
+    }
+  }
+
+  installPointerHandlers() {
+    const element = this.renderer.domElement;
+    element.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      this.pointerDown = { x: event.clientX, y: event.clientY };
+    });
+    element.addEventListener("pointerup", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      if (!this.pointerDown) {
+        return;
+      }
+      const dx = event.clientX - this.pointerDown.x;
+      const dy = event.clientY - this.pointerDown.y;
+      this.pointerDown = null;
+      if (Math.hypot(dx, dy) > 5) {
+        return;
+      }
+      this.pickFromPointerEvent(event);
+    });
+    element.addEventListener("pointerleave", () => {
+      this.pointerDown = null;
+    });
+  }
+
+  pickFromPointerEvent(event) {
+    if (!this.pickables.length) {
+      return;
+    }
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) {
+      return;
+    }
+    this.pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hits = this.raycaster.intersectObjects(this.pickables, false);
+    if (!hits.length) {
+      return;
+    }
+    const hit = hits[0].object;
+    const selection = hit?.userData?.selection;
+    if (!selection || !this.onSelect) {
+      return;
+    }
+    this.onSelect(selection, "viewport");
+  }
+
+  resolveSelectionKeys(selection) {
+    if (!selection) {
+      return [];
+    }
+    if (selection.kind === "node") {
+      const node = this.latestModel?.nodes?.find((item) => item.id === selection.id);
+      if (!node) {
+        return [];
+      }
+      return node.partIds.map((partId) => this.makeSelectionKey("part", partId));
+    }
+    return [this.makeSelectionKey(selection.kind, selection.id)];
+  }
+
+  setSelection(selection) {
+    this.currentSelection = selection && selection.kind && selection.id
+      ? { kind: selection.kind, id: selection.id }
+      : null;
+    this.applySelectionHighlight();
+  }
+
+  applySelectionHighlight() {
+    for (const objects of this.selectionObjects.values()) {
+      for (const object3d of objects) {
+        object3d.scale.copy(object3d.userData.baseScale || new THREE.Vector3(1, 1, 1));
+        const material = object3d.material;
+        if (material && !Array.isArray(material)) {
+          if (material.color && object3d.userData.baseColor !== undefined) {
+            material.color.setHex(object3d.userData.baseColor);
+          }
+          if (material.emissive && object3d.userData.baseEmissive !== undefined) {
+            material.emissive.setHex(object3d.userData.baseEmissive);
+          }
+          if (object3d.userData.baseOpacity !== undefined) {
+            material.opacity = object3d.userData.baseOpacity;
+          }
+        }
+      }
+    }
+
+    const selection = this.currentSelection;
+    if (!selection) {
+      return;
+    }
+    const highlightKeys = this.resolveSelectionKeys(selection);
+    const tint = selection.kind === "joint" ? 0xffdb8a : 0x9fdba4;
+    for (const key of highlightKeys) {
+      const objects = this.selectionObjects.get(key) || [];
+      for (const object3d of objects) {
+        object3d.scale.multiplyScalar(1.08);
+        const material = object3d.material;
+        if (material && !Array.isArray(material)) {
+          if (material.color) {
+            material.color.setHex(tint);
+          }
+          if (material.emissive) {
+            material.emissive.setHex(0x2f5936);
+          }
+          if (material.transparent) {
+            material.opacity = Math.max(material.opacity, 0.95);
+          }
+        }
+      }
+    }
+  }
+
+  focusSelection(selection) {
+    const selectionKeys = this.resolveSelectionKeys(selection);
+    if (!selectionKeys.length) {
+      return;
+    }
+    const bounds = new THREE.Box3();
+    let hasAny = false;
+    for (const key of selectionKeys) {
+      const objects = this.selectionObjects.get(key) || [];
+      for (const object3d of objects) {
+        const objectBounds = new THREE.Box3().setFromObject(object3d);
+        if (!Number.isFinite(objectBounds.min.x) || !Number.isFinite(objectBounds.max.x)) {
+          continue;
+        }
+        if (!hasAny) {
+          bounds.copy(objectBounds);
+          hasAny = true;
+        } else {
+          bounds.union(objectBounds);
+        }
+      }
+    }
+    if (!hasAny) {
+      return;
+    }
+    const size = new THREE.Vector3();
+    bounds.getSize(size);
+    if (size.lengthSq() < 1e-5) {
+      const center = new THREE.Vector3();
+      bounds.getCenter(center);
+      const fallback = new THREE.Box3(
+        center.clone().addScalar(-0.25),
+        center.clone().addScalar(0.25)
+      );
+      this.focusBoundingBox(fallback);
+      return;
+    }
+    this.focusBoundingBox(bounds);
+  }
+
   rebuild(genome) {
     this.clearGroup(this.segmentGroup);
     this.clearGroup(this.jointGroup);
+    this.selectionObjects.clear();
+    this.pickables = [];
 
     const model = buildVisualModel(genome);
+    this.latestModel = model;
     if (!model.parts.length) {
       this.infoEl.textContent = "No graph nodes to render. Load a genome with graph nodes.";
       this.fitCamera();
-      return;
+      return model;
     }
 
     for (let i = 0; i < model.parts.length; i += 1) {
@@ -660,6 +1168,7 @@ class CreatorVisualView {
       );
       mesh.position.copy(part.center);
       mesh.quaternion.copy(part.quaternion);
+      this.registerSelectable({ kind: "part", id: part.id }, mesh, true);
       const edgeLines = new THREE.LineSegments(
         new THREE.EdgesGeometry(mesh.geometry),
         new THREE.LineBasicMaterial({
@@ -686,6 +1195,7 @@ class CreatorVisualView {
       );
       marker.position.copy(joint.anchorWorld);
       marker.renderOrder = 20;
+      this.registerSelectable({ kind: "joint", id: joint.id }, marker, true);
       this.jointGroup.add(marker);
 
       const stemGeo = new THREE.BufferGeometry().setFromPoints([
@@ -702,6 +1212,7 @@ class CreatorVisualView {
         })
       );
       stem.renderOrder = 19;
+      this.registerSelectable({ kind: "joint", id: joint.id }, stem, true);
       this.jointGroup.add(stem);
 
       const axisSpan = joint.axisWorld.clone().multiplyScalar(0.32);
@@ -719,18 +1230,24 @@ class CreatorVisualView {
         })
       );
       axis.renderOrder = 21;
+      this.registerSelectable({ kind: "joint", id: joint.id }, axis, true);
       this.jointGroup.add(axis);
     }
 
     this.infoEl.textContent = `nodes: ${model.nodeCount} | expanded parts: ${model.parts.length} | joints: ${model.joints.length}
-Read-only parity view: edit JSON then click "Rebuild visual from JSON".`;
+Selection enabled: click viewport object or outliner row to inspect details.`;
+    this.applySelectionHighlight();
     this.fitCamera();
+    return model;
   }
 }
 
 let visualView = null;
 try {
   visualView = new CreatorVisualView(visualViewportEl, visualInfo);
+  visualView.setSelectionCallback((selection, source) => {
+    setSelection(selection, source);
+  });
 } catch (error) {
   setStatus(`Visual mode unavailable: ${error.message}`, "err");
   visualInfo.textContent = `Failed to initialize Three.js viewport: ${error.message}`;
@@ -766,6 +1283,15 @@ showJsonBtn.addEventListener("click", () => {
 rebuildVisualBtn.addEventListener("click", () => {
   rebuildVisualFromEditor();
 });
+outlinerSearch.addEventListener("input", () => {
+  renderOutliner();
+});
+focusSelectedBtn.addEventListener("click", () => {
+  if (!visualView || !state.selection) {
+    return;
+  }
+  visualView.focusSelection(state.selection);
+});
 presetGaitOnlyBtn.addEventListener("click", () => {
   applyGaitOnlyPreset();
 });
@@ -784,5 +1310,7 @@ const initialGenome = {
 setGenomeState(initialGenome);
 setEditorMode("visual");
 rebuildVisualFromCurrentGenome();
+renderOutliner();
+renderInspector();
 void refreshCreatureList();
 void refreshModeStatus();

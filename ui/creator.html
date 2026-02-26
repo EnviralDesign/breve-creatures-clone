@@ -239,14 +239,175 @@
       gap: 8px;
     }
 
-    #visualViewport {
+    #visualWorkspace {
       flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(360px, 1fr) minmax(260px, 340px);
+      gap: 10px;
+    }
+
+    #visualViewport {
       min-height: 0;
       border: 1px solid #2a3832;
       border-radius: 8px;
       overflow: hidden;
       background: radial-gradient(circle at 15% 20%, #182427, #0f171d 58%, #0c1217 100%);
       position: relative;
+    }
+
+    #visualPanels {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .visualPanel {
+      border: 1px solid #2a3832;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel-2) 88%, black);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 8px;
+      gap: 8px;
+    }
+
+    .visualPanel h2 {
+      margin: 0;
+      font-size: 12px;
+    }
+
+    .visualPanelHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    #outlinerSearch {
+      padding: 6px 7px;
+      font-size: 12px;
+    }
+
+    #outlinerList {
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      padding-right: 2px;
+    }
+
+    .outlinerSectionTitle {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      border-top: 1px solid #26332d;
+      padding-top: 7px;
+      margin-top: 3px;
+    }
+
+    .outlinerSectionTitle:first-child {
+      border-top: none;
+      margin-top: 0;
+      padding-top: 0;
+    }
+
+    .outlinerItem {
+      border: 1px solid #2a3932;
+      border-radius: 6px;
+      background: #121b1f;
+      color: var(--text);
+      padding: 5px 7px;
+      text-align: left;
+      font-size: 12px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .outlinerItem .line1 {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: baseline;
+    }
+
+    .outlinerItem .line2 {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .outlinerItem.selected {
+      border-color: #7fcf6f;
+      background: #1b2c22;
+      color: #f0f7ea;
+    }
+
+    .outlinerItem.node {
+      border-left: 3px solid #93c87f;
+    }
+
+    .outlinerItem.part {
+      border-left: 3px solid #85b2d4;
+    }
+
+    .outlinerItem.joint {
+      border-left: 3px solid #d2b47f;
+    }
+
+    .emptyState {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 6px 2px;
+      line-height: 1.35;
+    }
+
+    #selectionToolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    #selectionBreadcrumb {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: pre-wrap;
+      line-height: 1.35;
+    }
+
+    #inspectorContent {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 5px;
+      padding-right: 2px;
+      align-content: start;
+    }
+
+    .fieldRow {
+      display: grid;
+      grid-template-columns: minmax(96px, 130px) 1fr;
+      gap: 8px;
+      font-size: 12px;
+      border-bottom: 1px dotted #25332c;
+      padding-bottom: 4px;
+    }
+
+    .fieldRow .k {
+      color: var(--muted);
+    }
+
+    .fieldRow .v {
+      color: var(--text);
+      word-break: break-word;
     }
 
     #visualInfo {
@@ -274,6 +435,10 @@
       .layout {
         grid-template-columns: 1fr;
         height: auto;
+      }
+
+      #visualWorkspace {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -369,7 +534,26 @@
         </div>
       </div>
       <div id="visualPane" class="editorPane active">
-        <div id="visualViewport"></div>
+        <div id="visualWorkspace">
+          <div id="visualViewport"></div>
+          <div id="visualPanels">
+            <div class="visualPanel">
+              <div class="visualPanelHeader">
+                <h2>Outliner</h2>
+              </div>
+              <input id="outlinerSearch" type="text" placeholder="filter (node, part, joint)">
+              <div id="outlinerList"></div>
+            </div>
+            <div class="visualPanel">
+              <div id="selectionToolbar">
+                <h2>Inspector</h2>
+                <button id="focusSelectedBtn" type="button">Frame selected</button>
+              </div>
+              <div id="selectionBreadcrumb">Nothing selected.</div>
+              <div id="inspectorContent"></div>
+            </div>
+          </div>
+        </div>
         <div id="visualInfo">Visual mode ready. Load a genome and click "Rebuild visual from JSON" after edits.</div>
       </div>
       <div id="jsonPane" class="editorPane">
