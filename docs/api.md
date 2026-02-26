@@ -57,6 +57,10 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `targetDeltaMeanMean`, `targetDeltaMeanP50`
       - `targetFlipRateHzMean`, `targetFlipRateHzP50`
       - `contactChurnHzMean`, `contactChurnHzP50`
+      - `torqueUtilizationMeanMean`, `torqueUtilizationMeanP50`
+      - `torqueUtilizationP95Mean`, `torqueUtilizationP95P50`
+      - `torqueSaturationFractionMean`, `torqueSaturationFractionP50`
+      - `highTorqueSaturationRate`
       - `dominantJointShareRate`, `lowEntropyRate`
     - `generations[*].viability` with per-generation viability/morphology rollups:
       - `startupInvalidTrialRate`
@@ -84,7 +88,7 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `stagnationGenerations`, `diversityState`
     - `mutationPressure`
     - `convergence`
-    - `signals` (includes `actuation_concentrated`, `actuation_high_frequency`, `contact_churn_elevated`, `startup_invalid_elevated`, `overlap_heavy_morphologies` when thresholds are exceeded)
+    - `signals` (includes `actuation_concentrated`, `actuation_high_frequency`, `torque_saturation_elevated`, `contact_churn_elevated`, `startup_invalid_elevated`, `overlap_heavy_morphologies` when thresholds are exceeded)
     - `latestActuation`, `recentActuation` (same shape as `generations[*].actuation`)
     - `latestViability`, `recentViability` (same shape as `generations[*].viability`)
     - `latestTopology`
@@ -103,6 +107,10 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `lastRecentTargetDeltaMean`
       - `lastRecentTargetFlipRateHzMean`
       - `lastRecentContactChurnHzMean`
+      - `lastRecentTorqueUtilizationMeanMean`
+      - `lastRecentTorqueUtilizationP95Mean`
+      - `lastRecentTorqueSaturationFractionMean`
+      - `lastRecentHighTorqueSaturationRate`
       - `lastRecentDominantJointShareRate`
       - `lastRecentLowEntropyRate`
       - `lastRecentStartupInvalidTrialRate`
@@ -150,6 +158,31 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
     - `addedCount`
     - `queuedCount`
 
+- `GET /api/creatures`
+  - Lists authored creatures from `data/creatures/`.
+  - Returns: `{ creatures: [{ id, notes }] }`
+
+- `GET /api/creatures/:id`
+  - Returns one authored creature payload:
+    - `version`, `id`, `genome`, `notes`, `locks`
+
+- `POST /api/creatures/save`
+  - Saves or updates an authored creature.
+  - Body:
+    - `id`
+    - `genome`
+    - optional `notes`
+    - optional `locks`:
+      - `lockTopology`
+      - `lockJointTypes`
+      - `lockJointLimits`
+      - `lockSegmentDynamics` (body shape + joint layout genes)
+      - `lockActuatorMechanics` (motor strength + joint stiffness genes)
+      - `lockControls` (neural policy genes)
+      - `lockVisualHue`
+  - Returns:
+    - `id`
+
 - `POST /api/evolution/checkpoint/save`
   - Saves a full evolution checkpoint to `data/checkpoints/`.
   - Body:
@@ -191,6 +224,9 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `medianTargetDeltaMean`
       - `medianTargetFlipRateHz`
       - `medianContactChurnHz`
+      - `medianTorqueUtilizationMean`
+      - `medianTorqueUtilizationP95`
+      - `medianTorqueSaturationFraction`
     - startup-reject telemetry:
       - `invalidStartupTrials`, `invalidStartupTrialRate`
       - `allTrialsInvalidStartup`
@@ -217,6 +253,9 @@ The `breve-creatures` executable serves both UI assets and backend simulation AP
       - `targetDeltaMean`
       - `targetFlipRateHz`
       - `contactChurnHz`
+      - `torqueUtilizationMean`
+      - `torqueUtilizationP95`
+      - `torqueSaturationFraction`
     - `straightness`, `netDistance`
     - `invalidStartup`
 

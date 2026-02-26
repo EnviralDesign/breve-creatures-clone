@@ -2188,6 +2188,7 @@
     "lockJointTypes": true,
     "lockJointLimits": false,
     "lockSegmentDynamics": true,
+    "lockActuatorMechanics": false,
     "lockControls": false,
     "lockVisualHue": true
   },

@@ -252,16 +252,18 @@
           <li><code>Body graph</code>: number of parts + how they connect.</li>
           <li><code>Joint kind</code>: hinge vs ball choice per joint.</li>
           <li><code>Joint limits</code>: allowed rotation ranges per joint.</li>
-          <li><code>Body shape + joint power</code>: part sizes/mass, anchor placement, growth direction, joint strength/stiffness.</li>
-          <li><code>Neural controller</code>: brain neurons/weights/effectors (the gait/control policy).</li>
+          <li><code>Body shape + joint layout</code>: part sizes/mass, anchor placement, growth direction, edge scaling, max parts.</li>
+          <li><code>Actuator mechanics</code>: motor strength and joint stiffness (how much force joints can apply).</li>
+          <li><code>Neural policy</code>: brain neurons/weights/effectors (the gait/control policy).</li>
           <li><code>Color</code>: visual hue only.</li>
         </ul>
         <div class="locks">
           <label><input id="lockTopology" type="checkbox"> lock body graph</label>
           <label><input id="lockJointTypes" type="checkbox"> lock joint kind (hinge/ball)</label>
           <label><input id="lockJointLimits" type="checkbox"> lock joint limits</label>
-          <label><input id="lockSegmentDynamics" type="checkbox"> lock body shape + joint power</label>
-          <label><input id="lockControls" type="checkbox"> lock neural controller</label>
+          <label><input id="lockSegmentDynamics" type="checkbox"> lock body shape + joint layout</label>
+          <label><input id="lockActuatorMechanics" type="checkbox"> lock actuator mechanics</label>
+          <label><input id="lockControls" type="checkbox"> lock neural policy</label>
           <label><input id="lockVisualHue" type="checkbox"> lock color</label>
         </div>
       </div>
@@ -315,6 +317,7 @@
     const lockJointTypes = document.getElementById("lockJointTypes");
     const lockJointLimits = document.getElementById("lockJointLimits");
     const lockSegmentDynamics = document.getElementById("lockSegmentDynamics");
+    const lockActuatorMechanics = document.getElementById("lockActuatorMechanics");
     const lockControls = document.getElementById("lockControls");
     const lockVisualHue = document.getElementById("lockVisualHue");
     const presetGaitOnlyBtn = document.getElementById("presetGaitOnlyBtn");
@@ -331,6 +334,7 @@
         lockJointTypes: Boolean(lockJointTypes.checked),
         lockJointLimits: Boolean(lockJointLimits.checked),
         lockSegmentDynamics: Boolean(lockSegmentDynamics.checked),
+        lockActuatorMechanics: Boolean(lockActuatorMechanics.checked),
         lockControls: Boolean(lockControls.checked),
         lockVisualHue: Boolean(lockVisualHue.checked),
       };
@@ -342,6 +346,9 @@
       lockJointTypes.checked = Boolean(src.lockJointTypes);
       lockJointLimits.checked = Boolean(src.lockJointLimits);
       lockSegmentDynamics.checked = Boolean(src.lockSegmentDynamics);
+      lockActuatorMechanics.checked = src.lockActuatorMechanics === undefined
+        ? Boolean(src.lockSegmentDynamics)
+        : Boolean(src.lockActuatorMechanics);
       lockControls.checked = Boolean(src.lockControls);
       lockVisualHue.checked = Boolean(src.lockVisualHue);
     }
@@ -351,6 +358,7 @@
       lockJointTypes.checked = true;
       lockJointLimits.checked = true;
       lockSegmentDynamics.checked = true;
+      lockActuatorMechanics.checked = true;
       lockControls.checked = false;
       lockVisualHue.checked = true;
       setStatus("Applied preset: morphology fixed, neural controller evolvable (gait/controller-only).", "ok");
@@ -361,6 +369,7 @@
       lockJointTypes.checked = true;
       lockJointLimits.checked = false;
       lockSegmentDynamics.checked = true;
+      lockActuatorMechanics.checked = true;
       lockControls.checked = false;
       lockVisualHue.checked = true;
       setStatus("Applied preset: morphology fixed, controller + joint limits evolvable.", "ok");

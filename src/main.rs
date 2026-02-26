@@ -71,6 +71,8 @@ const FITNESS_PROGRESS_LATE_WEIGHT: f32 = 2.0;
 const FITNESS_GROUNDED_BONUS_WEIGHT: f32 = 1.0;
 const FITNESS_ENERGY_PENALTY: f32 = 0.04;
 const ACTIVE_JOINT_ENERGY_SHARE_THRESHOLD: f32 = 0.01;
+const TORQUE_UTILIZATION_SATURATION_THRESHOLD: f32 = 0.95;
+const TORQUE_UTILIZATION_HIST_BINS: usize = 32;
 const SETTLE_SECONDS: f32 = 1.5;
 const PASSIVE_SETTLE_FRICTION: f32 = 0.0;
 const ACTIVE_SURFACE_FRICTION: f32 = 1.08;
@@ -168,6 +170,8 @@ const DIAG_LOW_ENTROPY_ALERT_RATE: f32 = 0.5;
 const DIAG_HIGH_TARGET_DELTA_MEAN_THRESHOLD: f32 = 0.08;
 const DIAG_HIGH_TARGET_FLIP_RATE_HZ_THRESHOLD: f32 = 5.0;
 const DIAG_HIGH_CONTACT_CHURN_HZ_THRESHOLD: f32 = 2.4;
+const DIAG_HIGH_TORQUE_SATURATION_FRACTION_THRESHOLD: f32 = 0.35;
+const DIAG_HIGH_TORQUE_SATURATION_ALERT_RATE: f32 = 0.4;
 const DIAG_HIGH_OVERLAP_RATIO_THRESHOLD: f32 = 0.22;
 const DIAG_HIGH_OVERLAP_ALERT_RATE: f32 = 0.35;
 const DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE: f32 = 0.12;
@@ -456,6 +460,12 @@ struct GenerationEvalResult {
     median_target_flip_rate_hz: f32,
     #[serde(default)]
     median_contact_churn_hz: f32,
+    #[serde(default)]
+    median_torque_utilization_mean: f32,
+    #[serde(default)]
+    median_torque_utilization_p95: f32,
+    #[serde(default)]
+    median_torque_saturation_fraction: f32,
     invalid_startup_trials: usize,
     invalid_startup_trial_rate: f32,
     all_trials_invalid_startup: bool,
@@ -499,6 +509,12 @@ struct TrialMetrics {
     target_flip_rate_hz: f32,
     #[serde(default)]
     contact_churn_hz: f32,
+    #[serde(default)]
+    torque_utilization_mean: f32,
+    #[serde(default)]
+    torque_utilization_p95: f32,
+    #[serde(default)]
+    torque_saturation_fraction: f32,
     fallen_ratio: f32,
     straightness: f32,
     net_distance: f32,
@@ -636,6 +652,10 @@ struct TrialAccumulator {
     target_axis_samples: usize,
     target_sign_flip_count: usize,
     contact_toggle_count: usize,
+    torque_utilization_sum: f32,
+    torque_utilization_samples: usize,
+    torque_saturation_samples: usize,
+    torque_utilization_hist: [u32; TORQUE_UTILIZATION_HIST_BINS],
     fallen_time: f32,
     net_dx: f32,
     net_dz: f32,
@@ -676,6 +696,10 @@ impl TrialAccumulator {
             target_axis_samples: 0,
             target_sign_flip_count: 0,
             contact_toggle_count: 0,
+            torque_utilization_sum: 0.0,
+            torque_utilization_samples: 0,
+            torque_saturation_samples: 0,
+            torque_utilization_hist: [0u32; TORQUE_UTILIZATION_HIST_BINS],
             fallen_time: 0.0,
             net_dx: 0.0,
             net_dz: 0.0,
@@ -708,6 +732,21 @@ impl TrialAccumulator {
 
     fn add_contact_toggles(&mut self, count: usize) {
         self.contact_toggle_count += count;
+    }
+
+    fn add_torque_utilization_sample(&mut self, utilization: f32) {
+        if !utilization.is_finite() {
+            return;
+        }
+        let clamped = clamp(utilization, 0.0, 1.0);
+        self.torque_utilization_sum += clamped;
+        self.torque_utilization_samples += 1;
+        if clamped >= TORQUE_UTILIZATION_SATURATION_THRESHOLD {
+            self.torque_saturation_samples += 1;
+        }
+        let bin = ((clamped * TORQUE_UTILIZATION_HIST_BINS as f32).floor() as usize)
+            .min(TORQUE_UTILIZATION_HIST_BINS.saturating_sub(1));
+        self.torque_utilization_hist[bin] = self.torque_utilization_hist[bin].saturating_add(1);
     }
 
     fn update(
@@ -825,6 +864,29 @@ impl TrialAccumulator {
             0.0,
             120.0,
         );
+        let torque_utilization_mean = if self.torque_utilization_samples > 0 {
+            clamp(
+                self.torque_utilization_sum / self.torque_utilization_samples as f32,
+                0.0,
+                1.0,
+            )
+        } else {
+            0.0
+        };
+        let torque_utilization_p95 = if self.torque_utilization_samples > 0 {
+            histogram_quantile(&self.torque_utilization_hist, 0.95)
+        } else {
+            0.0
+        };
+        let torque_saturation_fraction = if self.torque_utilization_samples > 0 {
+            clamp(
+                self.torque_saturation_samples as f32 / self.torque_utilization_samples as f32,
+                0.0,
+                1.0,
+            )
+        } else {
+            0.0
+        };
         let fallen_ratio = clamp(self.fallen_time / effective_duration, 0.0, 1.0);
         let net_distance = (self.net_dx * self.net_dx + self.net_dz * self.net_dz).sqrt();
         let straightness = if self.path_length > 1e-4 {
@@ -865,6 +927,9 @@ impl TrialAccumulator {
             target_delta_mean,
             target_flip_rate_hz,
             contact_churn_hz,
+            torque_utilization_mean,
+            torque_utilization_p95,
+            torque_saturation_fraction,
             fallen_ratio,
             straightness,
             net_distance,
@@ -1446,6 +1511,9 @@ impl TrialSimulator {
             metrics.target_delta_mean = 0.0;
             metrics.target_flip_rate_hz = 0.0;
             metrics.contact_churn_hz = 0.0;
+            metrics.torque_utilization_mean = 0.0;
+            metrics.torque_utilization_p95 = 0.0;
+            metrics.torque_saturation_fraction = 0.0;
             metrics.invalid_startup = true;
         }
         let descriptor = self.metrics.descriptor(&metrics);
@@ -1884,6 +1952,9 @@ impl TrialSimulator {
                         controller.torque_x,
                     );
                     controller_energy += tau_x.abs() * joint_angvels[0].abs() * dt;
+                    self.metrics.add_torque_utilization_sample(
+                        tau_x.abs() / controller.torque_x.max(1e-6),
+                    );
                     if matches!(controller.joint_type, JointTypeGene::Ball) {
                         joint.data.set_motor_position(
                             JointAxis::AngY,
@@ -1915,6 +1986,12 @@ impl TrialSimulator {
                         );
                         controller_energy += tau_y.abs() * joint_angvels[1].abs() * dt;
                         controller_energy += tau_z.abs() * joint_angvels[2].abs() * dt;
+                        self.metrics.add_torque_utilization_sample(
+                            tau_y.abs() / controller.torque_y.max(1e-6),
+                        );
+                        self.metrics.add_torque_utilization_sample(
+                            tau_z.abs() / controller.torque_z.max(1e-6),
+                        );
                     }
                 }
                 let controller_energy = controller_energy.max(0.0);
@@ -2066,6 +2143,8 @@ struct MorphologyLockProfile {
     lock_joint_limits: bool,
     #[serde(default)]
     lock_segment_dynamics: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lock_actuator_mechanics: Option<bool>,
     #[serde(default)]
     lock_controls: bool,
     #[serde(default)]
@@ -2258,6 +2337,20 @@ struct GenerationActuationStats {
     contact_churn_hz_mean: f32,
     #[serde(default)]
     contact_churn_hz_p50: f32,
+    #[serde(default)]
+    torque_utilization_mean_mean: f32,
+    #[serde(default)]
+    torque_utilization_mean_p50: f32,
+    #[serde(default)]
+    torque_utilization_p95_mean: f32,
+    #[serde(default)]
+    torque_utilization_p95_p50: f32,
+    #[serde(default)]
+    torque_saturation_fraction_mean: f32,
+    #[serde(default)]
+    torque_saturation_fraction_p50: f32,
+    #[serde(default)]
+    high_torque_saturation_rate: f32,
     dominant_joint_share_rate: f32,
     low_entropy_rate: f32,
 }
@@ -2499,6 +2592,10 @@ struct EvolutionDiagnosisMetrics {
     last_recent_target_delta_mean: f32,
     last_recent_target_flip_rate_hz_mean: f32,
     last_recent_contact_churn_hz_mean: f32,
+    last_recent_torque_utilization_mean_mean: f32,
+    last_recent_torque_utilization_p95_mean: f32,
+    last_recent_torque_saturation_fraction_mean: f32,
+    last_recent_high_torque_saturation_rate: f32,
     last_recent_dominant_joint_share_rate: f32,
     last_recent_low_entropy_rate: f32,
     last_recent_startup_invalid_trial_rate: f32,
@@ -3274,6 +3371,12 @@ struct EvolutionCandidate {
     #[serde(default)]
     median_contact_churn_hz: f32,
     #[serde(default)]
+    median_torque_utilization_mean: f32,
+    #[serde(default)]
+    median_torque_utilization_p95: f32,
+    #[serde(default)]
+    median_torque_saturation_fraction: f32,
+    #[serde(default)]
     median_energy_norm: f32,
     #[serde(default)]
     median_overlap_ratio: f32,
@@ -3750,6 +3853,12 @@ fn start_evolution_worker(
                                 median_target_delta_mean: result.median_target_delta_mean,
                                 median_target_flip_rate_hz: result.median_target_flip_rate_hz,
                                 median_contact_churn_hz: result.median_contact_churn_hz,
+                                median_torque_utilization_mean: result
+                                    .median_torque_utilization_mean,
+                                median_torque_utilization_p95: result
+                                    .median_torque_utilization_p95,
+                                median_torque_saturation_fraction: result
+                                    .median_torque_saturation_fraction,
                                 median_energy_norm: result.median_energy_norm,
                                 median_overlap_ratio: result.median_overlap_ratio,
                                 median_progress: result.median_progress,
@@ -4014,6 +4123,9 @@ fn start_evolution_worker(
                 median_target_delta_mean: summary.median_target_delta_mean,
                 median_target_flip_rate_hz: summary.median_target_flip_rate_hz,
                 median_contact_churn_hz: summary.median_contact_churn_hz,
+                median_torque_utilization_mean: summary.median_torque_utilization_mean,
+                median_torque_utilization_p95: summary.median_torque_utilization_p95,
+                median_torque_saturation_fraction: summary.median_torque_saturation_fraction,
                 median_energy_norm: summary.median_energy_norm,
                 median_overlap_ratio: summary.median_overlap_ratio,
                 median_progress: summary.median_progress,
@@ -4245,6 +4357,18 @@ fn build_generation_performance_summary(
         .iter()
         .map(|item| finite_or_zero(item.median_contact_churn_hz))
         .collect();
+    let torque_utilization_means: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_torque_utilization_mean))
+        .collect();
+    let torque_utilization_p95s: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_torque_utilization_p95))
+        .collect();
+    let torque_saturation_fractions: Vec<f32> = batch_results
+        .iter()
+        .map(|item| finite_or_zero(item.median_torque_saturation_fraction))
+        .collect();
     let overlap_ratios: Vec<f32> = batch_results
         .iter()
         .map(|item| finite_or_zero(item.median_overlap_ratio))
@@ -4298,6 +4422,10 @@ fn build_generation_performance_summary(
     );
     let low_entropy_rate =
         ratio_at_or_below_threshold(&actuation_entropies, DIAG_LOW_ACTUATION_ENTROPY_THRESHOLD);
+    let high_torque_saturation_rate = ratio_above_threshold(
+        &torque_saturation_fractions,
+        DIAG_HIGH_TORQUE_SATURATION_FRACTION_THRESHOLD,
+    );
     let total_trials: usize = batch_results.iter().map(|item| item.trial_count).sum();
     let invalid_startup_trials: usize = batch_results
         .iter()
@@ -4348,6 +4476,13 @@ fn build_generation_performance_summary(
             target_flip_rate_hz_p50: quantile(&target_flip_rates_hz, 0.5),
             contact_churn_hz_mean: mean(&contact_churn_rates_hz),
             contact_churn_hz_p50: quantile(&contact_churn_rates_hz, 0.5),
+            torque_utilization_mean_mean: mean(&torque_utilization_means),
+            torque_utilization_mean_p50: quantile(&torque_utilization_means, 0.5),
+            torque_utilization_p95_mean: mean(&torque_utilization_p95s),
+            torque_utilization_p95_p50: quantile(&torque_utilization_p95s, 0.5),
+            torque_saturation_fraction_mean: mean(&torque_saturation_fractions),
+            torque_saturation_fraction_p50: quantile(&torque_saturation_fractions, 0.5),
+            high_torque_saturation_rate,
             dominant_joint_share_rate,
             low_entropy_rate,
         },
@@ -4942,6 +5077,9 @@ fn build_evolution_performance_summary_response(
     {
         signals.push("actuation_high_frequency".to_string());
     }
+    if recent_actuation.high_torque_saturation_rate >= DIAG_HIGH_TORQUE_SATURATION_ALERT_RATE {
+        signals.push("torque_saturation_elevated".to_string());
+    }
     if recent_actuation.contact_churn_hz_mean >= DIAG_HIGH_CONTACT_CHURN_HZ_THRESHOLD {
         signals.push("contact_churn_elevated".to_string());
     }
@@ -5080,6 +5218,10 @@ fn build_evolution_performance_diagnose_response(
         && recent_actuation.target_flip_rate_hz_mean >= DIAG_HIGH_TARGET_FLIP_RATE_HZ_THRESHOLD
     {
         "high_frequency"
+    } else if recent_actuation.high_torque_saturation_rate
+        >= DIAG_HIGH_TORQUE_SATURATION_ALERT_RATE
+    {
+        "torque_saturated"
     } else if recent_actuation.dominant_joint_share_rate >= 0.35 {
         "watch"
     } else {
@@ -5201,6 +5343,13 @@ fn build_evolution_performance_diagnose_response(
             message: "Ground contact is toggling rapidly; this often correlates with jittery high-frequency actuation strategies.".to_string(),
         });
     }
+    if recent_actuation.high_torque_saturation_rate >= DIAG_HIGH_TORQUE_SATURATION_ALERT_RATE {
+        findings.push(EvolutionDiagnosisFinding {
+            code: "torque_saturation_elevated".to_string(),
+            severity: "info".to_string(),
+            message: "Many candidates spend a large fraction of steps near motor torque limits; this often signals bang-bang actuation strategies.".to_string(),
+        });
+    }
     if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
         findings.push(EvolutionDiagnosisFinding {
             code: "startup_invalid_rate_elevated".to_string(),
@@ -5253,6 +5402,11 @@ fn build_evolution_performance_diagnose_response(
             "Lower motor command bandwidth (low-pass alpha and/or slew rate) if high-frequency target flipping remains elevated for 10+ generations.".to_string(),
         );
     }
+    if recent_actuation.high_torque_saturation_rate >= DIAG_HIGH_TORQUE_SATURATION_ALERT_RATE {
+        recommended_actions.push(
+            "Inspect torque saturation telemetry and reduce joint force concentration (or increase efficiency pressure) if motors remain near saturation for long windows.".to_string(),
+        );
+    }
     if recent_viability.startup_invalid_trial_rate >= DIAG_STARTUP_INVALID_TRIAL_ALERT_RATE {
         recommended_actions.push(
             "Tighten morphology generation bounds or mutation amplitudes if startup-invalid trial rate stays elevated for 10+ generations.".to_string(),
@@ -5297,6 +5451,13 @@ fn build_evolution_performance_diagnose_response(
             last_recent_target_delta_mean: recent_actuation.target_delta_mean_mean,
             last_recent_target_flip_rate_hz_mean: recent_actuation.target_flip_rate_hz_mean,
             last_recent_contact_churn_hz_mean: recent_actuation.contact_churn_hz_mean,
+            last_recent_torque_utilization_mean_mean: recent_actuation
+                .torque_utilization_mean_mean,
+            last_recent_torque_utilization_p95_mean: recent_actuation.torque_utilization_p95_mean,
+            last_recent_torque_saturation_fraction_mean: recent_actuation
+                .torque_saturation_fraction_mean,
+            last_recent_high_torque_saturation_rate: recent_actuation
+                .high_torque_saturation_rate,
             last_recent_dominant_joint_share_rate: recent_actuation.dominant_joint_share_rate,
             last_recent_low_entropy_rate: recent_actuation.low_entropy_rate,
             last_recent_startup_invalid_trial_rate: recent_viability.startup_invalid_trial_rate,
@@ -5557,6 +5718,13 @@ fn aggregate_actuation_stats(points: &[GenerationActuationStats]) -> GenerationA
         out.target_flip_rate_hz_p50 += point.target_flip_rate_hz_p50;
         out.contact_churn_hz_mean += point.contact_churn_hz_mean;
         out.contact_churn_hz_p50 += point.contact_churn_hz_p50;
+        out.torque_utilization_mean_mean += point.torque_utilization_mean_mean;
+        out.torque_utilization_mean_p50 += point.torque_utilization_mean_p50;
+        out.torque_utilization_p95_mean += point.torque_utilization_p95_mean;
+        out.torque_utilization_p95_p50 += point.torque_utilization_p95_p50;
+        out.torque_saturation_fraction_mean += point.torque_saturation_fraction_mean;
+        out.torque_saturation_fraction_p50 += point.torque_saturation_fraction_p50;
+        out.high_torque_saturation_rate += point.high_torque_saturation_rate;
         out.dominant_joint_share_rate += point.dominant_joint_share_rate;
         out.low_entropy_rate += point.low_entropy_rate;
     }
@@ -5572,6 +5740,13 @@ fn aggregate_actuation_stats(points: &[GenerationActuationStats]) -> GenerationA
     out.target_flip_rate_hz_p50 *= inv;
     out.contact_churn_hz_mean *= inv;
     out.contact_churn_hz_p50 *= inv;
+    out.torque_utilization_mean_mean *= inv;
+    out.torque_utilization_mean_p50 *= inv;
+    out.torque_utilization_p95_mean *= inv;
+    out.torque_utilization_p95_p50 *= inv;
+    out.torque_saturation_fraction_mean *= inv;
+    out.torque_saturation_fraction_p50 *= inv;
+    out.high_torque_saturation_rate *= inv;
     out.dominant_joint_share_rate *= inv;
     out.low_entropy_rate *= inv;
     out
@@ -7114,6 +7289,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
             median_target_delta_mean: 0.0,
             median_target_flip_rate_hz: 0.0,
             median_contact_churn_hz: 0.0,
+            median_torque_utilization_mean: 0.0,
+            median_torque_utilization_p95: 0.0,
+            median_torque_saturation_fraction: 0.0,
             invalid_startup_trials: 0,
             invalid_startup_trial_rate: 0.0,
             all_trials_invalid_startup: false,
@@ -7159,6 +7337,18 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         .iter()
         .map(|trial| trial.metrics.contact_churn_hz)
         .collect();
+    let torque_utilization_means: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.torque_utilization_mean)
+        .collect();
+    let torque_utilization_p95s: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.torque_utilization_p95)
+        .collect();
+    let torque_saturation_fractions: Vec<f32> = trials
+        .iter()
+        .map(|trial| trial.metrics.torque_saturation_fraction)
+        .collect();
     let invalid_startup_trials = trials
         .iter()
         .filter(|trial| trial.metrics.invalid_startup)
@@ -7190,6 +7380,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
     let median_target_delta_mean = quantile(&target_delta_means, 0.5);
     let median_target_flip_rate_hz = quantile(&target_flip_rates_hz, 0.5);
     let median_contact_churn_hz = quantile(&contact_churn_rates_hz, 0.5);
+    let median_torque_utilization_mean = quantile(&torque_utilization_means, 0.5);
+    let median_torque_utilization_p95 = quantile(&torque_utilization_p95s, 0.5);
+    let median_torque_saturation_fraction = quantile(&torque_saturation_fractions, 0.5);
 
     let active_limbs = enabled_limb_count(genome);
     let mean_segment_count = feature_segment_count_mean(genome);
@@ -7221,6 +7414,9 @@ fn summarize_trials(genome: &Genome, trials: &[TrialResult]) -> GenerationEvalRe
         median_target_delta_mean,
         median_target_flip_rate_hz,
         median_contact_churn_hz,
+        median_torque_utilization_mean,
+        median_torque_utilization_p95,
+        median_torque_saturation_fraction,
         invalid_startup_trials,
         invalid_startup_trial_rate,
         all_trials_invalid_startup,
@@ -7911,6 +8107,8 @@ fn constrain_genome_with_template(
 ) -> Genome {
     let mut constrained = source.clone();
     constrained.version = default_genome_version();
+    let lock_actuator_mechanics =
+        locks.lock_actuator_mechanics.unwrap_or(locks.lock_segment_dynamics);
 
     if locks.lock_topology {
         constrained.graph = template.graph.clone();
@@ -7928,6 +8126,9 @@ fn constrain_genome_with_template(
         if !locks.lock_segment_dynamics {
             copy_graph_segment_dynamics_genes(&source.graph, &mut constrained.graph);
         }
+        if !lock_actuator_mechanics {
+            copy_graph_actuator_mechanics_genes(&source.graph, &mut constrained.graph);
+        }
         if !locks.lock_controls {
             copy_graph_control_genes(&source.graph, &mut constrained.graph);
         }
@@ -7940,6 +8141,9 @@ fn constrain_genome_with_template(
         }
         if locks.lock_segment_dynamics {
             copy_graph_segment_dynamics_genes(&template.graph, &mut constrained.graph);
+        }
+        if lock_actuator_mechanics {
+            copy_graph_actuator_mechanics_genes(&template.graph, &mut constrained.graph);
         }
         if locks.lock_controls {
             copy_graph_control_genes(&template.graph, &mut constrained.graph);
@@ -8006,11 +8210,22 @@ fn copy_graph_segment_dynamics_genes(source: &GraphGene, target: &mut GraphGene)
             target_edges[edge_index].dir_y = source_edges[edge_index].dir_y;
             target_edges[edge_index].dir_z = source_edges[edge_index].dir_z;
             target_edges[edge_index].scale = source_edges[edge_index].scale;
+        }
+    }
+    target.max_parts = source.max_parts;
+}
+
+fn copy_graph_actuator_mechanics_genes(source: &GraphGene, target: &mut GraphGene) {
+    let node_count = source.nodes.len().min(target.nodes.len());
+    for node_index in 0..node_count {
+        let source_edges = &source.nodes[node_index].edges;
+        let target_edges = &mut target.nodes[node_index].edges;
+        let edge_count = source_edges.len().min(target_edges.len());
+        for edge_index in 0..edge_count {
             target_edges[edge_index].motor_strength = source_edges[edge_index].motor_strength;
             target_edges[edge_index].joint_stiffness = source_edges[edge_index].joint_stiffness;
         }
     }
-    target.max_parts = source.max_parts;
 }
 
 fn copy_graph_control_genes(source: &GraphGene, target: &mut GraphGene) {
@@ -10429,4 +10644,23 @@ fn quantile(values: &[f32], q: f32) -> f32 {
     let upper = t.ceil() as usize;
     let frac = t - lower as f32;
     sorted[lower] + (sorted[upper] - sorted[lower]) * frac
+}
+
+fn histogram_quantile(hist: &[u32], q: f32) -> f32 {
+    if hist.is_empty() {
+        return 0.0;
+    }
+    let total = hist.iter().map(|count| *count as u64).sum::<u64>();
+    if total == 0 {
+        return 0.0;
+    }
+    let target = (clamp(q, 0.0, 1.0) * (total.saturating_sub(1) as f32)).round() as u64;
+    let mut cumulative = 0u64;
+    for (index, count) in hist.iter().enumerate() {
+        cumulative = cumulative.saturating_add(*count as u64);
+        if cumulative > target {
+            return (index as f32 + 0.5) / hist.len() as f32;
+        }
+    }
+    1.0
 }
