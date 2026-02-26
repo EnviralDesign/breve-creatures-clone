@@ -39,6 +39,14 @@
       height: calc(100vh - 32px);
     }
 
+    .layout.sidebarCollapsed {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .layout.sidebarCollapsed #creatorSidebar {
+      display: none;
+    }
+
     .card {
       background: color-mix(in srgb, var(--panel) 88%, black);
       border: 1px solid #2d3b35;
@@ -243,7 +251,7 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(360px, 1fr) minmax(260px, 340px);
+      grid-template-columns: minmax(220px, 300px) minmax(360px, 1fr) minmax(260px, 340px);
       gap: 10px;
     }
 
@@ -256,13 +264,6 @@
       position: relative;
     }
 
-    #visualPanels {
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
     .visualPanel {
       border: 1px solid #2a3832;
       border-radius: 8px;
@@ -272,6 +273,11 @@
       min-height: 0;
       padding: 8px;
       gap: 8px;
+    }
+
+    .inspectorPanel {
+      min-height: 0;
+      flex: 1;
     }
 
     .visualPanel h2 {
@@ -383,31 +389,160 @@
     }
 
     #inspectorContent {
+      flex: 1;
       min-height: 0;
       overflow: auto;
-      display: grid;
-      grid-template-columns: 1fr;
+      display: flex;
+      flex-direction: column;
       gap: 5px;
       padding-right: 2px;
-      align-content: start;
     }
 
-    .fieldRow {
+    .fieldRow,
+    .inspectorFieldRow {
       display: grid;
       grid-template-columns: minmax(96px, 130px) 1fr;
       gap: 8px;
       font-size: 12px;
       border-bottom: 1px dotted #25332c;
-      padding-bottom: 4px;
+      padding: 4px 0 6px;
+      align-items: start;
     }
 
-    .fieldRow .k {
+    .fieldRow .k,
+    .inspectorFieldLabel {
       color: var(--muted);
+      line-height: 1.25;
+      padding-top: 6px;
     }
 
-    .fieldRow .v {
+    .fieldRow .v,
+    .inspectorFieldValue {
       color: var(--text);
       word-break: break-word;
+      line-height: 1.35;
+      min-width: 0;
+    }
+
+    .inspectorFieldControl {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    #inspectorContent input[type="text"],
+    #inspectorContent input[type="number"],
+    #inspectorContent textarea,
+    #inspectorContent select {
+      width: 100%;
+      border: 1px solid #304139;
+      background: #111a1f;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 6px 7px;
+      outline: none;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    #inspectorContent input[type="text"]:focus,
+    #inspectorContent input[type="number"]:focus,
+    #inspectorContent textarea:focus,
+    #inspectorContent select:focus {
+      border-color: #6c946e;
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+    }
+
+    #inspectorContent input[type="text"]:disabled,
+    #inspectorContent input[type="number"]:disabled,
+    #inspectorContent textarea:disabled,
+    #inspectorContent select:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
+    #inspectorContent textarea {
+      min-height: 54px;
+      max-height: 180px;
+      resize: vertical;
+    }
+
+    .inspectorCheckboxRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .inspectorCheckboxRow input[type="checkbox"] {
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .inspectorFieldHint {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.3;
+    }
+
+    .inspectorFieldError {
+      font-size: 11px;
+      color: var(--err);
+      line-height: 1.3;
+    }
+
+    .inspectorFieldError:empty {
+      display: none;
+    }
+
+    .inspectorFieldRow.invalid input[type="text"],
+    .inspectorFieldRow.invalid input[type="number"],
+    .inspectorFieldRow.invalid textarea,
+    .inspectorFieldRow.invalid select {
+      border-color: #b35d5d;
+    }
+
+    .inspectorFooter {
+      border-top: 1px solid #26342d;
+      margin-top: 6px;
+      padding-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      flex: 0 0 auto;
+    }
+
+    .inspectorPanelError {
+      font-size: 11px;
+      color: var(--err);
+      line-height: 1.3;
+      min-height: 1.2em;
+    }
+
+    .inspectorPanelError:empty {
+      display: none;
+    }
+
+    .inspectorApplyStatus {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.3;
+      min-height: 1.2em;
+    }
+
+    .inspectorApplyStatus.ok {
+      color: var(--accent);
+    }
+
+    .inspectorApplyStatus.warn {
+      color: var(--warn);
+    }
+
+    .inspectorApplyStatus.err {
+      color: var(--err);
     }
 
     #visualInfo {
@@ -445,8 +580,8 @@
 </head>
 
 <body>
-  <div class="layout">
-    <div class="card" style="overflow-y:auto;">
+  <div id="layoutRoot" class="layout">
+    <div id="creatorSidebar" class="card" style="overflow-y:auto;">
       <h1>Creature Authoring (V1 MVP)</h1>
 
       <div class="section">
@@ -528,6 +663,7 @@
       <div class="modeRow">
         <h2>Editor</h2>
         <div class="modeButtons">
+          <button id="toggleSidebarBtn" type="button">Hide controls</button>
           <button id="showVisualBtn" type="button" class="active">Visual</button>
           <button id="showJsonBtn" type="button">JSON</button>
           <button id="rebuildVisualBtn" type="button">Rebuild visual from JSON</button>
@@ -535,22 +671,24 @@
       </div>
       <div id="visualPane" class="editorPane active">
         <div id="visualWorkspace">
-          <div id="visualViewport"></div>
-          <div id="visualPanels">
-            <div class="visualPanel">
-              <div class="visualPanelHeader">
-                <h2>Outliner</h2>
-              </div>
-              <input id="outlinerSearch" type="text" placeholder="filter (node, part, joint)">
-              <div id="outlinerList"></div>
+          <div class="visualPanel">
+            <div class="visualPanelHeader">
+              <h2>Outliner</h2>
             </div>
-            <div class="visualPanel">
-              <div id="selectionToolbar">
-                <h2>Inspector</h2>
-                <button id="focusSelectedBtn" type="button">Frame selected</button>
-              </div>
-              <div id="selectionBreadcrumb">Nothing selected.</div>
-              <div id="inspectorContent"></div>
+            <input id="outlinerSearch" type="text" placeholder="filter (node, part, joint)">
+            <div id="outlinerList"></div>
+          </div>
+          <div id="visualViewport"></div>
+          <div class="visualPanel inspectorPanel">
+            <div id="selectionToolbar">
+              <h2>Inspector</h2>
+              <button id="focusSelectedBtn" type="button">Frame selected</button>
+            </div>
+            <div id="selectionBreadcrumb">Nothing selected.</div>
+            <div id="inspectorContent"></div>
+            <div id="inspectorFooter" class="inspectorFooter">
+              <div id="inspectorPanelError" class="inspectorPanelError" aria-live="polite"></div>
+              <div id="inspectorApplyStatus" class="inspectorApplyStatus" aria-live="polite">Inspector ready.</div>
             </div>
           </div>
         </div>

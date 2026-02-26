@@ -22,6 +22,40 @@ const state = {
   visualModel: null,
   editorMode: "visual",
   selection: null,
+  inspectorError: null,
+};
+
+const JOINT_TYPE_OPTIONS = ["hinge", "ball"];
+const FIELD_SCHEMAS = {
+  "node.part.w": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
+  "node.part.h": { type: "number", min: 0.2, max: 2.8, step: 0.01 },
+  "node.part.d": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
+  "node.part.mass": { type: "number", min: 0.08, max: 2.8, step: 0.01 },
+  "node.brain.effectorX.gain": { type: "number", min: 0.2, max: 2.0, step: 0.01 },
+  "node.brain.effectorY.gain": { type: "number", min: 0.2, max: 2.0, step: 0.01 },
+  "node.brain.effectorZ.gain": { type: "number", min: 0.2, max: 2.0, step: 0.01 },
+  "part.part.w": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
+  "part.part.h": { type: "number", min: 0.2, max: 2.8, step: 0.01 },
+  "part.part.d": { type: "number", min: 0.14, max: 2.2, step: 0.01 },
+  "part.part.mass": { type: "number", min: 0.08, max: 2.8, step: 0.01 },
+  "part.edge.scale": { type: "number", min: 0.45, max: 1.55, step: 0.01 },
+  "part.edge.anchorX": { type: "number", min: -0.86, max: 0.86, step: 0.01 },
+  "part.edge.anchorY": { type: "number", min: -0.86, max: 0.86, step: 0.01 },
+  "part.edge.anchorZ": { type: "number", min: -0.86, max: 0.86, step: 0.01 },
+  "part.edge.dirX": { type: "number", min: -1.15, max: 1.15, step: 0.01 },
+  "part.edge.dirY": { type: "number", min: -1.2, max: 0.85, step: 0.01 },
+  "part.edge.dirZ": { type: "number", min: -1.15, max: 1.15, step: 0.01 },
+  "part.edge.axisY": { type: "number", min: -0.65, max: 0.65, step: 0.01 },
+  "part.edge.axisZ": { type: "number", min: -0.65, max: 0.65, step: 0.01 },
+  "joint.edge.jointType": { type: "enum", options: JOINT_TYPE_OPTIONS },
+  "joint.edge.limitX": { type: "number", min: 0.12, max: Math.PI * 0.95, step: 0.01 },
+  "joint.edge.limitY": { type: "number", min: 0.1, max: Math.PI * 0.75, step: 0.01 },
+  "joint.edge.limitZ": { type: "number", min: 0.1, max: Math.PI * 0.75, step: 0.01 },
+  "joint.edge.motorStrength": { type: "number", min: 0.3, max: 4.5, step: 0.01 },
+  "joint.edge.stiffness": { type: "number", min: 12.0, max: 160.0, step: 0.1 },
+  "joint.edge.recursiveLimit": { type: "int", min: 1, max: 5, step: 1 },
+  "joint.edge.terminalOnly": { type: "bool" },
+  "joint.edge.reflectX": { type: "bool" },
 };
 
 const statusEl = document.getElementById("status");
@@ -30,6 +64,8 @@ const creatureIdInput = document.getElementById("creatureIdInput");
 const notesInput = document.getElementById("notesInput");
 const creatureList = document.getElementById("creatureList");
 const modeStatus = document.getElementById("modeStatus");
+const layoutRoot = document.getElementById("layoutRoot");
+const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
 const visualPane = document.getElementById("visualPane");
 const jsonPane = document.getElementById("jsonPane");
 const showVisualBtn = document.getElementById("showVisualBtn");
@@ -42,6 +78,8 @@ const outlinerList = document.getElementById("outlinerList");
 const selectionBreadcrumb = document.getElementById("selectionBreadcrumb");
 const inspectorContent = document.getElementById("inspectorContent");
 const focusSelectedBtn = document.getElementById("focusSelectedBtn");
+const inspectorPanelErrorEl = document.getElementById("inspectorPanelError");
+const inspectorApplyStatusEl = document.getElementById("inspectorApplyStatus");
 
 const lockTopology = document.getElementById("lockTopology");
 const lockJointTypes = document.getElementById("lockJointTypes");
@@ -56,6 +94,21 @@ const presetGaitAndLimitsBtn = document.getElementById("presetGaitAndLimitsBtn")
 function setStatus(message, cls = "") {
   statusEl.className = `status ${cls}`.trim();
   statusEl.textContent = message;
+}
+
+function setInspectorPanelError(message = "") {
+  if (!inspectorPanelErrorEl) {
+    return;
+  }
+  inspectorPanelErrorEl.textContent = message ? String(message) : "";
+}
+
+function setInspectorApplyStatus(message, cls = "") {
+  if (!inspectorApplyStatusEl) {
+    return;
+  }
+  inspectorApplyStatusEl.className = `inspectorApplyStatus ${cls}`.trim();
+  inspectorApplyStatusEl.textContent = String(message || "Inspector ready.");
 }
 
 function toFinite(value, fallback = 0) {
@@ -183,6 +236,19 @@ function setEditorMode(mode) {
   }
 }
 
+function setSidebarCollapsed(collapsed) {
+  const isCollapsed = Boolean(collapsed);
+  if (!layoutRoot || !toggleSidebarBtn) {
+    return;
+  }
+  layoutRoot.classList.toggle("sidebarCollapsed", isCollapsed);
+  toggleSidebarBtn.textContent = isCollapsed ? "Show controls" : "Hide controls";
+  toggleSidebarBtn.setAttribute("aria-pressed", isCollapsed ? "true" : "false");
+  if (visualView) {
+    requestAnimationFrame(() => visualView.resize());
+  }
+}
+
 function labelMorphMode(mode) {
   if (mode === "authored") return "authored";
   if (mode === "random") return "random";
@@ -207,6 +273,9 @@ async function refreshModeStatus() {
 function setGenomeState(genome) {
   state.currentGenome = deepCloneJson(genome);
   genomeEditor.value = JSON.stringify(state.currentGenome, null, 2);
+  state.inspectorError = null;
+  setInspectorPanelError("");
+  setInspectorApplyStatus("Genome loaded into editor.", "ok");
 }
 
 function findSelectionEntity(model, selection) {
@@ -233,6 +302,15 @@ function setSelection(selection, source = "app") {
   }
   const changed = selectionToken(state.selection) !== selectionToken(nextSelection);
   state.selection = nextSelection;
+  if (changed) {
+    state.inspectorError = null;
+    setInspectorPanelError("");
+    if (nextSelection) {
+      setInspectorApplyStatus("Editing live: changes apply immediately.", "ok");
+    } else {
+      setInspectorApplyStatus("Selection required for editing.", "warn");
+    }
+  }
   if (visualView) {
     visualView.setSelection(state.selection);
   }
@@ -256,7 +334,8 @@ function syncSelectionToModel() {
   }
 }
 
-function rebuildVisualFromCurrentGenome() {
+function rebuildVisualFromCurrentGenome(options = {}) {
+  const shouldFitCamera = options.fitCamera !== false;
   if (!visualView) {
     return;
   }
@@ -264,9 +343,10 @@ function rebuildVisualFromCurrentGenome() {
     visualInfo.textContent = "No genome loaded.";
     state.visualModel = null;
     setSelection(null);
+    setInspectorApplyStatus("Load a genome to edit.", "warn");
     return;
   }
-  state.visualModel = visualView.rebuild(state.currentGenome);
+  state.visualModel = visualView.rebuild(state.currentGenome, { fitCamera: shouldFitCamera });
   syncSelectionToModel();
   setSelection(state.selection);
 }
@@ -336,42 +416,86 @@ function renderOutliner() {
     outlinerList.appendChild(button);
   };
 
-  addSection(`Graph Nodes (${model.nodes.length})`);
+  const nodeByIndex = new Map(model.nodes.map((node) => [node.nodeIndex, node]));
+  const jointByChildPart = new Map(model.joints.map((joint) => [joint.childPartId, joint]));
+  const childrenByParentPart = new Map();
+  for (const part of model.parts) {
+    const parentKey = part.parentPartId || "__root__";
+    if (!childrenByParentPart.has(parentKey)) {
+      childrenByParentPart.set(parentKey, []);
+    }
+    childrenByParentPart.get(parentKey).push(part);
+  }
+  for (const list of childrenByParentPart.values()) {
+    list.sort((a, b) => a.expandedIndex - b.expandedIndex);
+  }
+  const firstPartForNode = new Map();
   for (const node of model.nodes) {
-    const brainNeurons = asArray(node.brain?.neurons).length;
-    addItem({
-      kind: "node",
-      id: node.id,
-      label: `Node ${node.nodeIndex}`,
-      details: `${node.partIds.length} part instances | ${node.edgeCount} edges | ${brainNeurons} local neurons`,
-      depth: 0,
-      searchText: `node ${node.nodeIndex}`,
-    });
+    if (node.partIds.length > 0) {
+      firstPartForNode.set(node.nodeIndex, node.partIds[0]);
+    }
   }
 
-  addSection(`Expanded Parts (${model.parts.length})`);
-  for (const part of model.parts) {
-    const parentText = part.parentPartId ? `parent ${part.parentPartId}` : "root";
+  addSection(`Creature Hierarchy (${model.parts.length} parts, ${model.joints.length} joints)`);
+  const roots = childrenByParentPart.get("__root__") || [];
+  const renderPartSubtree = (part, depth) => {
+    const node = nodeByIndex.get(part.nodeIndex);
     addItem({
       kind: "part",
       id: part.id,
-      label: `${part.id} (node ${part.nodeIndex})`,
-      details: `${parentText} | size ${fixed(part.size[0], 2)} x ${fixed(part.size[1], 2)} x ${fixed(part.size[2], 2)}`,
-      depth: Math.max(0, part.depth || 0),
-      searchText: `part node ${part.nodeIndex} ${parentText}`,
+      label: `${part.id}`,
+      details: `node ${part.nodeIndex} | size ${fixed(part.size[0], 2)} x ${fixed(part.size[1], 2)} x ${fixed(part.size[2], 2)}`,
+      depth,
+      searchText: `part node ${part.nodeIndex} expanded ${part.expandedIndex}`,
     });
+
+    if (node && firstPartForNode.get(part.nodeIndex) === part.id) {
+      const brainNeurons = asArray(node.brain?.neurons).length;
+      addItem({
+        kind: "node",
+        id: node.id,
+        label: `template node ${node.nodeIndex}`,
+        details: `${node.partIds.length} part instances | ${node.edgeCount} edges | ${brainNeurons} local neurons`,
+        depth: depth + 1,
+        searchText: `node ${node.nodeIndex} template ${node.partIds.join(" ")}`,
+      });
+    }
+
+    const children = childrenByParentPart.get(part.id) || [];
+    for (const child of children) {
+      const joint = jointByChildPart.get(child.id);
+      if (joint) {
+        addItem({
+          kind: "joint",
+          id: joint.id,
+          label: `${joint.id} (${joint.jointType})`,
+          details: `${joint.parentPartId} -> ${joint.childPartId}`,
+          depth: depth + 1,
+          searchText: `joint ${joint.jointType} ${joint.parentPartId} ${joint.childPartId}`,
+        });
+      }
+      renderPartSubtree(child, depth + 2);
+    }
+  };
+
+  for (const rootPart of roots) {
+    renderPartSubtree(rootPart, 0);
   }
 
-  addSection(`Joints (${model.joints.length})`);
-  for (const joint of model.joints) {
-    addItem({
-      kind: "joint",
-      id: joint.id,
-      label: `${joint.id} (${joint.jointType})`,
-      details: `${joint.parentPartId} -> ${joint.childPartId}`,
-      depth: 0,
-      searchText: `joint ${joint.jointType} ${joint.parentPartId} ${joint.childPartId}`,
-    });
+  const unusedNodes = model.nodes.filter((node) => node.partIds.length === 0);
+  if (unusedNodes.length > 0) {
+    addSection(`Unused Node Templates (${unusedNodes.length})`);
+    for (const node of unusedNodes) {
+      const brainNeurons = asArray(node.brain?.neurons).length;
+      addItem({
+        kind: "node",
+        id: node.id,
+        label: `template node ${node.nodeIndex}`,
+        details: `0 part instances | ${node.edgeCount} edges | ${brainNeurons} local neurons`,
+        depth: 1,
+        searchText: `unused node ${node.nodeIndex}`,
+      });
+    }
   }
 
   if (!rendered) {
@@ -393,6 +517,565 @@ function appendField(container, key, value) {
   container.appendChild(row);
 }
 
+function hasOwn(target, key) {
+  return Object.prototype.hasOwnProperty.call(target || {}, key);
+}
+
+function graphNodesFromState() {
+  return asArray(state.currentGenome?.graph?.nodes);
+}
+
+function getNodeGene(nodeIndex) {
+  const nodes = graphNodesFromState();
+  return nodes[nodeIndex] || null;
+}
+
+function getEdgeGeneByRef(edgeRef) {
+  if (!edgeRef || !Number.isInteger(edgeRef.fromNodeIndex) || !Number.isInteger(edgeRef.edgeIndex)) {
+    return null;
+  }
+  const parentNode = getNodeGene(edgeRef.fromNodeIndex);
+  const edges = asArray(parentNode?.edges);
+  return edges[edgeRef.edgeIndex] || null;
+}
+
+function getPartMass(partGene) {
+  if (!partGene || typeof partGene !== "object") {
+    return 0;
+  }
+  if (Number.isFinite(Number(partGene.mass))) {
+    return toFinite(partGene.mass, 0);
+  }
+  if (Number.isFinite(Number(partGene.m))) {
+    return toFinite(partGene.m, 0);
+  }
+  return 0;
+}
+
+function setPartMass(partGene, value) {
+  if (!partGene || typeof partGene !== "object") {
+    return;
+  }
+  if (hasOwn(partGene, "mass") || !hasOwn(partGene, "m")) {
+    partGene.mass = value;
+  } else {
+    partGene.m = value;
+  }
+}
+
+function getEdgeStiffness(edgeGene) {
+  if (!edgeGene || typeof edgeGene !== "object") {
+    return 0;
+  }
+  if (Number.isFinite(Number(edgeGene.jointStiffness))) {
+    return toFinite(edgeGene.jointStiffness, 0);
+  }
+  if (Number.isFinite(Number(edgeGene.stiffness))) {
+    return toFinite(edgeGene.stiffness, 0);
+  }
+  return 0;
+}
+
+function setEdgeStiffness(edgeGene, value) {
+  if (!edgeGene || typeof edgeGene !== "object") {
+    return;
+  }
+  if (hasOwn(edgeGene, "jointStiffness") || !hasOwn(edgeGene, "stiffness")) {
+    edgeGene.jointStiffness = value;
+  } else {
+    edgeGene.stiffness = value;
+  }
+}
+
+function getEdgeLimit(edgeGene, axis) {
+  if (!edgeGene || typeof edgeGene !== "object") {
+    return 0;
+  }
+  const suffix = String(axis || "").toUpperCase();
+  const limitKey = `limit${suffix}`;
+  const maxKey = `jointLimitMax${suffix}`;
+  const minKey = `jointLimitMin${suffix}`;
+  if (Number.isFinite(Number(edgeGene[limitKey]))) {
+    return toFinite(edgeGene[limitKey], 0);
+  }
+  if (Number.isFinite(Number(edgeGene[maxKey]))) {
+    return Math.abs(toFinite(edgeGene[maxKey], 0));
+  }
+  if (Number.isFinite(Number(edgeGene[minKey]))) {
+    return Math.abs(toFinite(edgeGene[minKey], 0));
+  }
+  return 0;
+}
+
+function setEdgeLimit(edgeGene, axis, value) {
+  if (!edgeGene || typeof edgeGene !== "object") {
+    return;
+  }
+  const suffix = String(axis || "").toUpperCase();
+  const limitKey = `limit${suffix}`;
+  const maxKey = `jointLimitMax${suffix}`;
+  const minKey = `jointLimitMin${suffix}`;
+  if (hasOwn(edgeGene, limitKey) || (!hasOwn(edgeGene, maxKey) && !hasOwn(edgeGene, minKey))) {
+    edgeGene[limitKey] = value;
+    return;
+  }
+  if (hasOwn(edgeGene, maxKey)) {
+    edgeGene[maxKey] = value;
+  }
+  if (hasOwn(edgeGene, minKey)) {
+    edgeGene[minKey] = -value;
+  }
+}
+
+function setInspectorFieldError(selection, field, message) {
+  state.inspectorError = {
+    token: selectionToken(selection),
+    field,
+    message: String(message || "Invalid value."),
+  };
+  setInspectorPanelError(state.inspectorError.message);
+  setInspectorApplyStatus("Edit rejected.", "err");
+}
+
+function clearInspectorFieldError(selection, field) {
+  const current = state.inspectorError;
+  if (!current) {
+    return;
+  }
+  const token = selectionToken(selection);
+  if (current.token !== token) {
+    return;
+  }
+  if (field && current.field !== field) {
+    return;
+  }
+  state.inspectorError = null;
+  setInspectorPanelError("");
+}
+
+function inspectorFieldError(selection, field) {
+  const current = state.inspectorError;
+  if (!current) {
+    return "";
+  }
+  if (current.token !== selectionToken(selection)) {
+    return "";
+  }
+  if (current.field !== field) {
+    return "";
+  }
+  return current.message || "";
+}
+
+function parseBooleanValue(rawValue) {
+  if (typeof rawValue === "boolean") {
+    return { ok: true, value: rawValue, clamped: false };
+  }
+  const text = String(rawValue ?? "").trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(text)) {
+    return { ok: true, value: true, clamped: false };
+  }
+  if (["false", "0", "no", "off"].includes(text)) {
+    return { ok: true, value: false, clamped: false };
+  }
+  return { ok: false, error: "Expected true or false." };
+}
+
+function validateFieldValue(field, rawValue) {
+  const schema = FIELD_SCHEMAS[field];
+  if (!schema) {
+    return { ok: false, error: "Unsupported inspector field." };
+  }
+  if (schema.type === "bool") {
+    return parseBooleanValue(rawValue);
+  }
+  if (schema.type === "enum") {
+    const valueText = String(rawValue ?? "").trim().toLowerCase();
+    const normalized = schema.options
+      .find((option) => String(option).toLowerCase() === valueText);
+    if (!normalized) {
+      return { ok: false, error: `Expected one of: ${schema.options.join(", ")}.` };
+    }
+    return { ok: true, value: normalized, clamped: false };
+  }
+  if (schema.type === "int") {
+    const text = String(rawValue ?? "").trim();
+    if (!/^-?\d+$/.test(text)) {
+      return { ok: false, error: "Expected an integer." };
+    }
+    const value = Number(text);
+    if (!Number.isFinite(value)) {
+      return { ok: false, error: "Expected a finite integer." };
+    }
+    const min = Number.isFinite(schema.min) ? schema.min : Number.MIN_SAFE_INTEGER;
+    const max = Number.isFinite(schema.max) ? schema.max : Number.MAX_SAFE_INTEGER;
+    const clamped = clampInt(value, min, max);
+    return { ok: true, value: clamped, clamped: clamped !== value };
+  }
+  if (schema.type === "number") {
+    const text = String(rawValue ?? "").trim();
+    if (!text.length) {
+      return { ok: false, error: "Expected a numeric value." };
+    }
+    const value = Number(text);
+    if (!Number.isFinite(value)) {
+      return { ok: false, error: "Expected a finite number." };
+    }
+    const min = Number.isFinite(schema.min) ? schema.min : -Number.MAX_VALUE;
+    const max = Number.isFinite(schema.max) ? schema.max : Number.MAX_VALUE;
+    const clamped = clamp(value, min, max);
+    return { ok: true, value: clamped, clamped: clamped !== value };
+  }
+  return { ok: false, error: "Unsupported field type." };
+}
+
+function resolveFieldMutation(selection, entity, field) {
+  if (!selection || !entity) {
+    return null;
+  }
+  const nodePartFieldMap = {
+    "node.part.w": "w",
+    "node.part.h": "h",
+    "node.part.d": "d",
+    "part.part.w": "w",
+    "part.part.h": "h",
+    "part.part.d": "d",
+  };
+  const partField = nodePartFieldMap[field];
+  if (partField) {
+    const nodeGene = getNodeGene(entity.nodeIndex);
+    if (!nodeGene?.part || typeof nodeGene.part !== "object") {
+      return null;
+    }
+    return (value) => {
+      nodeGene.part[partField] = value;
+    };
+  }
+  if (field === "node.part.mass" || field === "part.part.mass") {
+    const nodeGene = getNodeGene(entity.nodeIndex);
+    if (!nodeGene?.part || typeof nodeGene.part !== "object") {
+      return null;
+    }
+    return (value) => {
+      setPartMass(nodeGene.part, value);
+    };
+  }
+  const nodeEffectorMap = {
+    "node.brain.effectorX.gain": "effectorX",
+    "node.brain.effectorY.gain": "effectorY",
+    "node.brain.effectorZ.gain": "effectorZ",
+  };
+  const effectorKey = nodeEffectorMap[field];
+  if (effectorKey) {
+    const nodeGene = getNodeGene(entity.nodeIndex);
+    const effector = nodeGene?.brain?.[effectorKey];
+    if (!effector || typeof effector !== "object") {
+      return null;
+    }
+    return (value) => {
+      effector.gain = value;
+    };
+  }
+  if (field.startsWith("part.edge.")) {
+    const edgeGene = getEdgeGeneByRef(entity.incomingEdgeRef);
+    if (!edgeGene || typeof edgeGene !== "object") {
+      return null;
+    }
+    const key = field.slice("part.edge.".length);
+    return (value) => {
+      edgeGene[key] = value;
+    };
+  }
+  if (field.startsWith("joint.edge.")) {
+    const edgeGene = getEdgeGeneByRef(entity.edgeRef);
+    if (!edgeGene || typeof edgeGene !== "object") {
+      return null;
+    }
+    if (field === "joint.edge.stiffness") {
+      return (value) => {
+        setEdgeStiffness(edgeGene, value);
+      };
+    }
+    if (field === "joint.edge.limitX") {
+      return (value) => {
+        setEdgeLimit(edgeGene, "X", value);
+      };
+    }
+    if (field === "joint.edge.limitY") {
+      return (value) => {
+        setEdgeLimit(edgeGene, "Y", value);
+      };
+    }
+    if (field === "joint.edge.limitZ") {
+      return (value) => {
+        setEdgeLimit(edgeGene, "Z", value);
+      };
+    }
+    const key = field.slice("joint.edge.".length);
+    return (value) => {
+      edgeGene[key] = value;
+    };
+  }
+  return null;
+}
+
+function applyFieldEdit(selection, field, rawValue) {
+  const validSelection = selection && selection.kind && selection.id
+    ? { kind: selection.kind, id: selection.id }
+    : state.selection;
+  if (!state.currentGenome || !validSelection) {
+    setInspectorApplyStatus("No active selection for edit.", "warn");
+    return false;
+  }
+  const model = state.visualModel;
+  const entity = findSelectionEntity(model, validSelection);
+  if (!entity) {
+    setInspectorFieldError(validSelection, field, "Selection is stale.");
+    renderInspector();
+    return false;
+  }
+  const parsed = validateFieldValue(field, rawValue);
+  if (!parsed.ok) {
+    setInspectorFieldError(validSelection, field, parsed.error || "Invalid value.");
+    renderInspector();
+    return false;
+  }
+  const mutate = resolveFieldMutation(validSelection, entity, field);
+  if (!mutate) {
+    setInspectorFieldError(validSelection, field, "Field is unavailable for this selection.");
+    renderInspector();
+    return false;
+  }
+
+  mutate(parsed.value);
+  clearInspectorFieldError(validSelection, field);
+  genomeEditor.value = JSON.stringify(state.currentGenome, null, 2);
+  rebuildVisualFromCurrentGenome({ fitCamera: false });
+  if (validSelection) {
+    setSelection(validSelection);
+  }
+  if (parsed.clamped) {
+    setInspectorApplyStatus(`Updated ${field} (clamped).`, "warn");
+    setStatus(`Updated ${field} with clamp.`, "warn");
+  } else {
+    setInspectorApplyStatus(`Updated ${field}.`, "ok");
+    setStatus(`Updated ${field}.`, "ok");
+  }
+  return true;
+}
+
+function fieldClampHint(field) {
+  const schema = FIELD_SCHEMAS[field];
+  if (!schema) {
+    return "";
+  }
+  if (schema.type === "number" || schema.type === "int") {
+    if (Number.isFinite(schema.min) && Number.isFinite(schema.max)) {
+      return `${schema.type} [${schema.min} .. ${schema.max}]`;
+    }
+  }
+  if (schema.type === "enum") {
+    return `enum: ${schema.options.join(" | ")}`;
+  }
+  if (schema.type === "bool") {
+    return "bool: true | false";
+  }
+  return "";
+}
+
+function editableFieldInput(selection, field, value) {
+  const schema = FIELD_SCHEMAS[field];
+  if (!schema) {
+    return null;
+  }
+  if (schema.type === "enum") {
+    const select = document.createElement("select");
+    for (const optionValue of schema.options) {
+      const option = document.createElement("option");
+      option.value = String(optionValue);
+      option.textContent = String(optionValue);
+      select.appendChild(option);
+    }
+    select.value = String(value ?? schema.options[0] ?? "");
+    select.addEventListener("change", () => {
+      applyFieldEdit(selection, field, select.value);
+    });
+    return select;
+  }
+  if (schema.type === "bool") {
+    const wrapper = document.createElement("label");
+    wrapper.className = "inspectorCheckboxRow";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(value);
+    const text = document.createElement("span");
+    text.textContent = checkbox.checked ? "true" : "false";
+    checkbox.addEventListener("change", () => {
+      text.textContent = checkbox.checked ? "true" : "false";
+      applyFieldEdit(selection, field, checkbox.checked);
+    });
+    wrapper.appendChild(checkbox);
+    wrapper.appendChild(text);
+    return wrapper;
+  }
+  const input = document.createElement("input");
+  input.type = "number";
+  input.value = Number.isFinite(Number(value)) ? String(value) : "";
+  input.placeholder = fieldClampHint(field);
+  if (Number.isFinite(schema.step)) {
+    input.step = String(schema.step);
+  }
+  if (Number.isFinite(schema.min)) {
+    input.min = String(schema.min);
+  }
+  if (Number.isFinite(schema.max)) {
+    input.max = String(schema.max);
+  }
+  const commit = () => {
+    applyFieldEdit(selection, field, input.value);
+  };
+  input.addEventListener("change", commit);
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    }
+  });
+  return input;
+}
+
+function appendEditableField(container, selection, key, field, value) {
+  const row = document.createElement("div");
+  row.className = "fieldRow inspectorFieldRow";
+  const keyEl = document.createElement("div");
+  keyEl.className = "k inspectorFieldLabel";
+  const keyText = document.createElement("div");
+  keyText.textContent = key;
+  keyEl.appendChild(keyText);
+  const clampHint = fieldClampHint(field);
+  if (clampHint) {
+    const hint = document.createElement("div");
+    hint.className = "inspectorFieldHint";
+    hint.textContent = clampHint;
+    keyEl.appendChild(hint);
+  }
+
+  const valEl = document.createElement("div");
+  valEl.className = "v inspectorFieldValue";
+  const controlWrap = document.createElement("div");
+  controlWrap.className = "inspectorFieldControl";
+  const input = editableFieldInput(selection, field, value);
+  if (input) {
+    controlWrap.appendChild(input);
+  } else {
+    controlWrap.textContent = String(value ?? "");
+  }
+  const inlineError = inspectorFieldError(selection, field);
+  if (inlineError) {
+    row.classList.add("invalid");
+    const errorEl = document.createElement("div");
+    errorEl.className = "inspectorFieldError";
+    errorEl.textContent = inlineError;
+    controlWrap.appendChild(errorEl);
+  }
+  valEl.appendChild(controlWrap);
+  row.appendChild(keyEl);
+  row.appendChild(valEl);
+  container.appendChild(row);
+}
+
+function renderNodeInspector(entity, selection) {
+  const nodeGene = getNodeGene(entity.nodeIndex) || {};
+  const partGene = nodeGene.part || {};
+  const brain = nodeGene.brain || {};
+  const effectorKeys = ["effectorX", "effectorY", "effectorZ"];
+  const effectorCount = effectorKeys.filter((key) => brain[key] && typeof brain[key] === "object").length;
+  appendField(inspectorContent, "node index", String(entity.nodeIndex));
+  appendField(inspectorContent, "part instances", String(entity.partIds.length));
+  appendField(inspectorContent, "edge genes", String(entity.edgeCount));
+  appendEditableField(inspectorContent, selection, "part w", "node.part.w", toFinite(partGene.w, 0.7));
+  appendEditableField(inspectorContent, selection, "part h", "node.part.h", toFinite(partGene.h, 1.0));
+  appendEditableField(inspectorContent, selection, "part d", "node.part.d", toFinite(partGene.d, 0.7));
+  appendEditableField(inspectorContent, selection, "part mass", "node.part.mass", getPartMass(partGene));
+  appendField(inspectorContent, "part ids", entity.partIds.join(", ") || "none");
+  appendField(inspectorContent, "brain neurons (read-only)", String(asArray(brain.neurons).length));
+  appendField(inspectorContent, "brain effectors", String(effectorCount));
+  if (brain.effectorX && typeof brain.effectorX === "object") {
+    appendEditableField(inspectorContent, selection, "effectorX gain", "node.brain.effectorX.gain", toFinite(brain.effectorX.gain, 1.0));
+  } else {
+    appendField(inspectorContent, "effectorX gain", "n/a");
+  }
+  if (brain.effectorY && typeof brain.effectorY === "object") {
+    appendEditableField(inspectorContent, selection, "effectorY gain", "node.brain.effectorY.gain", toFinite(brain.effectorY.gain, 1.0));
+  } else {
+    appendField(inspectorContent, "effectorY gain", "n/a");
+  }
+  if (brain.effectorZ && typeof brain.effectorZ === "object") {
+    appendEditableField(inspectorContent, selection, "effectorZ gain", "node.brain.effectorZ.gain", toFinite(brain.effectorZ.gain, 1.0));
+  } else {
+    appendField(inspectorContent, "effectorZ gain", "n/a");
+  }
+}
+
+function renderPartInspector(entity, selection) {
+  const nodeGene = getNodeGene(entity.nodeIndex) || {};
+  const partGene = nodeGene.part || {};
+  appendField(inspectorContent, "part id", entity.id);
+  appendField(inspectorContent, "expanded index", String(entity.expandedIndex));
+  appendField(inspectorContent, "node index", String(entity.nodeIndex));
+  appendField(inspectorContent, "parent", entity.parentPartId || "none (root)");
+  appendField(inspectorContent, "depth", String(entity.depth || 0));
+  appendField(inspectorContent, "expanded size w/h/d", `${fixed(entity.size[0], 3)} x ${fixed(entity.size[1], 3)} x ${fixed(entity.size[2], 3)}`);
+  appendField(inspectorContent, "center", formatVec3(entity.center, 3));
+  appendEditableField(inspectorContent, selection, "node part w", "part.part.w", toFinite(partGene.w, 0.7));
+  appendEditableField(inspectorContent, selection, "node part h", "part.part.h", toFinite(partGene.h, 1.0));
+  appendEditableField(inspectorContent, selection, "node part d", "part.part.d", toFinite(partGene.d, 0.7));
+  appendEditableField(inspectorContent, selection, "node part mass", "part.part.mass", getPartMass(partGene));
+
+  if (!entity.incomingEdgeRef) {
+    appendField(inspectorContent, "incoming edge", "none (root)");
+    return;
+  }
+  const edgeGene = getEdgeGeneByRef(entity.incomingEdgeRef);
+  if (!edgeGene) {
+    appendField(inspectorContent, "incoming edge", "unavailable");
+    return;
+  }
+  appendField(inspectorContent, "incoming joint", String(edgeGene.jointType || "hinge"));
+  appendEditableField(inspectorContent, selection, "incoming scale", "part.edge.scale", toFinite(edgeGene.scale, 1));
+  appendEditableField(inspectorContent, selection, "anchor X", "part.edge.anchorX", toFinite(edgeGene.anchorX, 0));
+  appendEditableField(inspectorContent, selection, "anchor Y", "part.edge.anchorY", toFinite(edgeGene.anchorY, 0));
+  appendEditableField(inspectorContent, selection, "anchor Z", "part.edge.anchorZ", toFinite(edgeGene.anchorZ, 0));
+  appendEditableField(inspectorContent, selection, "dir X", "part.edge.dirX", toFinite(edgeGene.dirX, 0));
+  appendEditableField(inspectorContent, selection, "dir Y", "part.edge.dirY", toFinite(edgeGene.dirY, -1));
+  appendEditableField(inspectorContent, selection, "dir Z", "part.edge.dirZ", toFinite(edgeGene.dirZ, 0));
+  appendEditableField(inspectorContent, selection, "axis Y", "part.edge.axisY", toFinite(edgeGene.axisY, 0));
+  appendEditableField(inspectorContent, selection, "axis Z", "part.edge.axisZ", toFinite(edgeGene.axisZ, 0));
+}
+
+function renderJointInspector(entity, selection) {
+  appendField(inspectorContent, "joint id", entity.id);
+  appendField(inspectorContent, "parent part", entity.parentPartId);
+  appendField(inspectorContent, "child part", entity.childPartId);
+  appendField(inspectorContent, "anchor world", formatVec3(entity.anchorWorld, 3));
+  appendField(inspectorContent, "axis world", formatVec3(entity.axisWorld, 3));
+  const edgeGene = getEdgeGeneByRef(entity.edgeRef);
+  if (!edgeGene) {
+    appendField(inspectorContent, "joint edge gene", "unavailable");
+    return;
+  }
+  appendEditableField(inspectorContent, selection, "joint type", "joint.edge.jointType", String(edgeGene.jointType || "hinge"));
+  appendEditableField(inspectorContent, selection, "limit X", "joint.edge.limitX", getEdgeLimit(edgeGene, "X"));
+  appendEditableField(inspectorContent, selection, "limit Y", "joint.edge.limitY", getEdgeLimit(edgeGene, "Y"));
+  appendEditableField(inspectorContent, selection, "limit Z", "joint.edge.limitZ", getEdgeLimit(edgeGene, "Z"));
+  appendEditableField(inspectorContent, selection, "motor strength", "joint.edge.motorStrength", toFinite(edgeGene.motorStrength, 1.0));
+  appendEditableField(inspectorContent, selection, "stiffness", "joint.edge.stiffness", getEdgeStiffness(edgeGene));
+  appendEditableField(inspectorContent, selection, "recursive limit", "joint.edge.recursiveLimit", clampInt(edgeGene.recursiveLimit ?? 1, 1, 5));
+  appendEditableField(inspectorContent, selection, "terminal only", "joint.edge.terminalOnly", Boolean(edgeGene.terminalOnly));
+  appendEditableField(inspectorContent, selection, "reflect X", "joint.edge.reflectX", Boolean(edgeGene.reflectX));
+}
+
 function renderInspector() {
   inspectorContent.innerHTML = "";
   const model = state.visualModel;
@@ -401,12 +1084,16 @@ function renderInspector() {
   if (!model) {
     selectionBreadcrumb.textContent = "Nothing selected.";
     appendEmpty(inspectorContent, "No model loaded.");
+    setInspectorPanelError("");
+    setInspectorApplyStatus("Load a genome to edit.", "warn");
     return;
   }
 
   if (!selection) {
     selectionBreadcrumb.textContent = "Nothing selected.";
     appendEmpty(inspectorContent, "Select a node, part, or joint in the viewport or outliner.");
+    setInspectorPanelError("");
+    setInspectorApplyStatus("Selection required for editing.", "warn");
     return;
   }
 
@@ -414,55 +1101,24 @@ function renderInspector() {
   if (!entity) {
     selectionBreadcrumb.textContent = "Nothing selected.";
     appendEmpty(inspectorContent, "Selection is stale after rebuild.");
+    setInspectorPanelError("");
+    setInspectorApplyStatus("Selection became stale after rebuild.", "warn");
     return;
   }
 
   selectionBreadcrumb.textContent = `Selected: ${selection.kind} / ${selection.id}`;
+  setInspectorPanelError(inspectorFieldError(selection, state.inspectorError?.field || ""));
 
   if (selection.kind === "node") {
-    appendField(inspectorContent, "node index", String(entity.nodeIndex));
-    appendField(inspectorContent, "part instances", String(entity.partIds.length));
-    appendField(inspectorContent, "edge genes", String(entity.edgeCount));
-    appendField(inspectorContent, "part dims", `${fixed(entity.part?.w, 3)} x ${fixed(entity.part?.h, 3)} x ${fixed(entity.part?.d, 3)}`);
-    appendField(inspectorContent, "part mass", fixed(toFinite(entity.part?.mass, entity.part?.m), 3));
-    appendField(inspectorContent, "part ids", entity.partIds.join(", ") || "none");
-    appendField(inspectorContent, "brain neurons", String(asArray(entity.brain?.neurons).length));
-    appendField(inspectorContent, "brain effectors", String(asArray(entity.brain?.effectors).length));
+    renderNodeInspector(entity, selection);
     return;
   }
-
   if (selection.kind === "part") {
-    appendField(inspectorContent, "part id", entity.id);
-    appendField(inspectorContent, "expanded index", String(entity.expandedIndex));
-    appendField(inspectorContent, "node index", String(entity.nodeIndex));
-    appendField(inspectorContent, "parent", entity.parentPartId || "none (root)");
-    appendField(inspectorContent, "depth", String(entity.depth || 0));
-    appendField(inspectorContent, "size w/h/d", `${fixed(entity.size[0], 3)} x ${fixed(entity.size[1], 3)} x ${fixed(entity.size[2], 3)}`);
-    appendField(inspectorContent, "center", formatVec3(entity.center, 3));
-    if (entity.incomingEdge) {
-      appendField(inspectorContent, "incoming joint", String(entity.incomingEdge.jointType || "hinge"));
-      appendField(inspectorContent, "incoming scale", fixed(toFinite(entity.incomingEdge.scale, 1), 3));
-      appendField(inspectorContent, "anchor", `[${fixed(toFinite(entity.incomingEdge.anchorX, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.anchorY, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.anchorZ, 0), 3)}]`);
-      appendField(inspectorContent, "growth dir", `[${fixed(toFinite(entity.incomingEdge.dirX, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.dirY, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.dirZ, 0), 3)}]`);
-      appendField(inspectorContent, "axis yz", `[${fixed(toFinite(entity.incomingEdge.axisY, 0), 3)}, ${fixed(toFinite(entity.incomingEdge.axisZ, 0), 3)}]`);
-    }
+    renderPartInspector(entity, selection);
     return;
   }
-
   if (selection.kind === "joint") {
-    appendField(inspectorContent, "joint id", entity.id);
-    appendField(inspectorContent, "type", entity.jointType);
-    appendField(inspectorContent, "parent part", entity.parentPartId);
-    appendField(inspectorContent, "child part", entity.childPartId);
-    appendField(inspectorContent, "anchor world", formatVec3(entity.anchorWorld, 3));
-    appendField(inspectorContent, "axis world", formatVec3(entity.axisWorld, 3));
-    appendField(inspectorContent, "recursive limit", String(clampInt(entity.edge?.recursiveLimit ?? 1, 1, 9999)));
-    appendField(inspectorContent, "terminal only", String(Boolean(entity.edge?.terminalOnly)));
-    appendField(inspectorContent, "reflect x", String(Boolean(entity.edge?.reflectX)));
-    appendField(inspectorContent, "motor strength", fixed(toFinite(entity.edge?.motorStrength, 0), 3));
-    appendField(inspectorContent, "stiffness", fixed(toFinite(entity.edge?.stiffness, 0), 3));
-    appendField(inspectorContent, "joint limit min xyz", `[${fixed(toFinite(entity.edge?.jointLimitMinX, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMinY, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMinZ, 0), 3)}]`);
-    appendField(inspectorContent, "joint limit max xyz", `[${fixed(toFinite(entity.edge?.jointLimitMaxX, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMaxY, 0), 3)}, ${fixed(toFinite(entity.edge?.jointLimitMaxZ, 0), 3)}]`);
+    renderJointInspector(entity, selection);
   }
 }
 
@@ -470,7 +1126,7 @@ function rebuildVisualFromEditor() {
   try {
     const genome = parseGenomeEditor();
     setGenomeState(genome);
-    rebuildVisualFromCurrentGenome();
+    rebuildVisualFromCurrentGenome({ fitCamera: false });
     setStatus("Rebuilt visual from current JSON.", "ok");
   } catch (error) {
     setStatus(`Cannot rebuild visual: ${error.message}`, "err");
@@ -638,11 +1294,17 @@ function scaledPartSize(part, scale = 1) {
 function expandGraph(graph) {
   const nodes = asArray(graph?.nodes);
   if (!nodes.length) {
-    return [{ nodeIndex: 0, parentIndex: null, incomingEdge: null }];
+    return [{ nodeIndex: 0, parentIndex: null, incomingEdge: null, incomingEdgeRef: null }];
   }
   const root = clampInt(graph?.root ?? 0, 0, nodes.length - 1);
   const maxParts = clampInt(graph?.maxParts ?? 32, 1, MAX_GRAPH_PARTS);
-  const expanded = [{ nodeIndex: root, parentIndex: null, incomingEdge: null, depth: 0 }];
+  const expanded = [{
+    nodeIndex: root,
+    parentIndex: null,
+    incomingEdge: null,
+    incomingEdgeRef: null,
+    depth: 0,
+  }];
   const queue = [{ expandedIndex: 0, nodeIndex: root, ancestry: [root], depth: 0 }];
   while (queue.length && expanded.length < maxParts) {
     const current = queue.shift();
@@ -651,7 +1313,8 @@ function expandGraph(graph) {
       continue;
     }
     const edges = asArray(node.edges).slice(0, MAX_GRAPH_EDGES_PER_NODE);
-    for (const edge of edges) {
+    for (let edgeIndex = 0; edgeIndex < edges.length; edgeIndex += 1) {
+      const edge = edges[edgeIndex];
       if (expanded.length >= maxParts) {
         break;
       }
@@ -676,6 +1339,7 @@ function expandGraph(graph) {
         nodeIndex: to,
         parentIndex: current.expandedIndex,
         incomingEdge: { ...edge },
+        incomingEdgeRef: { fromNodeIndex: current.nodeIndex, edgeIndex },
         depth: current.depth + 1,
       });
       queue.push({
@@ -695,6 +1359,7 @@ function expandGraph(graph) {
         nodeIndex: to,
         parentIndex: 0,
         incomingEdge: { ...firstEdge },
+        incomingEdgeRef: { fromNodeIndex: root, edgeIndex: 0 },
         depth: 1,
       });
     }
@@ -735,6 +1400,7 @@ function buildVisualModel(genome) {
     parentPartId: null,
     parentPartIndex: null,
     incomingEdge: null,
+    incomingEdgeRef: null,
     size: rootSize,
     center: new THREE.Vector3(0, rootSize[1] * 0.5, 0),
     quaternion: new THREE.Quaternion(),
@@ -788,6 +1454,9 @@ function buildVisualModel(genome) {
     const childPartIndex = parts.length;
     const childPartId = `part-${childPartIndex}`;
     const incomingEdge = { ...edge };
+    const incomingEdgeRef = expandedPart.incomingEdgeRef
+      ? { ...expandedPart.incomingEdgeRef }
+      : null;
     parts.push({
       id: childPartId,
       expandedIndex,
@@ -797,6 +1466,7 @@ function buildVisualModel(genome) {
       parentPartId: parent.id,
       parentPartIndex,
       incomingEdge,
+      incomingEdgeRef,
       size: childSize,
       center,
       quaternion: childRotation,
@@ -819,6 +1489,7 @@ function buildVisualModel(genome) {
       axisWorld,
       jointType: String(edge.jointType || "hinge"),
       edge: incomingEdge,
+      edgeRef: incomingEdgeRef,
     });
   }
 
@@ -1140,7 +1811,8 @@ class CreatorVisualView {
     this.focusBoundingBox(bounds);
   }
 
-  rebuild(genome) {
+  rebuild(genome, options = {}) {
+    const shouldFitCamera = options.fitCamera !== false;
     this.clearGroup(this.segmentGroup);
     this.clearGroup(this.jointGroup);
     this.selectionObjects.clear();
@@ -1150,7 +1822,9 @@ class CreatorVisualView {
     this.latestModel = model;
     if (!model.parts.length) {
       this.infoEl.textContent = "No graph nodes to render. Load a genome with graph nodes.";
-      this.fitCamera();
+      if (shouldFitCamera) {
+        this.fitCamera();
+      }
       return model;
     }
 
@@ -1237,7 +1911,9 @@ class CreatorVisualView {
     this.infoEl.textContent = `nodes: ${model.nodeCount} | expanded parts: ${model.parts.length} | joints: ${model.joints.length}
 Selection enabled: click viewport object or outliner row to inspect details.`;
     this.applySelectionHighlight();
-    this.fitCamera();
+    if (shouldFitCamera) {
+      this.fitCamera();
+    }
     return model;
   }
 }
@@ -1283,6 +1959,12 @@ showJsonBtn.addEventListener("click", () => {
 rebuildVisualBtn.addEventListener("click", () => {
   rebuildVisualFromEditor();
 });
+if (toggleSidebarBtn && layoutRoot) {
+  toggleSidebarBtn.addEventListener("click", () => {
+    const nextCollapsed = !layoutRoot.classList.contains("sidebarCollapsed");
+    setSidebarCollapsed(nextCollapsed);
+  });
+}
 outlinerSearch.addEventListener("input", () => {
   renderOutliner();
 });
@@ -1308,6 +1990,7 @@ const initialGenome = {
   },
 };
 setGenomeState(initialGenome);
+setSidebarCollapsed(false);
 setEditorMode("visual");
 rebuildVisualFromCurrentGenome();
 renderOutliner();
