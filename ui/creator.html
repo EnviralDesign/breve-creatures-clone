@@ -195,6 +195,76 @@
       color: var(--text);
     }
 
+    .rightCard {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .modeRow {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .modeButtons {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .modeButtons button.active {
+      border-color: color-mix(in srgb, var(--accent) 65%, #2b4430);
+      background: #1f3422;
+      color: #e8f7e7;
+    }
+
+    .editorPane {
+      display: none;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .editorPane.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    #visualPane {
+      gap: 8px;
+    }
+
+    #visualViewport {
+      flex: 1;
+      min-height: 0;
+      border: 1px solid #2a3832;
+      border-radius: 8px;
+      overflow: hidden;
+      background: radial-gradient(circle at 15% 20%, #182427, #0f171d 58%, #0c1217 100%);
+      position: relative;
+    }
+
+    #visualInfo {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+      white-space: pre-wrap;
+    }
+
+    #jsonPane h2 {
+      margin: 0 0 8px;
+    }
+
+    #genomeEditor {
+      flex: 1;
+      min-height: 0;
+    }
+
     @media (max-width: 1020px) {
       body {
         height: auto;
@@ -289,283 +359,37 @@
       <div id="status" class="status">Ready.</div>
       <div class="tiny">Launch directly with: <code>cargo run --release -- --creature your_id</code></div>
     </div>
-    <div class="card" style="display:flex; flex-direction:column; min-height:0; overflow:hidden;">
-      <h2>Genome JSON</h2>
-      <textarea id="genomeEditor" spellcheck="false" style="flex:1; min-height:0;"></textarea>
+    <div class="card rightCard">
+      <div class="modeRow">
+        <h2>Editor</h2>
+        <div class="modeButtons">
+          <button id="showVisualBtn" type="button" class="active">Visual</button>
+          <button id="showJsonBtn" type="button">JSON</button>
+          <button id="rebuildVisualBtn" type="button">Rebuild visual from JSON</button>
+        </div>
+      </div>
+      <div id="visualPane" class="editorPane active">
+        <div id="visualViewport"></div>
+        <div id="visualInfo">Visual mode ready. Load a genome and click "Rebuild visual from JSON" after edits.</div>
+      </div>
+      <div id="jsonPane" class="editorPane">
+        <h2>Genome JSON</h2>
+        <textarea id="genomeEditor" spellcheck="false"></textarea>
+      </div>
     </div>
   </div>
 
-  <script>
-    const backend = `${window.location.protocol}//${window.location.host}`;
-    const urls = {
-      currentGenome: `${backend}/api/evolution/genome/current`,
-      bestGenome: `${backend}/api/evolution/genome/best`,
-      control: `${backend}/api/evolution/control`,
-      evolutionState: `${backend}/api/evolution/state`,
-      creatureList: `${backend}/api/creatures`,
-      creatureSave: `${backend}/api/creatures/save`,
-      creatureGet: (id) => `${backend}/api/creatures/${encodeURIComponent(id)}`,
-    };
-
-    const statusEl = document.getElementById("status");
-    const genomeEditor = document.getElementById("genomeEditor");
-    const creatureIdInput = document.getElementById("creatureIdInput");
-    const notesInput = document.getElementById("notesInput");
-    const creatureList = document.getElementById("creatureList");
-    const modeStatus = document.getElementById("modeStatus");
-    const lockTopology = document.getElementById("lockTopology");
-    const lockJointTypes = document.getElementById("lockJointTypes");
-    const lockJointLimits = document.getElementById("lockJointLimits");
-    const lockSegmentDynamics = document.getElementById("lockSegmentDynamics");
-    const lockActuatorMechanics = document.getElementById("lockActuatorMechanics");
-    const lockControls = document.getElementById("lockControls");
-    const lockVisualHue = document.getElementById("lockVisualHue");
-    const presetGaitOnlyBtn = document.getElementById("presetGaitOnlyBtn");
-    const presetGaitAndLimitsBtn = document.getElementById("presetGaitAndLimitsBtn");
-
-    function setStatus(message, cls = "") {
-      statusEl.className = `status ${cls}`.trim();
-      statusEl.textContent = message;
-    }
-
-    function lockPayload() {
-      return {
-        lockTopology: Boolean(lockTopology.checked),
-        lockJointTypes: Boolean(lockJointTypes.checked),
-        lockJointLimits: Boolean(lockJointLimits.checked),
-        lockSegmentDynamics: Boolean(lockSegmentDynamics.checked),
-        lockActuatorMechanics: Boolean(lockActuatorMechanics.checked),
-        lockControls: Boolean(lockControls.checked),
-        lockVisualHue: Boolean(lockVisualHue.checked),
-      };
-    }
-
-    function applyLocks(locks) {
-      const src = locks || {};
-      lockTopology.checked = Boolean(src.lockTopology);
-      lockJointTypes.checked = Boolean(src.lockJointTypes);
-      lockJointLimits.checked = Boolean(src.lockJointLimits);
-      lockSegmentDynamics.checked = Boolean(src.lockSegmentDynamics);
-      lockActuatorMechanics.checked = src.lockActuatorMechanics === undefined
-        ? Boolean(src.lockSegmentDynamics)
-        : Boolean(src.lockActuatorMechanics);
-      lockControls.checked = Boolean(src.lockControls);
-      lockVisualHue.checked = Boolean(src.lockVisualHue);
-    }
-
-    function applyGaitOnlyPreset() {
-      lockTopology.checked = true;
-      lockJointTypes.checked = true;
-      lockJointLimits.checked = true;
-      lockSegmentDynamics.checked = true;
-      lockActuatorMechanics.checked = true;
-      lockControls.checked = false;
-      lockVisualHue.checked = true;
-      setStatus("Applied preset: morphology fixed, neural controller evolvable (gait/controller-only).", "ok");
-    }
-
-    function applyGaitAndLimitsPreset() {
-      lockTopology.checked = true;
-      lockJointTypes.checked = true;
-      lockJointLimits.checked = false;
-      lockSegmentDynamics.checked = true;
-      lockActuatorMechanics.checked = true;
-      lockControls.checked = false;
-      lockVisualHue.checked = true;
-      setStatus("Applied preset: morphology fixed, controller + joint limits evolvable.", "ok");
-    }
-
-    function parseGenomeEditor() {
-      const raw = genomeEditor.value.trim();
-      if (!raw) throw new Error("Genome JSON is empty.");
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") {
-        throw new Error("Genome JSON must be an object.");
-      }
-      return parsed;
-    }
-
-    async function fetchJson(url, init) {
-      const response = await fetch(url, init);
-      if (!response.ok) {
-        const message = await response.text().catch(() => "");
-        throw new Error(`${response.status} ${response.statusText}${message ? `: ${message}` : ""}`);
-      }
-      return await response.json();
-    }
-
-    function labelMorphMode(mode) {
-      if (mode === "authored") return "authored";
-      if (mode === "random") return "random";
-      return String(mode || "unknown");
-    }
-
-    async function refreshModeStatus() {
-      try {
-        const state = await fetchJson(urls.evolutionState);
-        const mode = labelMorphMode(state?.morphologyMode ?? state?.morphology_mode);
-        const authoredId = state?.authoredCreatureId ?? state?.authored_creature_id;
-        if (mode === "authored") {
-          modeStatus.textContent = `Current backend mode: authored (${authoredId || "no creature id"})`;
-        } else {
-          modeStatus.textContent = `Current backend mode: ${mode}`;
-        }
-      } catch (error) {
-        modeStatus.textContent = `Current backend mode: unavailable (${error.message})`;
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.1/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.1/examples/jsm/"
       }
     }
-
-    async function loadGenome(url, label) {
-      try {
-        const genome = await fetchJson(url);
-        genomeEditor.value = JSON.stringify(genome, null, 2);
-        setStatus(`Loaded ${label} genome.`, "ok");
-      } catch (error) {
-        setStatus(`Failed loading ${label} genome: ${error.message}`, "err");
-      }
-    }
-
-    async function refreshCreatureList(selectId) {
-      try {
-        const payload = await fetchJson(urls.creatureList);
-        const creatures = Array.isArray(payload?.creatures) ? payload.creatures : [];
-        creatureList.innerHTML = "";
-        for (const creature of creatures) {
-          const option = document.createElement("option");
-          option.value = creature.id;
-          option.textContent = creature.id;
-          creatureList.appendChild(option);
-        }
-        if (selectId) {
-          creatureList.value = selectId;
-        }
-        if (!creatureList.value && creatureList.options.length > 0) {
-          creatureList.selectedIndex = 0;
-        }
-      } catch (error) {
-        setStatus(`Failed refreshing creature list: ${error.message}`, "err");
-      }
-    }
-
-    async function saveCreature() {
-      const id = creatureIdInput.value.trim();
-      if (!id) {
-        setStatus("Creature id is required.", "warn");
-        return;
-      }
-      let genome;
-      try {
-        genome = parseGenomeEditor();
-      } catch (error) {
-        setStatus(error.message, "warn");
-        return;
-      }
-      try {
-        const payload = await fetchJson(urls.creatureSave, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id,
-            genome,
-            notes: notesInput.value || "",
-            locks: lockPayload(),
-          }),
-        });
-        creatureIdInput.value = payload.id || id;
-        await refreshCreatureList(payload.id || id);
-        setStatus(`Saved creature '${payload.id}'.`, "ok");
-      } catch (error) {
-        setStatus(`Save failed: ${error.message}`, "err");
-      }
-    }
-
-    async function loadSelectedCreature() {
-      const id = creatureList.value.trim();
-      if (!id) {
-        setStatus("Select a creature first.", "warn");
-        return;
-      }
-      try {
-        const creature = await fetchJson(urls.creatureGet(id));
-        creatureIdInput.value = creature.id || id;
-        notesInput.value = creature.notes || "";
-        applyLocks(creature.locks);
-        genomeEditor.value = JSON.stringify(creature.genome, null, 2);
-        setStatus(`Loaded creature '${id}'.`, "ok");
-      } catch (error) {
-        setStatus(`Load failed: ${error.message}`, "err");
-      }
-    }
-
-    async function sendControl(payload) {
-      await fetchJson(urls.control, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    }
-
-    async function activateAuthoredMode() {
-      const id = creatureIdInput.value.trim() || creatureList.value.trim();
-      if (!id) {
-        setStatus("Creature id is required to activate authored mode.", "warn");
-        return;
-      }
-      try {
-        await sendControl({
-          action: "set_morphology_mode",
-          morphologyMode: "authored",
-          creatureId: id,
-        });
-        await refreshModeStatus();
-        setStatus(`Activated authored mode with '${id}'. Evolution restarted.`, "ok");
-      } catch (error) {
-        setStatus(`Failed to activate authored mode: ${error.message}`, "err");
-      }
-    }
-
-    async function setRandomMode() {
-      try {
-        await sendControl({ action: "set_morphology_mode", morphologyMode: "random" });
-        await refreshModeStatus();
-        setStatus("Switched morphology mode to random. Evolution restarted.", "ok");
-      } catch (error) {
-        setStatus(`Failed switching to random mode: ${error.message}`, "err");
-      }
-    }
-
-    document.getElementById("loadCurrentBtn").addEventListener("click", () => {
-      void loadGenome(urls.currentGenome, "current");
-    });
-    document.getElementById("loadBestBtn").addEventListener("click", () => {
-      void loadGenome(urls.bestGenome, "best");
-    });
-    document.getElementById("saveCreatureBtn").addEventListener("click", () => {
-      void saveCreature();
-    });
-    document.getElementById("refreshCreaturesBtn").addEventListener("click", () => {
-      void refreshCreatureList();
-    });
-    document.getElementById("loadSelectedBtn").addEventListener("click", () => {
-      void loadSelectedCreature();
-    });
-    document.getElementById("activateAuthoredBtn").addEventListener("click", () => {
-      void activateAuthoredMode();
-    });
-    document.getElementById("setRandomBtn").addEventListener("click", () => {
-      void setRandomMode();
-    });
-    presetGaitOnlyBtn.addEventListener("click", () => {
-      applyGaitOnlyPreset();
-    });
-    presetGaitAndLimitsBtn.addEventListener("click", () => {
-      applyGaitAndLimitsPreset();
-    });
-
-    genomeEditor.value = "{\n  \"graph\": {\n    \"nodes\": []\n  }\n}";
-    void refreshCreatureList();
-    void refreshModeStatus();
   </script>
+
+  <script type="module" src="./creator-app.js"></script>
 </body>
 
 </html>
+
