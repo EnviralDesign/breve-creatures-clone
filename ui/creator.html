@@ -713,8 +713,11 @@
 
     .inspectorNumericCombo {
       display: flex;
+      flex-wrap: nowrap;
       align-items: center;
-      gap: 8px;
+      gap: 16px;
+      min-width: 0;
+      width: 100%;
     }
 
     input[type="range"].inspectorSlider {
@@ -744,23 +747,46 @@
     }
 
     #inspectorContent .inspectorNumberInput {
-      width: 70px;
+      width: 86px;
+      min-width: 86px;
+      flex: 0 0 86px;
       text-align: right;
       font-family: var(--font-mono);
-      padding: 6px 8px;
+      padding: 4px 18px 4px 4px;
+      /* Extra right padding to avoid spinner overlap */
+      font-size: 11px;
+    }
+
+    /* Keep the spinners visible and clearly demarcated from the text */
+    #inspectorContent .inspectorNumberInput::-webkit-inner-spin-button,
+    #inspectorContent .inspectorNumberInput::-webkit-outer-spin-button {
+      opacity: 1;
     }
 
     #inspectorContent input[type="text"],
     #inspectorContent input[type="number"],
     #inspectorContent textarea,
     #inspectorContent select {
-      background: var(--bg);
+      background: rgba(0, 0, 0, 0.2);
       border: 1px solid var(--border);
       color: var(--text);
       border-radius: var(--radius-sm);
       padding: 6px 8px;
       font-size: 12px;
       width: 100%;
+    }
+
+    #inspectorContent .inspectorNumericCombo input[type="number"] {
+      background: transparent;
+      border-color: transparent;
+      border-bottom-color: var(--border-hover);
+      border-radius: 0;
+      padding-bottom: 2px;
+    }
+
+    #inspectorContent .inspectorNumericCombo input[type="number"]:focus {
+      border-bottom-color: var(--primary);
+      box-shadow: none;
     }
 
     #inspectorContent input:focus,
