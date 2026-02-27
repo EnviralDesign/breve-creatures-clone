@@ -5,37 +5,104 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Breve Creature Creator</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0f1418;
-      --panel: #182127;
-      --panel-2: #121a1f;
-      --text: #d9e6dc;
-      --muted: #9eb3a5;
-      --accent: #7fcf6f;
-      --warn: #e8b56f;
-      --err: #dc6e6e;
+      /* Premium Dark Theme (Zinc/Emerald) */
+      --bg: #09090b;
+      --panel: #18181b;
+      --panel-2: #27272a;
+      --border: #27272a;
+      --border-hover: #3f3f46;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --muted-dark: #71717a;
+
+      --primary: #10b981;
+      --primary-hover: #059669;
+      --primary-bg: rgba(16, 185, 129, 0.15);
+      --primary-border: rgba(16, 185, 129, 0.3);
+
+      --warn: #eab308;
+      --err: #ef4444;
+
+      /* Outliner Entity Colors */
+      --color-node: #34d399;
+      --color-part: #60a5fa;
+      --color-joint: #fbbf24;
+      --color-edge: #a78bfa;
+
+      --radius-lg: 12px;
+      --radius-md: 8px;
+      --radius-sm: 6px;
+
+      --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+      --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+
+      --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", monospace;
     }
 
     * {
       box-sizing: border-box;
-      font-family: "Consolas", "Fira Code", monospace;
+      font-family: var(--font-ui);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-hover);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted-dark);
     }
 
     body {
       margin: 0;
-      background: linear-gradient(160deg, #11191d 0%, #0e1419 50%, #152218 100%);
+      background-color: var(--bg);
+      background-image: radial-gradient(circle at 50% 0%, #181822 0%, var(--bg) 60%);
       color: var(--text);
       padding: 16px;
       height: 100vh;
       overflow: hidden;
+      font-size: 13px;
+    }
+
+    code,
+    .tiny.code-snippet {
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      font-weight: 600;
+      letter-spacing: -0.01em;
     }
 
     .layout {
       display: grid;
-      grid-template-columns: minmax(320px, 420px) minmax(420px, 1fr);
-      gap: 14px;
+      grid-template-columns: minmax(320px, 340px) minmax(420px, 1fr);
+      gap: 16px;
       height: calc(100vh - 32px);
     }
 
@@ -47,106 +114,292 @@
       display: none;
     }
 
+    /* Base Containers */
     .card {
-      background: color-mix(in srgb, var(--panel) 88%, black);
-      border: 1px solid #2d3b35;
-      border-radius: 10px;
-      padding: 12px;
-      min-height: 0;
+      background: rgba(24, 24, 27, 0.65);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
     }
 
-    h1,
-    h2 {
-      margin: 0 0 10px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
+    /* ======= SIDEBAR ======= */
+    #creatorSidebar {
+      padding: 16px;
+      gap: 16px;
+      overflow-y: auto;
     }
 
-    h1 {
-      font-size: 16px;
+    .sidebar-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
     }
 
-    h2 {
-      font-size: 14px;
+    .sidebar-header h1 {
+      font-size: 15px;
+      color: #fff;
+    }
+
+    .badge {
+      background: var(--panel-2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .section-title {
+      font-size: 12px;
       color: var(--muted);
       text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+      cursor: pointer;
+      user-select: none;
+      outline: none;
+      border: 1px solid transparent;
+      padding: 8px 12px;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .btn.primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary-hover);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+
+    .btn.primary:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn.secondary {
+      background: var(--panel-2);
+      color: var(--text);
+      border-color: var(--border);
+    }
+
+    .btn.secondary:hover {
+      background: var(--border-hover);
+      border-color: var(--muted-dark);
+    }
+
+    .btn.active {
+      background: var(--primary-bg) !important;
+      border-color: var(--primary-border) !important;
+      color: var(--primary) !important;
+    }
+
+    .btn.small {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+
+    .btn.icon-btn {
+      padding: 8px;
+    }
+
+    .full-width {
+      width: 100%;
     }
 
     .row {
       display: flex;
       gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 10px;
       align-items: center;
     }
 
-    input[type="text"],
-    textarea,
+    .row>* {
+      flex: 1;
+    }
+
+    .dropdown-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .dropdown-row select {
+      flex: 1;
+    }
+
+    /* Inputs */
+    .text-input,
     select {
-      width: 100%;
-      border: 1px solid #304139;
-      background: var(--panel-2);
+      background: var(--bg);
+      border: 1px solid var(--border);
       color: var(--text);
-      border-radius: 7px;
-      padding: 8px;
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      font-size: 13px;
+      width: 100%;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      appearance: none;
+    }
+
+    select {
+      background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 5 6 8 9 5'%3E%3C/polyline%3E%3C/svg%3E") no-repeat right 10px center;
+      padding-right: 32px;
+    }
+
+    .text-input:focus,
+    select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px var(--primary-bg);
       outline: none;
     }
 
-    textarea {
-      min-height: 420px;
-      resize: none;
-      line-height: 1.3;
-    }
-
-    #notesInput {
-      min-height: 72px;
-      max-height: 180px;
+    textarea.text-input {
       resize: vertical;
+      min-height: 80px;
+      max-height: 200px;
+      line-height: 1.5;
     }
 
-    button {
-      border: 1px solid #3b5349;
-      background: #1c2a24;
-      color: var(--text);
-      border-radius: 7px;
-      padding: 7px 10px;
+    /* Progressive Disclosure & Details */
+    details.details-section>summary,
+    details.legend-details>summary {
+      list-style: none;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      transition: color 0.15s;
     }
 
-    button:hover {
-      border-color: #6c946e;
-      color: #e8f7e7;
+    details.details-section>summary::-webkit-details-marker {
+      display: none;
     }
 
-    button.primary {
-      border-color: color-mix(in srgb, var(--accent) 65%, #2b4430);
-      background: #1f3422;
+    details.details-section>summary:hover {
+      color: var(--text);
     }
 
+    details.details-section>summary::after {
+      content: "▼";
+      font-size: 10px;
+      margin-left: auto;
+      color: var(--muted);
+      transition: transform 0.2s ease;
+    }
+
+    details.details-section[open]>summary::after {
+      transform: rotate(180deg);
+    }
+
+    .details-content {
+      padding-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      border-top: 1px solid var(--border);
+      margin-top: 12px;
+    }
+
+    .note {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* Locks */
     .locks {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin: 10px 0;
+      gap: 10px;
     }
 
-    .locks label {
+    .checkbox-label {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       font-size: 12px;
-      color: var(--muted);
+      color: var(--text);
+      cursor: pointer;
     }
 
+    .checkbox-label input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+      accent-color: var(--primary);
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .legend {
+      margin: 8px 0 0;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .legend strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .mode-badge {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+      padding: 6px;
+      border-radius: var(--radius-sm);
+    }
+
+    /* Status Text */
     .status {
       font-size: 12px;
       color: var(--muted);
-      margin-top: 8px;
       white-space: pre-wrap;
     }
 
     .status.ok {
-      color: var(--accent);
+      color: var(--primary);
     }
 
     .status.warn {
@@ -157,121 +410,60 @@
       color: var(--err);
     }
 
-    .tiny {
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    .note {
-      font-size: 12px;
-      color: var(--muted);
-      margin: 4px 0 10px;
-      line-height: 1.35;
-    }
-
-    .section {
-      background: color-mix(in srgb, var(--panel-2) 88%, black);
-      border: 1px solid #2a3832;
-      border-radius: 8px;
-      padding: 10px;
-      margin-bottom: 10px;
-    }
-
-    .section h2 {
-      margin: 0 0 8px;
-    }
-
-    .modeBadge {
-      font-size: 12px;
-      color: var(--text);
-      border: 1px solid #33433b;
-      background: #132019;
-      border-radius: 6px;
-      padding: 6px 8px;
-      width: 100%;
-    }
-
-    .legend {
-      margin: 6px 0 10px;
-      padding-left: 16px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .legend code {
-      color: var(--text);
-    }
-
-    .rightCard {
+    /* ======= EDITOR PANELS ======= */
+    .editor-header {
       display: flex;
       flex-direction: column;
-      min-height: 0;
-      overflow: hidden;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(24, 24, 27, 0.4);
+      gap: 12px;
     }
 
-    .modeRow {
+    .editor-header-top {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-bottom: 10px;
     }
 
-    .modeHeading {
+    .editor-title-wrap {
       display: flex;
       align-items: center;
-      gap: 10px;
-      min-width: 0;
+      gap: 12px;
     }
 
-    .modeButtons {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .modeButtons button.active {
-      border-color: color-mix(in srgb, var(--accent) 65%, #2b4430);
-      background: #1f3422;
-      color: #e8f7e7;
-    }
-
-    .modeButtons button:disabled,
-    .toolButtons button:disabled {
-      opacity: 0.42;
-      filter: saturate(0.55);
-      border-color: #2b3833;
-      background: #12191b;
-      color: #6f8178;
-      cursor: not-allowed;
-      box-shadow: none;
-    }
-
-    .toolButtons {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-left: 4px;
-      padding-left: 8px;
-      border-left: 1px solid #2f4038;
+    .editor-title-wrap h2 {
+      font-size: 16px;
+      color: #fff;
     }
 
     .toolStatus {
-      font-size: 11px;
-      color: var(--muted);
-      line-height: 1.2;
-      white-space: nowrap;
-      opacity: 0.9;
+      font-size: 12px;
+      color: var(--primary);
+      background: var(--primary-bg);
+      padding: 3px 8px;
+      border-radius: 99px;
+      font-weight: 500;
+    }
+
+    .editor-controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-divider {
+      width: 1px;
+      background: var(--border);
+      margin: 0 4px;
+      height: 24px;
+      align-self: center;
     }
 
     .editorPane {
       display: none;
-      min-height: 0;
       flex: 1;
+      min-height: 0;
     }
 
     .editorPane.active {
@@ -279,394 +471,354 @@
       flex-direction: column;
     }
 
-    #visualPane {
-      gap: 8px;
-    }
-
     #visualWorkspace {
       flex: 1;
       min-height: 0;
       display: grid;
       --outliner-width: 260px;
-      --inspector-width: 300px;
+      --inspector-width: 320px;
       grid-template-columns:
-        minmax(200px, var(--outliner-width))
-        8px
-        minmax(360px, 1fr)
-        8px
-        minmax(240px, var(--inspector-width));
+        minmax(200px, var(--outliner-width)) 8px minmax(360px, 1fr) 8px minmax(260px, var(--inspector-width));
+      padding: 12px;
       gap: 0;
     }
 
-    #visualViewport {
-      min-height: 0;
-      border: 1px solid #2a3832;
-      border-radius: 8px;
-      overflow: hidden;
-      background: radial-gradient(circle at 15% 20%, #182427, #0f171d 58%, #0c1217 100%);
-      position: relative;
-    }
-
-    .paneResizer {
-      cursor: col-resize;
-      position: relative;
-      min-height: 0;
-      align-self: stretch;
-      background: transparent;
-      border: none;
-      outline: none;
-      width: 8px;
-      padding: 0;
-      touch-action: none;
-    }
-
-    .paneResizer::before {
-      content: "";
-      position: absolute;
-      top: 6px;
-      bottom: 6px;
-      left: 3px;
-      width: 2px;
-      border-radius: 2px;
-      background: linear-gradient(180deg, #3f5349, #2e4037);
-      opacity: 0.72;
-      transition: opacity 120ms ease, background 120ms ease;
-      pointer-events: none;
-    }
-
-    .paneResizer:hover::before,
-    .paneResizer:focus-visible::before,
-    .paneResizer.active::before {
-      opacity: 1;
-      background: linear-gradient(180deg, #85a991, #5d806b);
-    }
-
-    body.resizingPanes {
-      user-select: none;
-      cursor: col-resize;
-    }
-
-    body.resizingPanes * {
-      cursor: col-resize !important;
-    }
-
+    /* Panels Inside Workspace */
     .visualPanel {
-      border: 1px solid #2a3832;
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel-2) 88%, black);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
       display: flex;
       flex-direction: column;
       min-height: 0;
-      padding: 8px;
-      gap: 8px;
+      overflow: hidden;
     }
 
-    .inspectorPanel {
-      min-height: 0;
-      flex: 1;
-      container-type: inline-size;
-      container-name: inspector;
-    }
-
-    .visualPanel h2 {
-      margin: 0;
-      font-size: 12px;
-    }
-
-    .visualPanelHeader {
+    .panel-header {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
       display: flex;
-      align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .panel-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* Outliner Specifics */
+    .outliner-search-wrap {
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
     }
 
     #outlinerSearch {
-      padding: 6px 7px;
-      font-size: 12px;
+      border: none;
+      background: var(--panel);
+      padding: 6px 10px;
+    }
+
+    #outlinerSearch:focus {
+      box-shadow: inset 0 0 0 1px var(--primary);
     }
 
     #outlinerList {
-      min-height: 0;
-      overflow: auto;
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
       display: flex;
       flex-direction: column;
-      gap: 5px;
-      padding-right: 2px;
+      gap: 4px;
     }
 
     .outlinerSectionTitle {
-      color: var(--muted);
       font-size: 11px;
+      color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: 0.02em;
-      border-top: 1px solid #26332d;
-      padding-top: 7px;
-      margin-top: 3px;
+      letter-spacing: 0.05em;
+      padding: 12px 4px 4px;
+      font-weight: 600;
     }
 
     .outlinerSectionTitle:first-child {
-      border-top: none;
-      margin-top: 0;
-      padding-top: 0;
+      padding-top: 4px;
     }
 
     .outlinerItem {
-      border: 1px solid #2a3932;
-      border-radius: 6px;
-      background: #121b1f;
-      color: var(--text);
-      padding: 5px 7px;
+      background: var(--panel);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      padding: 6px 8px;
       text-align: left;
       font-size: 12px;
-      width: 100%;
       display: flex;
       flex-direction: column;
       gap: 2px;
+      cursor: pointer;
+      color: var(--text);
+      transition: all 0.1s ease;
+      position: relative;
+    }
+
+    .outlinerItem:hover {
+      background: var(--panel-2);
+    }
+
+    .outlinerItem.selected {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--border-hover);
+    }
+
+    /* Add Left Color Indicator */
+    .outlinerItem::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 4px 4px 0;
+    }
+
+    .outlinerItem.node::before {
+      background: var(--color-node);
+    }
+
+    .outlinerItem.part::before {
+      background: var(--color-part);
+    }
+
+    .outlinerItem.joint::before {
+      background: var(--color-joint);
+    }
+
+    .outlinerItem.edge::before {
+      background: var(--color-edge);
+    }
+
+    /* Replicate original behavior where JS changes border-color on selection */
+    .outlinerItem.selected.node {
+      border-left-color: var(--color-node) !important;
+      border-left-width: 2px;
+    }
+
+    .outlinerItem.selected.part {
+      border-left-color: var(--color-part) !important;
+      border-left-width: 2px;
+    }
+
+    .outlinerItem.selected.joint {
+      border-left-color: var(--color-joint) !important;
+      border-left-width: 2px;
+    }
+
+    .outlinerItem.selected.edge {
+      border-left-color: var(--color-edge) !important;
+      border-left-width: 2px;
     }
 
     .outlinerItem .line1 {
       display: flex;
       justify-content: space-between;
-      gap: 8px;
       align-items: baseline;
+      font-weight: 500;
     }
 
     .outlinerItem .line2 {
-      color: var(--muted);
       font-size: 11px;
-    }
-
-    .outlinerItem.selected {
-      border-color: #7fcf6f;
-      background: #1b2c22;
-      color: #f0f7ea;
-    }
-
-    .outlinerItem.node {
-      border-left: 3px solid #93c87f;
-    }
-
-    .outlinerItem.part {
-      border-left: 3px solid #85b2d4;
-    }
-
-    .outlinerItem.joint {
-      border-left: 3px solid #d2b47f;
-    }
-
-    .outlinerItem.edge {
-      border-left: 3px solid #8fbfd6;
-    }
-
-    .emptyState {
       color: var(--muted);
-      font-size: 12px;
-      padding: 6px 2px;
-      line-height: 1.35;
+      font-family: var(--font-mono);
+      line-height: 1.4;
     }
 
-    #selectionToolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+    /* Viewport */
+    #visualViewport {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      background: radial-gradient(circle at center, #182427, #0c1217);
+      position: relative;
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Inspector Specifics */
+    .inspectorPanel {
+      container-type: inline-size;
+      container-name: inspector;
     }
 
     #selectionBreadcrumb {
-      color: var(--muted);
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
       font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+      background: var(--panel);
       white-space: pre-wrap;
-      line-height: 1.35;
     }
 
     #inspectorContent {
       flex: 1;
-      min-height: 0;
-      overflow: auto;
+      overflow-y: auto;
+      padding: 12px;
       display: flex;
       flex-direction: column;
-      gap: 5px;
-      padding-right: 2px;
+      gap: 12px;
     }
 
+    /* JS adds classes fieldRow & inspectorFieldRow */
     .fieldRow,
     .inspectorFieldRow {
-      display: grid;
-      grid-template-columns: minmax(96px, 130px) 1fr;
-      gap: 8px;
-      font-size: 12px;
-      border-bottom: 1px dotted #25332c;
-      padding: 4px 0 6px;
-      align-items: start;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--panel);
+      padding: 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+    }
+
+    @container inspector (min-width: 280px) {
+
+      .fieldRow,
+      .inspectorFieldRow {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+      }
     }
 
     .fieldRow .k,
     .inspectorFieldLabel {
+      font-size: 12px;
       color: var(--muted);
-      line-height: 1.25;
-      padding-top: 6px;
+      font-weight: 500;
+      flex: 0 0 110px;
     }
 
     .fieldRow .v,
-    .inspectorFieldValue {
-      color: var(--text);
-      word-break: break-word;
-      line-height: 1.35;
-      min-width: 0;
-    }
-
+    .inspectorFieldValue,
     .inspectorFieldControl {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
+      font-size: 13px;
+      color: var(--text);
+      flex: 1;
       min-width: 0;
-    }
-
-    .inspectorFieldName {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      min-width: 0;
-    }
-
-    .inspectorFieldName.hasHelp {
-      text-decoration: underline dotted rgba(158, 179, 165, 0.65);
-      text-underline-offset: 2px;
-      cursor: help;
     }
 
     .inspectorNumericCombo {
       display: flex;
-      flex-wrap: nowrap;
       align-items: center;
-      gap: 7px;
-      min-width: 0;
-      width: 100%;
+      gap: 8px;
     }
 
-    #inspectorContent .inspectorSlider {
-      flex: 1 1 auto;
-      min-width: 120px;
-      accent-color: var(--accent);
+    input[type="range"].inspectorSlider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      outline: none;
+      flex: 1;
+    }
+
+    input[type="range"].inspectorSlider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--primary);
       cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      transition: transform 0.1s;
+    }
+
+    input[type="range"].inspectorSlider::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
     }
 
     #inspectorContent .inspectorNumberInput {
-      width: 88px;
-      min-width: 88px;
-      flex: 0 0 88px;
+      width: 70px;
       text-align: right;
+      font-family: var(--font-mono);
+      padding: 6px 8px;
     }
 
     #inspectorContent input[type="text"],
     #inspectorContent input[type="number"],
     #inspectorContent textarea,
     #inspectorContent select {
-      width: 100%;
-      border: 1px solid #304139;
-      background: #111a1f;
+      background: var(--bg);
+      border: 1px solid var(--border);
       color: var(--text);
-      border-radius: 6px;
-      padding: 6px 7px;
-      outline: none;
+      border-radius: var(--radius-sm);
+      padding: 6px 8px;
       font-size: 12px;
-      line-height: 1.3;
+      width: 100%;
     }
 
-    #inspectorContent input[type="text"]:focus,
-    #inspectorContent input[type="number"]:focus,
+    #inspectorContent input:focus,
     #inspectorContent textarea:focus,
     #inspectorContent select:focus {
-      border-color: #6c946e;
-      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+      border-color: var(--primary);
+      outline: none;
     }
 
-    #inspectorContent input[type="text"]:disabled,
-    #inspectorContent input[type="number"]:disabled,
+    #inspectorContent input:disabled,
     #inspectorContent textarea:disabled,
-    #inspectorContent select:disabled {
-      opacity: 0.65;
+    #inspectorContent select:disabled,
+    .inspectorSlider:disabled {
+      opacity: 0.5;
       cursor: not-allowed;
-    }
-
-    #inspectorContent textarea {
-      min-height: 54px;
-      max-height: 180px;
-      resize: vertical;
-    }
-
-    .inspectorCheckboxRow {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--text);
-      font-size: 12px;
-      line-height: 1.25;
-    }
-
-    .inspectorCheckboxRow input[type="checkbox"] {
-      margin: 0;
-      accent-color: var(--accent);
-    }
-
-    .inspectorFieldError {
-      font-size: 11px;
-      color: var(--err);
-      line-height: 1.3;
-    }
-
-    .inspectorFieldError:empty {
-      display: none;
     }
 
     .inspectorFieldRow.invalid input[type="text"],
     .inspectorFieldRow.invalid input[type="number"],
     .inspectorFieldRow.invalid textarea,
     .inspectorFieldRow.invalid select {
-      border-color: #b35d5d;
+      border-color: var(--err);
     }
 
-    .inspectorFieldRow.invalid .inspectorSlider {
-      accent-color: #d78282;
+    .inspectorFieldRow.invalid .inspectorSlider::-webkit-slider-thumb {
+      background: var(--err);
     }
 
-    @container inspector (max-width: 340px) {
-      .inspectorFieldRow {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
+    .inspectorCheckboxRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text);
+    }
 
-      .inspectorFieldLabel {
-        flex: 1 1 100%;
-        padding-top: 0;
-      }
+    .inspectorFieldError {
+      font-size: 11px;
+      color: var(--err);
+      margin-top: 4px;
+    }
 
-      .inspectorFieldValue {
-        flex: 1 1 100%;
-      }
-
-      .inspectorFieldControl {
-        width: 100%;
-      }
+    .inspectorFieldError:empty {
+      display: none;
     }
 
     .inspectorFooter {
-      border-top: 1px solid #26342d;
-      margin-top: 6px;
-      padding-top: 6px;
+      padding: 12px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
       display: flex;
       flex-direction: column;
-      gap: 3px;
-      flex: 0 0 auto;
+      gap: 4px;
     }
 
     .inspectorPanelError {
       font-size: 11px;
       color: var(--err);
-      line-height: 1.3;
-      min-height: 1.2em;
     }
 
     .inspectorPanelError:empty {
@@ -676,12 +828,10 @@
     .inspectorApplyStatus {
       font-size: 11px;
       color: var(--muted);
-      line-height: 1.3;
-      min-height: 1.2em;
     }
 
     .inspectorApplyStatus.ok {
-      color: var(--accent);
+      color: var(--primary);
     }
 
     .inspectorApplyStatus.warn {
@@ -692,35 +842,85 @@
       color: var(--err);
     }
 
-    #visualInfo {
-      font-size: 11px;
-      color: var(--muted);
-      line-height: 1.35;
-      white-space: pre-wrap;
+    /* Pane Resizers */
+    .paneResizer {
+      cursor: col-resize;
+      background: transparent;
+      border: none;
+      width: 8px;
+      position: relative;
     }
 
-    #jsonPane h2 {
-      margin: 0 0 8px;
+    .paneResizer::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      left: 3px;
+      width: 2px;
+      height: 32px;
+      border-radius: 2px;
+      background: var(--border-hover);
+      transition: background 0.15s;
+    }
+
+    .paneResizer:hover::before,
+    .paneResizer.active::before {
+      background: var(--primary);
+    }
+
+    body.resizingPanes * {
+      cursor: col-resize !important;
+      user-select: none;
+    }
+
+    /* Info text at bottom of workspace */
+    #visualInfo {
+      padding: 0 16px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    #jsonPane {
+      padding: 16px;
     }
 
     #genomeEditor {
-      flex: 1;
-      min-height: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      padding: 16px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      resize: none;
+    }
+
+    /* Small Adjustments */
+    .inspectorFieldName.hasHelp {
+      text-decoration: underline dotted var(--muted);
+      text-underline-offset: 4px;
+      cursor: help;
     }
 
     @media (max-width: 1020px) {
-      body {
-        height: auto;
-        overflow: auto;
-      }
-
       .layout {
         grid-template-columns: 1fr;
         height: auto;
       }
 
+      body {
+        height: auto;
+        overflow: auto;
+      }
+
       #visualWorkspace {
         grid-template-columns: 1fr;
+        grid-auto-rows: minmax(300px, auto);
+        gap: 16px;
       }
 
       .paneResizer {
@@ -732,121 +932,144 @@
 
 <body>
   <div id="layoutRoot" class="layout">
-    <div id="creatorSidebar" class="card" style="overflow-y:auto;">
-      <h1>Creature Authoring (V1 MVP)</h1>
-
-      <div class="section">
-        <h2>1) Source genome</h2>
-        <div class="row">
-          <button id="loadCurrentBtn" type="button">Load current genome</button>
-          <button id="loadBestBtn" type="button">Load best genome</button>
-        </div>
-        <div class="row">
-          <select id="creatureList"></select>
-        </div>
-        <div class="row">
-          <button id="refreshCreaturesBtn" type="button">Refresh saved list</button>
-          <button id="loadSelectedBtn" type="button">Load saved creature</button>
-        </div>
+    <!-- SIDEBAR -->
+    <div id="creatorSidebar" class="card">
+      <div class="sidebar-header">
+        <h1>Creature Authoring</h1>
+        <div class="badge">V1 MVP</div>
       </div>
 
       <div class="section">
-        <h2>2) Creature definition</h2>
+        <h2 class="section-title">1. File Operations</h2>
+        <!-- Load Tools -->
         <div class="row">
-          <input id="creatureIdInput" type="text" placeholder="creature id (example: hopper_v1)">
+          <button id="loadCurrentBtn" type="button" class="btn secondary">Load current</button>
+          <button id="loadBestBtn" type="button" class="btn secondary">Load best</button>
         </div>
-        <div class="row">
-          <textarea id="notesInput" placeholder="optional notes"></textarea>
+        <div class="dropdown-row">
+          <select id="creatureList" class="text-input"></select>
+          <button id="refreshCreaturesBtn" type="button" class="btn secondary icon-btn" aria-label="Refresh">↻</button>
         </div>
+        <button id="loadSelectedBtn" type="button" class="btn secondary full-width">Load Saved Creature</button>
+
+        <div style="height: 1px; background: var(--border); margin: 4px 0;"></div>
+
+        <!-- Save Tools -->
+        <input id="creatureIdInput" type="text" class="text-input" placeholder="creature id (example: hopper_v1)">
+        <textarea id="notesInput" class="text-input" placeholder="Optional notes..."></textarea>
+        <button id="saveCreatureBtn" type="button" class="btn primary full-width">Save Creature File</button>
       </div>
 
       <div class="section">
-        <h2>3) Lock profile (authored mode only)</h2>
-        <div class="note">
-          Checked means fixed by template. Unchecked means evolvable.
-        </div>
-        <div class="row">
-          <button id="presetGaitOnlyBtn" type="button">Preset: gait/controller-only</button>
-          <button id="presetGaitAndLimitsBtn" type="button">Preset: gait + joint limits</button>
-        </div>
-        <ul class="legend">
-          <li><code>Body graph</code>: number of parts + how they connect.</li>
-          <li><code>Joint kind</code>: hinge vs ball choice per joint.</li>
-          <li><code>Joint limits</code>: allowed rotation ranges per joint.</li>
-          <li><code>Body shape + joint layout</code>: part sizes/mass, anchor placement, growth direction, edge scaling, max parts.</li>
-          <li><code>Actuator mechanics</code>: motor strength and joint stiffness (how much force joints can apply).</li>
-          <li><code>Neural policy</code>: brain neurons/weights/effectors (the gait/control policy).</li>
-          <li><code>Color</code>: visual hue only.</li>
-        </ul>
-        <div class="locks">
-          <label><input id="lockTopology" type="checkbox"> lock body graph</label>
-          <label><input id="lockJointTypes" type="checkbox"> lock joint kind (hinge/ball)</label>
-          <label><input id="lockJointLimits" type="checkbox"> lock joint limits</label>
-          <label><input id="lockSegmentDynamics" type="checkbox"> lock body shape + joint layout</label>
-          <label><input id="lockActuatorMechanics" type="checkbox"> lock actuator mechanics</label>
-          <label><input id="lockControls" type="checkbox"> lock neural policy</label>
-          <label><input id="lockVisualHue" type="checkbox"> lock color</label>
+        <h2 class="section-title">2. Evolution Backend</h2>
+        <div id="modeStatus" class="mode-badge">Current backend mode: unknown</div>
+        <div class="row" style="flex-direction: column; align-items: stretch; gap: 8px;">
+          <button id="activateAuthoredBtn" type="button" class="btn secondary">Set mode: authored + restart</button>
+          <button id="setRandomBtn" type="button" class="btn secondary">Set mode: random + restart</button>
         </div>
       </div>
 
-      <div class="section">
-        <h2>4) Save + apply</h2>
-        <div class="note">
-          Save writes a creature file. Mode buttons switch backend mode and restart evolution.
+      <details class="section details-section">
+        <summary class="section-title">3. Lock Profile (Authored Mode)</summary>
+        <div class="details-content">
+          <div class="note">Checked means fixed by template. Unchecked means evolvable.</div>
+          <div class="row">
+            <button id="presetGaitOnlyBtn" type="button" class="btn secondary small">Gait only</button>
+            <button id="presetGaitAndLimitsBtn" type="button" class="btn secondary small">Gait + Limits</button>
+          </div>
+
+          <div class="locks">
+            <label class="checkbox-label"><input id="lockTopology" type="checkbox"> <span>Body graph</span></label>
+            <label class="checkbox-label"><input id="lockJointTypes" type="checkbox"> <span>Joint kind
+                (hinge/ball)</span></label>
+            <label class="checkbox-label"><input id="lockJointLimits" type="checkbox"> <span>Joint limits</span></label>
+            <label class="checkbox-label"><input id="lockSegmentDynamics" type="checkbox"> <span>Body
+                shape/layout</span></label>
+            <label class="checkbox-label"><input id="lockActuatorMechanics" type="checkbox"> <span>Actuator
+                mechanics</span></label>
+            <label class="checkbox-label"><input id="lockControls" type="checkbox"> <span>Neural policy</span></label>
+            <label class="checkbox-label"><input id="lockVisualHue" type="checkbox"> <span>Color</span></label>
+          </div>
+
+          <details class="legend-details">
+            <summary class="note">View Attribute Meanings</summary>
+            <ul class="legend">
+              <li><strong>Body graph:</strong> parts + connections</li>
+              <li><strong>Joint kind:</strong> hinge vs ball</li>
+              <li><strong>Joint limits:</strong> rotation ranges</li>
+              <li><strong>Body shape:</strong> sizes/mass, anchors, growth</li>
+              <li><strong>Actuator:</strong> motor strength, stiffness</li>
+              <li><strong>Neural:</strong> neurons, effects (brain)</li>
+              <li><strong>Color:</strong> visual hue</li>
+            </ul>
+          </details>
         </div>
-        <div class="row">
-          <button id="saveCreatureBtn" type="button" class="primary">Save creature file</button>
-        </div>
-        <div class="row">
-          <div id="modeStatus" class="modeBadge">Current backend mode: unknown</div>
-        </div>
-        <div class="row">
-          <button id="activateAuthoredBtn" type="button" class="primary">Set mode: authored + restart</button>
-        </div>
-        <div class="row">
-          <button id="setRandomBtn" type="button">Set mode: random + restart</button>
-        </div>
+      </details>
+
+      <div class="sidebar-footer">
+        <div id="status" class="status">Ready.</div>
+        <div class="tiny code-snippet">cargo run --release -- --creature your_id</div>
       </div>
-      <div id="status" class="status">Ready.</div>
-      <div class="tiny">Launch directly with: <code>cargo run --release -- --creature your_id</code></div>
     </div>
+
+    <!-- MAIN EDITOR -->
     <div class="card rightCard">
-      <div class="modeRow">
-        <div class="modeHeading">
-          <h2>Editor</h2>
-          <div id="toolStatus" class="toolStatus">Tool: select</div>
-        </div>
-        <div class="modeButtons">
-          <button id="toggleSidebarBtn" type="button">Hide controls</button>
-          <button id="showVisualBtn" type="button" class="active">Visual</button>
-          <button id="showJsonBtn" type="button">JSON</button>
-          <button id="rebuildVisualBtn" type="button">Rebuild visual from JSON</button>
-          <div class="toolButtons">
-            <button id="toolSelectBtn" type="button" class="active">Select</button>
-            <button id="toolMoveAnchorBtn" type="button">Move anchor</button>
-            <button id="toolGrowthDirBtn" type="button">Growth handle</button>
-            <button id="addChildBtn" type="button">Add child</button>
-            <button id="duplicateBranchBtn" type="button">Duplicate branch</button>
-            <button id="deleteSelectedBtn" type="button">Delete</button>
+      <div class="editor-header">
+        <div class="editor-header-top">
+          <div class="editor-title-wrap">
+            <h2>Editor</h2>
+            <div id="toolStatus" class="toolStatus">Tool: select</div>
+          </div>
+          <div class="editor-controls">
+            <button id="toggleSidebarBtn" type="button" class="btn secondary">Hide controls</button>
+            <div class="toolbar-divider"></div>
+            <button id="showVisualBtn" type="button" class="btn secondary active">Visual</button>
+            <button id="showJsonBtn" type="button" class="btn secondary">JSON</button>
+            <button id="rebuildVisualBtn" type="button" class="btn secondary" style="margin-left:8px;">Rebuild from
+              JSON</button>
           </div>
         </div>
+
+        <div class="editor-controls" style="border-top: 1px solid var(--border); padding-top: 12px;">
+          <button id="toolSelectBtn" type="button" class="btn secondary active">Select</button>
+          <button id="toolMoveAnchorBtn" type="button" class="btn secondary">Move anchor</button>
+          <button id="toolGrowthDirBtn" type="button" class="btn secondary">Growth handle</button>
+          <div class="toolbar-divider"></div>
+          <button id="addChildBtn" type="button" class="btn secondary">Add child</button>
+          <button id="duplicateBranchBtn" type="button" class="btn secondary">Duplicate branch</button>
+          <button id="deleteSelectedBtn" type="button" class="btn secondary" style="color: var(--err);">Delete</button>
+        </div>
       </div>
+
+      <!-- VISUAL PANE -->
       <div id="visualPane" class="editorPane active">
         <div id="visualWorkspace">
+
+          <!-- Outliner -->
           <div id="outlinerPanel" class="visualPanel">
-            <div class="visualPanelHeader">
-              <h2>Outliner</h2>
+            <div class="panel-header">
+              <span class="panel-title">Outliner</span>
             </div>
-            <input id="outlinerSearch" type="text" placeholder="filter (node, edge, part, joint)">
+            <div class="outliner-search-wrap">
+              <input id="outlinerSearch" type="text" class="text-input" placeholder="filter (node, edge...)">
+            </div>
             <div id="outlinerList"></div>
           </div>
-          <button id="outlinerResizeHandle" class="paneResizer" type="button" aria-label="Resize outliner panel" title="Drag to resize outliner panel"></button>
+
+          <button id="outlinerResizeHandle" class="paneResizer" type="button" aria-label="Resize outliner"
+            title="Drag to resize outliner"></button>
+
+          <!-- Viewport -->
           <div id="visualViewport"></div>
-          <button id="inspectorResizeHandle" class="paneResizer" type="button" aria-label="Resize inspector panel" title="Drag to resize inspector panel"></button>
+
+          <button id="inspectorResizeHandle" class="paneResizer" type="button" aria-label="Resize inspector"
+            title="Drag to resize inspector"></button>
+
+          <!-- Inspector -->
           <div id="inspectorPanel" class="visualPanel inspectorPanel">
-            <div id="selectionToolbar">
-              <h2>Inspector</h2>
-              <button id="focusSelectedBtn" type="button">Frame selected</button>
+            <div class="panel-header">
+              <span class="panel-title">Inspector</span>
+              <button id="focusSelectedBtn" type="button" class="btn secondary small">Frame</button>
             </div>
             <div id="selectionBreadcrumb">Nothing selected.</div>
             <div id="inspectorContent"></div>
@@ -855,13 +1078,17 @@
               <div id="inspectorApplyStatus" class="inspectorApplyStatus" aria-live="polite">Inspector ready.</div>
             </div>
           </div>
+
         </div>
         <div id="visualInfo">Visual mode ready. Load a genome and click "Rebuild visual from JSON" after edits.</div>
       </div>
+
+      <!-- JSON PANE -->
       <div id="jsonPane" class="editorPane">
-        <h2>Genome JSON</h2>
+        <h2 style="margin-bottom: 12px; font-size: 14px; text-transform: uppercase;">Genome JSON</h2>
         <textarea id="genomeEditor" spellcheck="false"></textarea>
       </div>
+
     </div>
   </div>
 
@@ -878,4 +1105,3 @@
 </body>
 
 </html>
-
