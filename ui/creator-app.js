@@ -1436,6 +1436,13 @@ function renderOutliner() {
     outlinerList.appendChild(section);
   };
 
+  const ICONS = {
+    node: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>`,
+    part: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>`,
+    joint: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="12" x2="9" y2="12"></line><line x1="15" y1="12" x2="21" y2="12"></line></svg>`,
+    edge: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`
+  };
+
   const addItem = ({ kind, id, label, details, depth = 0, searchText = "" }) => {
     const haystack = `${label} ${details || ""} ${searchText}`.toLowerCase();
     if (query && !haystack.includes(query)) {
@@ -1445,26 +1452,22 @@ function renderOutliner() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `outlinerItem ${kind}`;
-    button.style.paddingLeft = `${7 + depth * 14}px`;
     button.dataset.kind = kind;
     button.dataset.id = id;
+    button.title = details || "";
 
-    const line1 = document.createElement("div");
-    line1.className = "line1";
-    const labelSpan = document.createElement("span");
-    labelSpan.textContent = label;
-    const idSpan = document.createElement("span");
-    idSpan.className = "tiny";
-    idSpan.textContent = id;
-    line1.appendChild(labelSpan);
-    line1.appendChild(idSpan);
+    let indentHtml = "";
+    for (let i = 0; i < depth; i++) {
+        indentHtml += `<div class="tree-line ${i === depth - 1 ? 'leaf' : ''}"></div>`;
+    }
 
-    const line2 = document.createElement("div");
-    line2.className = "line2";
-    line2.textContent = details || "";
+    button.innerHTML = `
+      ${indentHtml}
+      <div class="outlinerItem__icon">${ICONS[kind] || ""}</div>
+      <span class="outlinerItem__label">${label}</span>
+      <span class="outlinerItem__id">${id}</span>
+    `;
 
-    button.appendChild(line1);
-    button.appendChild(line2);
     if (selectedToken === selectionToken({ kind, id })) {
       button.classList.add("selected");
     }

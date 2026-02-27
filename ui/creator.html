@@ -551,15 +551,14 @@
     }
 
     .outlinerItem {
-      background: var(--panel);
+      background: transparent;
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
-      padding: 6px 8px;
+      padding: 4px 6px;
       text-align: left;
       font-size: 12px;
       display: flex;
-      flex-direction: column;
-      gap: 2px;
+      align-items: center;
       cursor: pointer;
       color: var(--text);
       transition: all 0.1s ease;
@@ -575,66 +574,88 @@
       border-color: var(--border-hover);
     }
 
-    /* Add Left Color Indicator */
     .outlinerItem::before {
+      display: none !important;
+    }
+
+    .tree-line {
+      width: 14px;
+      align-self: stretch;
+      /* span full container height */
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .tree-line::before {
       content: "";
       position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 4px 4px 0;
+      top: -4px;
+      /* match container padding to bridge gap */
+      bottom: -4px;
+      left: 6px;
+      width: 1px;
+      background: var(--border-hover);
     }
 
-    .outlinerItem.node::before {
-      background: var(--color-node);
+    .tree-line.leaf::before {
+      bottom: 50%;
+      /* stops halfway */
     }
 
-    .outlinerItem.part::before {
-      background: var(--color-part);
+    .tree-line.leaf::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 6px;
+      width: 8px;
+      height: 1px;
+      background: var(--border-hover);
     }
 
-    .outlinerItem.joint::before {
-      background: var(--color-joint);
-    }
-
-    .outlinerItem.edge::before {
-      background: var(--color-edge);
-    }
-
-    /* Replicate original behavior where JS changes border-color on selection */
-    .outlinerItem.selected.node {
-      border-left-color: var(--color-node) !important;
-      border-left-width: 2px;
-    }
-
-    .outlinerItem.selected.part {
-      border-left-color: var(--color-part) !important;
-      border-left-width: 2px;
-    }
-
-    .outlinerItem.selected.joint {
-      border-left-color: var(--color-joint) !important;
-      border-left-width: 2px;
-    }
-
-    .outlinerItem.selected.edge {
-      border-left-color: var(--color-edge) !important;
-      border-left-width: 2px;
-    }
-
-    .outlinerItem .line1 {
+    .outlinerItem__icon {
+      width: 16px;
+      height: 16px;
       display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      font-weight: 500;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-right: 6px;
     }
 
-    .outlinerItem .line2 {
+    .outlinerItem.node .outlinerItem__icon {
+      color: var(--color-node);
+    }
+
+    .outlinerItem.part .outlinerItem__icon {
+      color: var(--color-part);
+    }
+
+    .outlinerItem.joint .outlinerItem__icon {
+      color: var(--color-joint);
+    }
+
+    .outlinerItem.edge .outlinerItem__icon {
+      color: var(--color-edge);
+    }
+
+    .outlinerItem__label {
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .outlinerItem__id {
+      margin-left: auto;
       font-size: 11px;
       color: var(--muted);
       font-family: var(--font-mono);
-      line-height: 1.4;
+      opacity: 0.6;
+    }
+
+    .outlinerItem.selected .outlinerItem__id {
+      opacity: 1;
+      color: var(--text);
     }
 
     /* Viewport */
