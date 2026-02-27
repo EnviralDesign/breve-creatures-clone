@@ -1,0 +1,26 @@
+@start_index:800
+@end_index:1600
+@file:c:\repos\breve-creatures-clone\ui\index.html
+
+Search and Replace instructions:
+1. Find `<div id="hud">` and replace with `<div id="hud" class="panel-base">`
+2. Find `<div id="genomePanel">` and replace with `<div id="genomePanel" class="panel-base">`
+3. Find `<div id="fitnessHistoryPanel">` and replace with `<div id="fitnessHistoryPanel" class="panel-base">`
+4. Replace all occurrences of `Trebuchet MS, Segoe UI, sans-serif` with `Inter, sans-serif`
+5. Replace all occurrences of `Trebuchet MS` with `Inter`
+6. Graph Colors replacements inside `renderFitnessHistory()`:
+  - `rgba(6, 10, 8, 0.46)` -> `transparent`
+  - `#b8d795` -> `#a1a1aa`
+  - `rgba(170, 200, 120, 0.28)` -> `rgba(255, 255, 255, 0.1)`
+  - `rgba(170, 194, 117, 0.10)` -> `rgba(255, 255, 255, 0.05)`
+  - `rgba(185, 214, 152, 0.82)` -> `rgba(255, 255, 255, 0.6)`
+  - `rgba(215, 224, 206, 0.28)` -> `rgba(255, 255, 255, 0.15)`
+  - `rgba(112, 144, 171, 0.95)` -> `#60a5fa`
+  - `rgba(210, 240, 159, 0.94)` -> `#10b981`
+  - `rgba(217, 245, 168, 0.95)` -> `#34d399`
+  - `rgba(183, 208, 112, 0.6)` -> `rgba(63, 63, 70, 0.6)`
+  - `#e1f6b4` -> `#f4f4f5`
+  - `rgba(10, 14, 11, 0.72)` -> `transparent`
+7. Genome Analysis Colors replacements inside `renderGenomeViz()`:
+  - `rgba(183, 208, 112, 0.6)` -> `rgba(39, 39, 42, 0.6)`
+  - `rgba(8, 14, 10, 0.92)` -> `#09090b`

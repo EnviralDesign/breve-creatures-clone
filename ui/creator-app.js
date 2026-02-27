@@ -1610,6 +1610,34 @@ function appendField(container, key, value) {
   container.appendChild(row);
 }
 
+function appendControlField(container, key, controlNode, tooltipText = "") {
+  const row = document.createElement("div");
+  row.className = "fieldRow inspectorFieldRow";
+  const keyEl = document.createElement("div");
+  keyEl.className = "k inspectorFieldLabel";
+  const keyText = document.createElement("div");
+  keyText.className = "inspectorFieldName";
+  keyText.textContent = key;
+  if (tooltipText) {
+    keyText.classList.add("hasHelp");
+    keyText.title = tooltipText;
+  }
+  keyEl.appendChild(keyText);
+
+  const valEl = document.createElement("div");
+  valEl.className = "v inspectorFieldValue";
+  if (tooltipText) {
+    valEl.title = tooltipText;
+  }
+  if (controlNode) {
+    valEl.appendChild(controlNode);
+  }
+
+  row.appendChild(keyEl);
+  row.appendChild(valEl);
+  container.appendChild(row);
+}
+
 function hasOwn(target, key) {
   return Object.prototype.hasOwnProperty.call(target || {}, key);
 }
@@ -1723,6 +1751,60 @@ function resizeLocalBrainGene(nodeGene, targetCount) {
   brain.effectorX = normalizeEffectorGene(brain.effectorX, localCount, globalCount);
   brain.effectorY = normalizeEffectorGene(brain.effectorY, localCount, globalCount);
   brain.effectorZ = normalizeEffectorGene(brain.effectorZ, localCount, globalCount);
+}
+
+function copyLocalBrainBetweenNodes(targetNodeIndex, sourceNodeIndex, mode = "full") {
+  if (!state.currentGenome) {
+    setStatus("Load a genome before copying brain settings.", "warn");
+    return false;
+  }
+  if (targetNodeIndex === sourceNodeIndex) {
+    setStatus("Pick a different source node template.", "warn");
+    return false;
+  }
+  const targetNode = getNodeGene(targetNodeIndex);
+  const sourceNode = getNodeGene(sourceNodeIndex);
+  if (!targetNode || !sourceNode) {
+    setStatus("Source or target node template is unavailable.", "warn");
+    return false;
+  }
+
+  const sourceBrainHolder = {
+    brain: deepCloneJson(sourceNode.brain && typeof sourceNode.brain === "object" ? sourceNode.brain : {}),
+  };
+  const sourceNeuronCount = clampInt(
+    asArray(sourceBrainHolder.brain?.neurons).length || MIN_LOCAL_NEURONS,
+    MIN_LOCAL_NEURONS,
+    MAX_LOCAL_NEURONS
+  );
+  resizeLocalBrainGene(sourceBrainHolder, sourceNeuronCount);
+
+  if (mode === "gains") {
+    const targetNeuronCount = clampInt(
+      asArray(targetNode.brain?.neurons).length || MIN_LOCAL_NEURONS,
+      MIN_LOCAL_NEURONS,
+      MAX_LOCAL_NEURONS
+    );
+    resizeLocalBrainGene(targetNode, targetNeuronCount);
+    for (const effectorKey of ["effectorX", "effectorY", "effectorZ"]) {
+      targetNode.brain[effectorKey].gain = toFinite(sourceBrainHolder.brain?.[effectorKey]?.gain, 1.0);
+    }
+  } else {
+    targetNode.brain = deepCloneJson(sourceBrainHolder.brain);
+  }
+
+  syncGenomeEditorFromState();
+  rebuildVisualFromCurrentGenome({ fitCamera: false });
+  setSelection({ kind: "node", id: `node-${targetNodeIndex}` });
+
+  if (mode === "gains") {
+    setInspectorApplyStatus(`Copied effector gains from node ${sourceNodeIndex}.`, "ok");
+    setStatus(`Copied effector gains from node ${sourceNodeIndex} to node ${targetNodeIndex}.`, "ok");
+  } else {
+    setInspectorApplyStatus(`Copied full local brain from node ${sourceNodeIndex}.`, "ok");
+    setStatus(`Copied full local brain from node ${sourceNodeIndex} to node ${targetNodeIndex}.`, "ok");
+  }
+  return true;
 }
 
 function getPartMass(partGene) {
@@ -2331,6 +2413,68 @@ function appendEditableField(container, selection, key, field, value) {
   container.appendChild(row);
 }
 
+function buildBrainCopyControl(entity) {
+  const currentNodeIndex = Number.isInteger(entity?.nodeIndex) ? entity.nodeIndex : null;
+  if (!Number.isInteger(currentNodeIndex)) {
+    return null;
+  }
+  const modelNodes = asArray(state.visualModel?.nodes);
+  const sourceOptions = modelNodes.filter((node) => node.nodeIndex !== currentNodeIndex);
+  if (sourceOptions.length === 0) {
+    const hint = document.createElement("div");
+    hint.className = "inspectorInlineHint";
+    hint.textContent = "No other node templates available.";
+    return hint;
+  }
+
+  const stack = document.createElement("div");
+  stack.className = "inspectorActionStack";
+
+  const picker = document.createElement("select");
+  for (const node of sourceOptions) {
+    const option = document.createElement("option");
+    option.value = String(node.nodeIndex);
+    const neuronCount = clampInt(asArray(node.brain?.neurons).length || MIN_LOCAL_NEURONS, MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS);
+    option.textContent = `node ${node.nodeIndex} | ${node.partIds.length} parts | ${neuronCount} neurons`;
+    picker.appendChild(option);
+  }
+  picker.value = String(sourceOptions[0].nodeIndex);
+  picker.title = "Choose another node template as the source for local brain settings.";
+  stack.appendChild(picker);
+
+  const actions = document.createElement("div");
+  actions.className = "inspectorInlineActions";
+
+  const copyFullBtn = document.createElement("button");
+  copyFullBtn.type = "button";
+  copyFullBtn.className = "btn secondary small";
+  copyFullBtn.textContent = "Copy full local brain";
+  copyFullBtn.title = "Copy neurons, weights, activations, biases, leaks, and effector settings from the source node.";
+  copyFullBtn.addEventListener("click", () => {
+    copyLocalBrainBetweenNodes(currentNodeIndex, clampInt(picker.value, 0, MAX_GRAPH_PARTS), "full");
+  });
+  actions.appendChild(copyFullBtn);
+
+  const copyGainsBtn = document.createElement("button");
+  copyGainsBtn.type = "button";
+  copyGainsBtn.className = "btn secondary small";
+  copyGainsBtn.textContent = "Copy gains only";
+  copyGainsBtn.title = "Copy only effector X/Y/Z gain values from the source node.";
+  copyGainsBtn.addEventListener("click", () => {
+    copyLocalBrainBetweenNodes(currentNodeIndex, clampInt(picker.value, 0, MAX_GRAPH_PARTS), "gains");
+  });
+  actions.appendChild(copyGainsBtn);
+
+  stack.appendChild(actions);
+
+  const hint = document.createElement("div");
+  hint.className = "inspectorInlineHint";
+  hint.textContent = "Use this to make sibling limbs share the same local controller template.";
+  stack.appendChild(hint);
+
+  return stack;
+}
+
 function renderNodeInspector(entity, selection) {
   const nodeGene = getNodeGene(entity.nodeIndex) || {};
   const partGene = nodeGene.part || {};
@@ -2353,6 +2497,12 @@ function renderNodeInspector(entity, selection) {
     clampInt(asArray(brain.neurons).length || MIN_LOCAL_NEURONS, MIN_LOCAL_NEURONS, MAX_LOCAL_NEURONS)
   );
   appendField(inspectorContent, "brain template scope", "Shared by all part instances of this node template.");
+  appendControlField(
+    inspectorContent,
+    "brain copy",
+    buildBrainCopyControl(entity),
+    "Copy local controller settings from another node template."
+  );
   appendField(inspectorContent, "brain effectors", String(effectorCount));
   if (brain.effectorX && typeof brain.effectorX === "object") {
     appendEditableField(inspectorContent, selection, "effectorX gain", "node.brain.effectorX.gain", toFinite(brain.effectorX.gain, 1.0));

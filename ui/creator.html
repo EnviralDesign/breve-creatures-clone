@@ -854,6 +854,33 @@
       display: none;
     }
 
+    .inspectorActionStack {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .inspectorInlineActions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .inspectorInlineActions .btn {
+      flex: 1 1 120px;
+      min-width: 0;
+    }
+
+    .inspectorInlineHint {
+      font-size: 11px;
+      line-height: 1.35;
+      color: var(--muted);
+    }
+
     .inspectorFooter {
       padding: 12px;
       border-top: 1px solid var(--border);

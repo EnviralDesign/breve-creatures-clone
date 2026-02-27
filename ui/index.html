@@ -5,270 +5,322 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Breve Creatures Clone</title>
-  <style>
-    :root {
-      --hud: rgba(10, 15, 11, 0.72);
-      --hud-border: rgba(183, 208, 112, 0.35);
-      --hud-text: #d2f09f;
-      --hud-subtle: #9fbc7e;
-    }
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --hud: rgba(24, 24, 27, 0.65);
+    --hud-border: #27272a;
+    --hud-text: #f4f4f5;
+    --hud-subtle: #a1a1aa;
+    --primary: #10b981;
+    --primary-hover: #059669;
+    --panel-2: #27272a;
+    --border-hover: #3f3f46;
+    --radius-lg: 12px;
+    --radius-md: 8px;
+    --radius-sm: 6px;
+    --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.4);
+    --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  }
 
-    html,
-    body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #1f2622;
-      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-      color: var(--hud-text);
-    }
+  * {
+    box-sizing: border-box;
+    font-family: var(--font-ui);
+  }
 
-    #app {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
+  html,
+  body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #09090b;
+    color: var(--hud-text);
+    font-size: 13px;
+  }
+  
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-hover);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #71717a;
+  }
 
-    #hud {
-      position: fixed;
-      left: 14px;
-      top: 14px;
-      min-width: 245px;
-      padding: 11px 13px 10px;
-      background: var(--hud);
-      border: 1px solid var(--hud-border);
-      border-radius: 10px;
-      backdrop-filter: blur(3px);
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-      line-height: 1.33;
-      letter-spacing: 0.3px;
-      user-select: none;
-    }
+  #app {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
 
-    .panelTop {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 6px;
-      font-size: 11px;
-      letter-spacing: 0.38px;
-      text-transform: uppercase;
-      color: #c7e6a4;
-    }
+  .panel-base {
+    background: var(--hud);
+    border: 1px solid var(--hud-border);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-lg);
+    user-select: none;
+  }
 
-    .panelTopActions {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-    }
+  #hud {
+    position: fixed;
+    left: 16px;
+    top: 16px;
+    min-width: 250px;
+    padding: 14px 16px;
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
 
-    .panelSelect {
-      background: rgba(0, 0, 0, 0.32);
-      color: var(--hud-text);
-      border: 1px solid rgba(183, 208, 112, 0.35);
-      border-radius: 6px;
-      padding: 2px 5px;
-      font-size: 11px;
-      letter-spacing: 0.2px;
-      max-width: 145px;
-    }
+  .panelTop {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--hud-text);
+  }
 
-    .panelToggle {
-      background: rgba(17, 28, 18, 0.92);
-      color: #d4efaa;
-      border: 1px solid rgba(176, 206, 110, 0.4);
-      border-radius: 6px;
-      padding: 2px 7px;
-      font-size: 10px;
-      cursor: pointer;
-      text-transform: none;
-      letter-spacing: 0.2px;
-    }
+  .panelTopActions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
 
-    .panelToggle:hover {
-      background: rgba(30, 46, 31, 0.95);
-    }
+  .panelSelect {
+    background: rgba(0, 0, 0, 0.3);
+    color: var(--hud-text);
+    border: 1px solid var(--hud-border);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    font-size: 12px;
+    outline: none;
+  }
+  .panelSelect:focus {
+    border-color: var(--primary);
+  }
 
-    .panelToggle:active {
-      transform: translateY(1px);
-    }
+  .panelToggle {
+    background: var(--panel-2);
+    color: var(--hud-text);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-transform: none;
+    transition: all 0.1s ease;
+  }
 
-    #hud.collapsed {
-      padding-bottom: 8px;
-    }
+  .panelToggle:hover {
+    background: var(--border-hover);
+  }
 
-    #hud.collapsed #hudBody {
-      display: none;
-    }
+  .panelToggle:active {
+    transform: translateY(1px);
+  }
 
-    #hud .label {
-      color: var(--hud-subtle);
-      margin-right: 5px;
-    }
+  #hud.collapsed {
+    padding-bottom: 14px;
+    gap: 0;
+  }
 
-    #hud .hint {
-      margin-top: 6px;
-      font-size: 12px;
-      color: #b5cf95;
-      opacity: 0.86;
-    }
+  #hud.collapsed #hudBody {
+    display: none;
+  }
 
-    #hud .ctrl {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 6px;
-      font-size: 12px;
-      color: #c6dfa7;
-    }
+  #hud .label {
+    color: var(--hud-subtle);
+    margin-right: 6px;
+    display: inline-block;
+    width: 100px;
+  }
 
-    #hud input[type="range"] {
-      width: 120px;
-    }
+  #hud .hint {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--hud-subtle);
+    border-top: 1px solid var(--hud-border);
+    padding-top: 10px;
+  }
 
-    #hud select {
-      background: rgba(0, 0, 0, 0.32);
-      color: var(--hud-text);
-      border: 1px solid rgba(183, 208, 112, 0.35);
-      border-radius: 6px;
-      padding: 2px 5px;
-    }
+  #hud .ctrl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    color: var(--hud-text);
+  }
 
-    #hud button {
-      background: rgba(17, 28, 18, 0.92);
-      color: #d4efaa;
-      border: 1px solid rgba(176, 206, 110, 0.4);
-      border-radius: 6px;
-      padding: 3px 7px;
-      font-size: 11px;
-      cursor: pointer;
-    }
+  #hud input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 120px;
+    height: 4px;
+    background: var(--hud-border);
+    border-radius: 2px;
+    outline: none;
+  }
+  
+  #hud input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    transition: transform 0.1s;
+  }
 
-    #hud button:hover {
-      background: rgba(30, 46, 31, 0.95);
-    }
+  #hud input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+  }
 
-    #hud button:active {
-      transform: translateY(1px);
-    }
+  #hud select {
+    background: rgba(0, 0, 0, 0.3);
+    color: var(--hud-text);
+    border: 1px solid var(--hud-border);
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
+    font-size: 12px;
+    outline: none;
+  }
+  #hud select:focus { border-color: var(--primary); }
 
+  button {
+    background: var(--panel-2);
+    color: var(--hud-text);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+
+  button:hover {
+    background: var(--border-hover);
+  }
+
+  button:active {
+    transform: translateY(1px);
+  }
+
+  #genomePanel {
+    position: fixed;
+    right: 16px;
+    top: 16px;
+    width: 440px;
+    padding: 14px;
+  }
+
+  #genomePanel.collapsed {
+    width: auto;
+    min-width: 250px;
+  }
+
+  #genomePanel.collapsed #genomeBody {
+    display: none;
+  }
+
+  #genomeTitle {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #genomeCanvas {
+    width: 100%;
+    height: 440px;
+    display: block;
+    border: 1px solid var(--hud-border);
+    border-radius: var(--radius-md);
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  #genomeMeta {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--hud-subtle);
+    font-family: var(--font-mono);
+  }
+
+  #fitnessHistoryPanel {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    min-height: 220px;
+    padding: 14px;
+  }
+
+  #fitnessHistoryPanel.collapsed {
+    min-height: auto;
+    width: auto;
+    right: auto;
+    min-width: 250px;
+  }
+
+  #fitnessHistoryPanel.collapsed #fitnessHistoryBody {
+    display: none;
+  }
+
+  #fitnessHistoryCanvas {
+    width: 100%;
+    height: 180px;
+    display: block;
+    border: 1px solid var(--hud-border);
+    border-radius: var(--radius-md);
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  #fitnessHistoryMeta {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--hud-subtle);
+    font-family: var(--font-mono);
+  }
+
+  @media (max-width: 980px) {
     #genomePanel {
-      position: fixed;
-      right: 14px;
-      top: 14px;
-      width: 388px;
-      padding: 10px;
-      background: rgba(10, 15, 11, 0.72);
-      border: 1px solid rgba(183, 208, 112, 0.35);
-      border-radius: 10px;
-      backdrop-filter: blur(3px);
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-      user-select: none;
+      width: 320px;
     }
-
-    #genomePanel.collapsed {
-      width: auto;
-      min-width: 245px;
-    }
-
-    #genomePanel.collapsed #genomeBody {
-      display: none;
-    }
-
-    #genomeTitle {
-      font-size: 12px;
-      letter-spacing: 0.45px;
-      text-transform: uppercase;
-      color: #c7e6a4;
-      margin-bottom: 0;
-      flex: 1 1 auto;
-      min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
     #genomeCanvas {
-      width: 100%;
-      height: 390px;
-      display: block;
-      border: 1px solid rgba(180, 201, 115, 0.22);
-      border-radius: 8px;
-      background: radial-gradient(circle at 30% 20%, rgba(94, 134, 90, 0.08), rgba(0, 0, 0, 0.16));
+      height: 320px;
     }
-
-    #genomeMeta {
-      margin-top: 6px;
-      font-size: 11px;
-      color: #b9d698;
-      line-height: 1.35;
-      letter-spacing: 0.22px;
-    }
-
-    #fitnessHistoryPanel {
-      position: fixed;
-      left: 14px;
-      right: 14px;
-      bottom: 14px;
-      min-height: 214px;
-      padding: 10px;
-      background: rgba(10, 15, 11, 0.72);
-      border: 1px solid rgba(183, 208, 112, 0.35);
-      border-radius: 10px;
-      backdrop-filter: blur(3px);
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-      user-select: none;
-    }
-
-    #fitnessHistoryPanel.collapsed {
-      min-height: auto;
-      width: auto;
-      right: auto;
-      min-width: 245px;
-    }
-
-    #fitnessHistoryPanel.collapsed #fitnessHistoryBody {
-      display: none;
-    }
-
     #fitnessHistoryCanvas {
-      width: 100%;
-      height: 170px;
-      display: block;
-      border: 1px solid rgba(180, 201, 115, 0.22);
-      border-radius: 8px;
-      background: radial-gradient(circle at 22% 18%, rgba(94, 134, 90, 0.08), rgba(0, 0, 0, 0.16));
+      height: 154px;
     }
-
-    #fitnessHistoryMeta {
-      margin-top: 6px;
-      font-size: 11px;
-      color: #b9d698;
-      line-height: 1.35;
-      letter-spacing: 0.22px;
-    }
-
-    @media (max-width: 980px) {
-      #genomePanel {
-        width: 320px;
-      }
-
-      #genomeCanvas {
-        height: 320px;
-      }
-
-      #fitnessHistoryCanvas {
-        height: 154px;
-      }
-    }
-  </style>
+  }
+</style>
 </head>
 
 <body>
   <canvas id="app"></canvas>
-  <div id="hud">
+  <div id="hud" class="panel-base">
     <div class="panelTop">
       <span>Evolution Controls</span>
       <button id="toggleHudBtn" class="panelToggle" type="button">Hide</button>
@@ -340,7 +392,7 @@
       <div class="hint">Space: pause | Drag: temporary manual camera</div>
     </div>
   </div>
-  <div id="genomePanel">
+  <div id="genomePanel" class="panel-base">
     <div class="panelTop">
       <span id="genomeTitle">Champion Genome Network</span>
       <div class="panelTopActions">
@@ -356,7 +408,7 @@
       <div id="genomeMeta">No champion yet.</div>
     </div>
   </div>
-  <div id="fitnessHistoryPanel">
+  <div id="fitnessHistoryPanel" class="panel-base">
     <div class="panelTop">
       <span>Fitness History</span>
       <button id="toggleFitnessHistoryBtn" class="panelToggle" type="button">Hide</button>
@@ -1360,13 +1412,13 @@
       const H = Math.max(1, Math.floor(fitnessHistoryCanvas.clientHeight));
       const ctx = fitnessHistoryCtx;
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = "rgba(6, 10, 8, 0.46)";
+      ctx.fillStyle = "transparent";
       ctx.fillRect(0, 0, W, H);
 
       if (fitnessHistory.length === 0) {
         fitnessHistoryMeta.textContent = "Waiting for generation results...";
-        ctx.fillStyle = "#b8d795";
-        ctx.font = "12px Trebuchet MS, Segoe UI, sans-serif";
+        ctx.fillStyle = "#a1a1aa";
+        ctx.font = "12px Inter, sans-serif";
         ctx.fillText("Waiting for generation results...", 12, 22);
         return;
       }
@@ -1407,7 +1459,7 @@
       const gridLines = 4;
       for (let i = 0; i <= gridLines; i++) {
         const y = PADDING_TOP + (i / gridLines) * plotH;
-        ctx.strokeStyle = i === gridLines ? "rgba(170, 200, 120, 0.28)" : "rgba(170, 194, 117, 0.10)";
+        ctx.strokeStyle = i === gridLines ? "rgba(255, 255, 255, 0.1)" : "rgba(255, 255, 255, 0.05)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(PADDING_LEFT, y);
@@ -1415,12 +1467,12 @@
         ctx.stroke();
       }
 
-      ctx.fillStyle = "rgba(185, 214, 152, 0.82)";
-      ctx.font = "10px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+      ctx.font = "10px Inter, sans-serif";
       ctx.fillText(paddedMax.toFixed(2), 4, PADDING_TOP + 3);
       ctx.fillText(paddedMin.toFixed(2), 4, H - PADDING_BOTTOM + 3);
 
-      ctx.fillStyle = "rgba(215, 224, 206, 0.28)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
       for (let i = 0; i < entries.length; i++) {
         const x = xForIndex(i);
         const attempts = entries[i].attemptFitnesses;
@@ -1432,7 +1484,7 @@
         }
       }
 
-      ctx.strokeStyle = "rgba(112, 144, 171, 0.95)";
+      ctx.strokeStyle = "#60a5fa";
       ctx.lineWidth = 1.9;
       ctx.beginPath();
       let hasMedianPoint = false;
@@ -1454,7 +1506,7 @@
         ctx.stroke();
       }
 
-      ctx.strokeStyle = "rgba(210, 240, 159, 0.94)";
+      ctx.strokeStyle = "#10b981";
       ctx.lineWidth = 1.8;
       ctx.beginPath();
       for (let i = 0; i < entries.length; i++) {
@@ -1465,7 +1517,7 @@
       }
       ctx.stroke();
 
-      ctx.fillStyle = "rgba(217, 245, 168, 0.95)";
+      ctx.fillStyle = "#34d399";
       for (let i = 0; i < entries.length; i++) {
         const x = xForIndex(i);
         const y = yForFitness(entries[i].bestFitness);
@@ -1478,8 +1530,8 @@
       const first = entries[0];
       fitnessHistoryMeta.textContent =
         `gens ${first.generation}-${last.generation} | latest best ${last.bestFitness.toFixed(2)} | points ${fitnessHistory.length}`;
-      ctx.fillStyle = "rgba(185, 214, 152, 0.82)";
-      ctx.font = "10px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+      ctx.font = "10px Inter, sans-serif";
       ctx.fillText(`Gen ${first.generation}`, PADDING_LEFT, H - 6);
       const rightLabel = `Gen ${last.generation}`;
       const rightWidth = ctx.measureText(rightLabel).width;
@@ -1630,13 +1682,13 @@
       const H = Math.max(1, Math.floor(genomeCanvas.clientHeight));
       const ctx = genomeCtx;
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = "rgba(6, 10, 8, 0.46)";
+      ctx.fillStyle = "transparent";
       ctx.fillRect(0, 0, W, H);
       vizDrawGrid(ctx, W, H);
 
       if (!vizCreature || !vizCreature.genome) {
-        ctx.fillStyle = "#b8d795";
-        ctx.font = "12px Trebuchet MS, Segoe UI, sans-serif";
+        ctx.fillStyle = "#a1a1aa";
+        ctx.font = "12px Inter, sans-serif";
         const waitingText = genomeVizMode === "current"
           ? "Current genome snapshot not available yet."
           : "Best genome snapshot not available yet.";
@@ -1666,7 +1718,7 @@
         ? `#${vizCreature.index + 1}`
         : "BEST";
       ctx.fillStyle = "rgba(208, 233, 156, 0.92)";
-      ctx.font = "11px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.font = "11px Inter, sans-serif";
       ctx.textAlign = "right";
       ctx.fillText(tag, W - 10, 14);
       ctx.fillText(`Score ${score.toFixed(2)}`, W - 10, 28);
@@ -1700,7 +1752,7 @@
 
     function vizDrawSectionLabel(ctx, text, x, y) {
       ctx.save();
-      ctx.font = "bold 8.5px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.font = "bold 8.5px Inter, sans-serif";
       ctx.fillStyle = "rgba(180, 210, 140, 0.45)";
       ctx.letterSpacing = "1.2px";
       ctx.fillText(text, x, y);
@@ -1712,7 +1764,7 @@
       const nodes = summary.nodes;
       if (nodes.length === 0) {
         ctx.fillStyle = "rgba(190, 215, 150, 0.68)";
-        ctx.font = "11px Trebuchet MS, Segoe UI, sans-serif";
+        ctx.font = "11px Inter, sans-serif";
         ctx.fillText("No graph nodes available.", ox + 10, oy + 44);
         return;
       }
@@ -1766,15 +1818,15 @@
         ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        ctx.font = "8px Trebuchet MS, sans-serif";
-        ctx.fillStyle = "rgba(8, 14, 10, 0.92)";
+        ctx.font = "8px Inter, sans-serif";
+        ctx.fillStyle = "#09090b";
         ctx.textAlign = "center";
         ctx.fillText(String(i), p.x, p.y + 2.5);
         ctx.restore();
       }
 
       ctx.save();
-      ctx.font = "8px Trebuchet MS, sans-serif";
+      ctx.font = "8px Inter, sans-serif";
       ctx.fillStyle = "rgba(186, 214, 151, 0.58)";
       ctx.textAlign = "left";
       ctx.fillText("Hinge edges", ox + W - 120, oy + 14);
@@ -1794,7 +1846,7 @@
       const y = oy;
       const v = clamp(value, 0, 1);
       ctx.save();
-      ctx.font = "7.5px Trebuchet MS, sans-serif";
+      ctx.font = "7.5px Inter, sans-serif";
       ctx.fillStyle = "rgba(186, 214, 151, 0.62)";
       ctx.textAlign = "right";
       ctx.fillText(label, x - 4, y + h - 1);
@@ -1846,7 +1898,7 @@
 
       const infoY = startY + bars.length * (rowH + rowGap) + 2;
       ctx.save();
-      ctx.font = "7px Trebuchet MS, sans-serif";
+      ctx.font = "7px Inter, sans-serif";
       ctx.fillStyle = "rgba(186, 214, 151, 0.58)";
       ctx.textAlign = "left";
       ctx.fillText(`nodes ${summary.nodeCount} | edges ${summary.edgeCount} | maxParts ${summary.maxParts}`, ox + 2, infoY);
@@ -2016,7 +2068,7 @@
       sctx.lineWidth = 4;
       sctx.strokeRect(2, 2, spriteCanvas.width - 4, spriteCanvas.height - 4);
       sctx.fillStyle = "#e1f6b4";
-      sctx.font = "bold 44px Trebuchet MS";
+      sctx.font = "bold 44px Inter";
       sctx.textAlign = "center";
       sctx.textBaseline = "middle";
       sctx.fillText("START", spriteCanvas.width * 0.5, spriteCanvas.height * 0.52);
@@ -2182,7 +2234,7 @@
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.fillStyle = "#e1f6b4";
-        ctx.font = "bold 36px Trebuchet MS";
+        ctx.font = "bold 36px Inter";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(text, w * 0.5, h * 0.52);
