@@ -7707,7 +7707,7 @@ fn load_authored_creature(id_or_path: Option<&str>) -> Result<AuthoredCreatureFi
     creature.version = default_authored_creature_file_version();
     creature.genome.version = default_genome_version();
     let mut rng = SmallRng::seed_from_u64(0x9bad_f00d);
-    ensure_graph_valid(&mut creature.genome.graph, &mut rng);
+    ensure_graph_valid(&mut creature.genome.graph, &mut rng, false);
     project_graph_to_legacy(&mut creature.genome);
     ensure_active_body_plan(&mut creature.genome, &mut rng);
     Ok(creature)
@@ -8161,7 +8161,7 @@ fn constrain_genome_with_template(
         source.hue
     };
 
-    ensure_graph_valid(&mut constrained.graph, rng);
+    ensure_graph_valid(&mut constrained.graph, rng, false);
     project_graph_to_legacy(&mut constrained);
     ensure_active_body_plan(&mut constrained, rng);
     constrained
@@ -8633,12 +8633,13 @@ fn resize_local_brain(
     brain.effector_z.gain = clamp(brain.effector_z.gain, 0.2, 2.0);
 }
 
-fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng) {
+fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng, enforce_surface_anchor_shape: bool) {
     if graph.nodes.is_empty() {
         *graph = random_graph_gene(rng);
         return;
     }
-    graph.max_parts = graph.max_parts.clamp(6, MAX_GRAPH_PARTS);
+    let min_graph_parts = if enforce_surface_anchor_shape { 6 } else { 1 };
+    graph.max_parts = graph.max_parts.clamp(min_graph_parts, MAX_GRAPH_PARTS);
     graph.root = graph.root.min(graph.nodes.len().saturating_sub(1));
     resize_global_brain(&mut graph.global_brain, None, rng);
     let global_count = graph.global_brain.neurons.len();
@@ -8652,7 +8653,13 @@ fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng) {
         node.edges.truncate(MAX_GRAPH_EDGES_PER_NODE);
         for edge in &mut node.edges {
             edge.to = edge.to.min(node_len.saturating_sub(1));
-            clamp_surface_anchor(edge, rng);
+            if enforce_surface_anchor_shape {
+                clamp_surface_anchor(edge, rng);
+            } else {
+                edge.anchor_x = clamp(edge.anchor_x, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
+                edge.anchor_y = clamp(edge.anchor_y, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
+                edge.anchor_z = clamp(edge.anchor_z, -EDGE_ANCHOR_ABS_MAX, EDGE_ANCHOR_ABS_MAX);
+            }
             edge.axis_y = clamp(edge.axis_y, -EDGE_AXIS_ABS_MAX, EDGE_AXIS_ABS_MAX);
             edge.axis_z = clamp(edge.axis_z, -EDGE_AXIS_ABS_MAX, EDGE_AXIS_ABS_MAX);
             edge.dir_x = clamp(edge.dir_x, -EDGE_DIR_XZ_ABS_MAX, EDGE_DIR_XZ_ABS_MAX);
@@ -8666,7 +8673,7 @@ fn ensure_graph_valid(graph: &mut GraphGene, rng: &mut SmallRng) {
             edge.motor_strength = clamp(edge.motor_strength, 0.3, 4.5);
             edge.joint_stiffness = clamp(edge.joint_stiffness, 12.0, 160.0);
         }
-        if node.edges.is_empty() {
+        if enforce_surface_anchor_shape && node.edges.is_empty() {
             let to = rng.random_range(0..node_len);
             node.edges.push(random_graph_edge_gene(rng, to));
         }
@@ -8796,7 +8803,7 @@ fn crossover_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> Gra
     }
     child.max_parts = ((a.max_parts + b.max_parts) / 2).clamp(6, MAX_GRAPH_PARTS);
     child.root = child.root.min(child.nodes.len().saturating_sub(1));
-    ensure_graph_valid(&mut child, rng);
+    ensure_graph_valid(&mut child, rng, true);
     child
 }
 
@@ -9106,7 +9113,7 @@ fn mutate_graph_gene(graph: &mut GraphGene, chance: f32, structural: bool, rng: 
             node.edges.remove(remove);
         }
     }
-    ensure_graph_valid(graph, rng);
+    ensure_graph_valid(graph, rng, true);
 }
 
 fn collect_reachable_subgraph_indices(
@@ -9155,7 +9162,7 @@ fn graft_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> GraphGe
     let donor_indices =
         collect_reachable_subgraph_indices(b, donor_root, room_for_new_nodes.saturating_add(1));
     if donor_indices.is_empty() {
-        ensure_graph_valid(&mut child, rng);
+        ensure_graph_valid(&mut child, rng, true);
         return child;
     }
     let mut donor_to_child: HashMap<usize, usize> = HashMap::new();
@@ -9192,7 +9199,7 @@ fn graft_graph_gene(a: &GraphGene, b: &GraphGene, rng: &mut SmallRng) -> GraphGe
         child.global_brain = b.global_brain.clone();
     }
     child.max_parts = ((child.max_parts + b.max_parts) / 2).clamp(6, MAX_GRAPH_PARTS);
-    ensure_graph_valid(&mut child, rng);
+    ensure_graph_valid(&mut child, rng, true);
     child
 }
 

@@ -219,6 +219,13 @@
       margin-bottom: 10px;
     }
 
+    .modeHeading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
     .modeButtons {
       display: flex;
       gap: 8px;
@@ -230,6 +237,35 @@
       border-color: color-mix(in srgb, var(--accent) 65%, #2b4430);
       background: #1f3422;
       color: #e8f7e7;
+    }
+
+    .modeButtons button:disabled,
+    .toolButtons button:disabled {
+      opacity: 0.42;
+      filter: saturate(0.55);
+      border-color: #2b3833;
+      background: #12191b;
+      color: #6f8178;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    .toolButtons {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-left: 4px;
+      padding-left: 8px;
+      border-left: 1px solid #2f4038;
+    }
+
+    .toolStatus {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.2;
+      white-space: nowrap;
+      opacity: 0.9;
     }
 
     .editorPane {
@@ -251,8 +287,15 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(220px, 300px) minmax(360px, 1fr) minmax(260px, 340px);
-      gap: 10px;
+      --outliner-width: 260px;
+      --inspector-width: 300px;
+      grid-template-columns:
+        minmax(200px, var(--outliner-width))
+        8px
+        minmax(360px, 1fr)
+        8px
+        minmax(240px, var(--inspector-width));
+      gap: 0;
     }
 
     #visualViewport {
@@ -262,6 +305,49 @@
       overflow: hidden;
       background: radial-gradient(circle at 15% 20%, #182427, #0f171d 58%, #0c1217 100%);
       position: relative;
+    }
+
+    .paneResizer {
+      cursor: col-resize;
+      position: relative;
+      min-height: 0;
+      align-self: stretch;
+      background: transparent;
+      border: none;
+      outline: none;
+      width: 8px;
+      padding: 0;
+      touch-action: none;
+    }
+
+    .paneResizer::before {
+      content: "";
+      position: absolute;
+      top: 6px;
+      bottom: 6px;
+      left: 3px;
+      width: 2px;
+      border-radius: 2px;
+      background: linear-gradient(180deg, #3f5349, #2e4037);
+      opacity: 0.72;
+      transition: opacity 120ms ease, background 120ms ease;
+      pointer-events: none;
+    }
+
+    .paneResizer:hover::before,
+    .paneResizer:focus-visible::before,
+    .paneResizer.active::before {
+      opacity: 1;
+      background: linear-gradient(180deg, #85a991, #5d806b);
+    }
+
+    body.resizingPanes {
+      user-select: none;
+      cursor: col-resize;
+    }
+
+    body.resizingPanes * {
+      cursor: col-resize !important;
     }
 
     .visualPanel {
@@ -278,6 +364,8 @@
     .inspectorPanel {
       min-height: 0;
       flex: 1;
+      container-type: inline-size;
+      container-name: inspector;
     }
 
     .visualPanel h2 {
@@ -367,6 +455,10 @@
       border-left: 3px solid #d2b47f;
     }
 
+    .outlinerItem.edge {
+      border-left: 3px solid #8fbfd6;
+    }
+
     .emptyState {
       color: var(--muted);
       font-size: 12px;
@@ -446,14 +538,16 @@
 
     .inspectorNumericCombo {
       display: flex;
+      flex-wrap: nowrap;
       align-items: center;
       gap: 7px;
       min-width: 0;
+      width: 100%;
     }
 
     #inspectorContent .inspectorSlider {
       flex: 1 1 auto;
-      min-width: 0;
+      min-width: 120px;
       accent-color: var(--accent);
       cursor: pointer;
     }
@@ -516,13 +610,6 @@
       accent-color: var(--accent);
     }
 
-    .inspectorFieldHint {
-      font-size: 11px;
-      color: var(--muted);
-      line-height: 1.3;
-      opacity: 0.92;
-    }
-
     .inspectorFieldError {
       font-size: 11px;
       color: var(--err);
@@ -542,6 +629,27 @@
 
     .inspectorFieldRow.invalid .inspectorSlider {
       accent-color: #d78282;
+    }
+
+    @container inspector (max-width: 340px) {
+      .inspectorFieldRow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .inspectorFieldLabel {
+        flex: 1 1 100%;
+        padding-top: 0;
+      }
+
+      .inspectorFieldValue {
+        flex: 1 1 100%;
+      }
+
+      .inspectorFieldControl {
+        width: 100%;
+      }
     }
 
     .inspectorFooter {
@@ -613,6 +721,10 @@
 
       #visualWorkspace {
         grid-template-columns: 1fr;
+      }
+
+      .paneResizer {
+        display: none;
       }
     }
   </style>
@@ -700,25 +812,38 @@
     </div>
     <div class="card rightCard">
       <div class="modeRow">
-        <h2>Editor</h2>
+        <div class="modeHeading">
+          <h2>Editor</h2>
+          <div id="toolStatus" class="toolStatus">Tool: select</div>
+        </div>
         <div class="modeButtons">
           <button id="toggleSidebarBtn" type="button">Hide controls</button>
           <button id="showVisualBtn" type="button" class="active">Visual</button>
           <button id="showJsonBtn" type="button">JSON</button>
           <button id="rebuildVisualBtn" type="button">Rebuild visual from JSON</button>
+          <div class="toolButtons">
+            <button id="toolSelectBtn" type="button" class="active">Select</button>
+            <button id="toolMoveAnchorBtn" type="button">Move anchor</button>
+            <button id="toolGrowthDirBtn" type="button">Growth handle</button>
+            <button id="addChildBtn" type="button">Add child</button>
+            <button id="duplicateBranchBtn" type="button">Duplicate branch</button>
+            <button id="deleteSelectedBtn" type="button">Delete</button>
+          </div>
         </div>
       </div>
       <div id="visualPane" class="editorPane active">
         <div id="visualWorkspace">
-          <div class="visualPanel">
+          <div id="outlinerPanel" class="visualPanel">
             <div class="visualPanelHeader">
               <h2>Outliner</h2>
             </div>
-            <input id="outlinerSearch" type="text" placeholder="filter (node, part, joint)">
+            <input id="outlinerSearch" type="text" placeholder="filter (node, edge, part, joint)">
             <div id="outlinerList"></div>
           </div>
+          <button id="outlinerResizeHandle" class="paneResizer" type="button" aria-label="Resize outliner panel" title="Drag to resize outliner panel"></button>
           <div id="visualViewport"></div>
-          <div class="visualPanel inspectorPanel">
+          <button id="inspectorResizeHandle" class="paneResizer" type="button" aria-label="Resize inspector panel" title="Drag to resize inspector panel"></button>
+          <div id="inspectorPanel" class="visualPanel inspectorPanel">
             <div id="selectionToolbar">
               <h2>Inspector</h2>
               <button id="focusSelectedBtn" type="button">Frame selected</button>
