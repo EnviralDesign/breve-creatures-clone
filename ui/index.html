@@ -1945,8 +1945,8 @@
     function vizDrawRadarChart(ctx, label, items, ox, oy, W, H) {
       vizDrawSectionLabel(ctx, label, ox, oy + 10);
       const cx = ox + W * 0.5;
-      const cy = oy + H * 0.5 + 4;
-      const r_max = Math.min(W, H) * 0.5 - 20;
+      const cy = oy + H * 0.5 + 12;
+      const r_max = Math.min(W, H) * 0.5 - 28;
       const sides = items.length;
       if (sides === 0) return;
 
@@ -1995,7 +1995,7 @@
         ctx.beginPath(); ctx.arc(px, py, 2.5, 0, 7);
         ctx.fillStyle = `hsla(${items[i].hue}, 54%, 58%, 1)`; ctx.fill();
 
-        const lx = cx + Math.cos(a) * (r_max + 12), ly = cy + Math.sin(a) * (r_max + 18);
+        const lx = cx + Math.cos(a) * (r_max + 12), ly = cy + Math.sin(a) * (r_max + 16);
         ctx.fillStyle = "rgba(186, 214, 151, 0.85)"; ctx.fillText(items[i].label, lx, ly);
       }
       ctx.restore();
