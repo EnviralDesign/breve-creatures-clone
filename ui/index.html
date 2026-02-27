@@ -6,316 +6,327 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Breve Creatures Clone</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root {
-    color-scheme: dark;
-    --hud: rgba(24, 24, 27, 0.65);
-    --hud-border: #27272a;
-    --hud-text: #f4f4f5;
-    --hud-subtle: #a1a1aa;
-    --primary: #10b981;
-    --primary-hover: #059669;
-    --panel-2: #27272a;
-    --border-hover: #3f3f46;
-    --radius-lg: 12px;
-    --radius-md: 8px;
-    --radius-sm: 6px;
-    --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.4);
-    --font-ui: "Inter", system-ui, -apple-system, sans-serif;
-    --font-mono: "JetBrains Mono", "Fira Code", monospace;
-  }
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --hud: rgba(24, 24, 27, 0.65);
+      --hud-border: #27272a;
+      --hud-text: #f4f4f5;
+      --hud-subtle: #a1a1aa;
+      --primary: #10b981;
+      --primary-hover: #059669;
+      --panel-2: #27272a;
+      --border-hover: #3f3f46;
+      --radius-lg: 12px;
+      --radius-md: 8px;
+      --radius-sm: 6px;
+      --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.4);
+      --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", monospace;
+    }
 
-  * {
-    box-sizing: border-box;
-    font-family: var(--font-ui);
-  }
+    * {
+      box-sizing: border-box;
+      font-family: var(--font-ui);
+    }
 
-  html,
-  body {
-    margin: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    background: #09090b;
-    color: var(--hud-text);
-    font-size: 13px;
-  }
-  
-  ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: var(--border-hover);
-    border-radius: 4px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #71717a;
-  }
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #09090b;
+      color: var(--hud-text);
+      font-size: 13px;
+    }
 
-  #app {
-    display: block;
-    width: 100%;
-    height: 100%;
-  }
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
 
-  .panel-base {
-    background: var(--hud);
-    border: 1px solid var(--hud-border);
-    border-radius: var(--radius-lg);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    box-shadow: var(--shadow-lg);
-    user-select: none;
-  }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
 
-  #hud {
-    position: fixed;
-    left: 16px;
-    top: 16px;
-    min-width: 250px;
-    padding: 14px 16px;
-    line-height: 1.4;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-hover);
+      border-radius: 4px;
+    }
 
-  .panelTop {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--hud-text);
-  }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #71717a;
+    }
 
-  .panelTopActions {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
+    #app {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
 
-  .panelSelect {
-    background: rgba(0, 0, 0, 0.3);
-    color: var(--hud-text);
-    border: 1px solid var(--hud-border);
-    border-radius: var(--radius-sm);
-    padding: 4px 8px;
-    font-size: 12px;
-    outline: none;
-  }
-  .panelSelect:focus {
-    border-color: var(--primary);
-  }
+    .panel-base {
+      background: var(--hud);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--radius-lg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: var(--shadow-lg);
+      user-select: none;
+    }
 
-  .panelToggle {
-    background: var(--panel-2);
-    color: var(--hud-text);
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    padding: 4px 8px;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    text-transform: none;
-    transition: all 0.1s ease;
-  }
+    #hud {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      min-width: 250px;
+      padding: 14px 16px;
+      line-height: 1.4;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
 
-  .panelToggle:hover {
-    background: var(--border-hover);
-  }
+    .panelTop {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--hud-text);
+    }
 
-  .panelToggle:active {
-    transform: translateY(1px);
-  }
+    .panelTopActions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
 
-  #hud.collapsed {
-    padding-bottom: 14px;
-    gap: 0;
-  }
+    .panelSelect {
+      background: rgba(0, 0, 0, 0.3);
+      color: var(--hud-text);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--radius-sm);
+      padding: 4px 8px;
+      font-size: 12px;
+      outline: none;
+    }
 
-  #hud.collapsed #hudBody {
-    display: none;
-  }
+    .panelSelect:focus {
+      border-color: var(--primary);
+    }
 
-  #hud .label {
-    color: var(--hud-subtle);
-    margin-right: 6px;
-    display: inline-block;
-    width: 100px;
-  }
+    .panelToggle {
+      background: var(--panel-2);
+      color: var(--hud-text);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      text-transform: none;
+      transition: all 0.1s ease;
+    }
 
-  #hud .hint {
-    margin-top: 10px;
-    font-size: 11px;
-    color: var(--hud-subtle);
-    border-top: 1px solid var(--hud-border);
-    padding-top: 10px;
-  }
+    .panelToggle:hover {
+      background: var(--border-hover);
+    }
 
-  #hud .ctrl {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 6px;
-    color: var(--hud-text);
-  }
+    .panelToggle:active {
+      transform: translateY(1px);
+    }
 
-  #hud input[type="range"] {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 120px;
-    height: 4px;
-    background: var(--hud-border);
-    border-radius: 2px;
-    outline: none;
-  }
-  
-  #hud input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--primary);
-    cursor: pointer;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    transition: transform 0.1s;
-  }
+    #hud.collapsed {
+      padding-bottom: 14px;
+      gap: 0;
+    }
 
-  #hud input[type="range"]::-webkit-slider-thumb:hover {
-    transform: scale(1.15);
-  }
+    #hud.collapsed #hudBody {
+      display: none;
+    }
 
-  #hud select {
-    background: rgba(0, 0, 0, 0.3);
-    color: var(--hud-text);
-    border: 1px solid var(--hud-border);
-    border-radius: var(--radius-sm);
-    padding: 4px 6px;
-    font-size: 12px;
-    outline: none;
-  }
-  #hud select:focus { border-color: var(--primary); }
+    #hud .label {
+      color: var(--hud-subtle);
+      margin-right: 6px;
+      display: inline-block;
+      width: 100px;
+    }
 
-  button {
-    background: var(--panel-2);
-    color: var(--hud-text);
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    padding: 4px 8px;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.1s;
-  }
+    #hud .hint {
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--hud-subtle);
+      border-top: 1px solid var(--hud-border);
+      padding-top: 10px;
+    }
 
-  button:hover {
-    background: var(--border-hover);
-  }
+    #hud .ctrl {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+      color: var(--hud-text);
+    }
 
-  button:active {
-    transform: translateY(1px);
-  }
+    #hud input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 120px;
+      height: 4px;
+      background: var(--hud-border);
+      border-radius: 2px;
+      outline: none;
+    }
 
-  #genomePanel {
-    position: fixed;
-    right: 16px;
-    top: 16px;
-    width: 440px;
-    padding: 14px;
-  }
+    #hud input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--primary);
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      transition: transform 0.1s;
+    }
 
-  #genomePanel.collapsed {
-    width: auto;
-    min-width: 250px;
-  }
+    #hud input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+    }
 
-  #genomePanel.collapsed #genomeBody {
-    display: none;
-  }
+    #hud select {
+      background: rgba(0, 0, 0, 0.3);
+      color: var(--hud-text);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--radius-sm);
+      padding: 4px 6px;
+      font-size: 12px;
+      outline: none;
+    }
 
-  #genomeTitle {
-    flex: 1 1 auto;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+    #hud select:focus {
+      border-color: var(--primary);
+    }
 
-  #genomeCanvas {
-    width: 100%;
-    height: 440px;
-    display: block;
-    border: 1px solid var(--hud-border);
-    border-radius: var(--radius-md);
-    background: rgba(0, 0, 0, 0.2);
-  }
+    button {
+      background: var(--panel-2);
+      color: var(--hud-text);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.1s;
+    }
 
-  #genomeMeta {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--hud-subtle);
-    font-family: var(--font-mono);
-  }
+    button:hover {
+      background: var(--border-hover);
+    }
 
-  #fitnessHistoryPanel {
-    position: fixed;
-    left: 16px;
-    right: 16px;
-    bottom: 16px;
-    min-height: 220px;
-    padding: 14px;
-  }
+    button:active {
+      transform: translateY(1px);
+    }
 
-  #fitnessHistoryPanel.collapsed {
-    min-height: auto;
-    width: auto;
-    right: auto;
-    min-width: 250px;
-  }
-
-  #fitnessHistoryPanel.collapsed #fitnessHistoryBody {
-    display: none;
-  }
-
-  #fitnessHistoryCanvas {
-    width: 100%;
-    height: 180px;
-    display: block;
-    border: 1px solid var(--hud-border);
-    border-radius: var(--radius-md);
-    background: rgba(0, 0, 0, 0.2);
-  }
-
-  #fitnessHistoryMeta {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--hud-subtle);
-    font-family: var(--font-mono);
-  }
-
-  @media (max-width: 980px) {
     #genomePanel {
-      width: 320px;
+      position: fixed;
+      right: 16px;
+      top: 16px;
+      width: 440px;
+      padding: 14px;
     }
+
+    #genomePanel.collapsed {
+      width: auto;
+      min-width: 250px;
+    }
+
+    #genomePanel.collapsed #genomeBody {
+      display: none;
+    }
+
+    #genomeTitle {
+      flex: 1 1 auto;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     #genomeCanvas {
-      height: 320px;
+      width: 100%;
+      height: 440px;
+      display: block;
+      border: 1px solid var(--hud-border);
+      border-radius: var(--radius-md);
+      background: rgba(0, 0, 0, 0.2);
     }
+
+    #genomeMeta {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--hud-subtle);
+      font-family: var(--font-mono);
+    }
+
+    #fitnessHistoryPanel {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: 16px;
+      min-height: 220px;
+      padding: 14px;
+    }
+
+    #fitnessHistoryPanel.collapsed {
+      min-height: auto;
+      width: auto;
+      right: auto;
+      min-width: 250px;
+    }
+
+    #fitnessHistoryPanel.collapsed #fitnessHistoryBody {
+      display: none;
+    }
+
     #fitnessHistoryCanvas {
-      height: 154px;
+      width: 100%;
+      height: 180px;
+      display: block;
+      border: 1px solid var(--hud-border);
+      border-radius: var(--radius-md);
+      background: rgba(0, 0, 0, 0.2);
     }
-  }
-</style>
+
+    #fitnessHistoryMeta {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--hud-subtle);
+      font-family: var(--font-mono);
+    }
+
+    @media (max-width: 980px) {
+      #genomePanel {
+        width: 320px;
+      }
+
+      #genomeCanvas {
+        height: 320px;
+      }
+
+      #fitnessHistoryCanvas {
+        height: 154px;
+      }
+    }
+  </style>
 </head>
 
 <body>
@@ -1771,57 +1782,144 @@
       const layout = computeGraphLayout(summary, ox, oy, W, H);
       const pulse = 0.5 + 0.5 * Math.sin(simClock * 1.35);
 
+      // Draw edges
       for (let i = 0; i < nodes.length; i++) {
         const from = layout.positions[i];
         for (const edge of graphEdges(nodes[i])) {
           const toIndex = clamp((edge?.to | 0) || 0, 0, nodes.length - 1);
           const to = layout.positions[toIndex];
-          const jointType = String(edge?.jointType ?? "hinge").toLowerCase();
-          const isBall = jointType.includes("ball");
+          const isBall = String(edge?.jointType ?? "").toLowerCase().includes("ball");
           const terminalOnly = Boolean(edge?.terminalOnly);
           const reflectX = Boolean(edge?.reflectX);
           const recursiveLimit = Math.max(1, (edge?.recursiveLimit | 0) || 1);
-          const recursive = recursiveLimit > 1 || toIndex === i;
-          const bend = recursive ? 24 : 0;
-          const cpx = (from.x + to.x) * 0.5 + bend;
-          const cpy = (from.y + to.y) * 0.5 + (from.y < to.y ? -8 : 8);
+
+          if (toIndex === i) continue; // Skip pure self-loops for main spline
+
+          const cpx = (from.x + to.x) * 0.5;
+          const curveO = Math.abs(to.x - from.x) * 0.2;
+          const cpy = (from.y + to.y) * 0.5 + (from.y < to.y ? -curveO : curveO);
+
           ctx.save();
           ctx.strokeStyle = isBall
-            ? `rgba(108, 204, 235, ${0.34 + pulse * 0.26})`
-            : `rgba(232, 184, 102, ${0.34 + pulse * 0.26})`;
-          ctx.lineWidth = reflectX ? 2.0 : 1.2;
+            ? `rgba(108, 204, 235, ${0.4 + pulse * 0.25})`
+            : `rgba(232, 184, 102, ${0.4 + pulse * 0.25})`;
+          ctx.lineWidth = reflectX ? 2.5 : 1.2;
           if (terminalOnly) ctx.setLineDash([3, 3]);
-          ctx.beginPath();
-          ctx.moveTo(from.x, from.y);
-          ctx.quadraticCurveTo(cpx, cpy, to.x, to.y);
-          ctx.stroke();
-          ctx.setLineDash([]);
+          if (recursiveLimit > 1) {
+            ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.quadraticCurveTo(cpx, cpy - 5, to.x, to.y); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.quadraticCurveTo(cpx, cpy + 5, to.x, to.y); ctx.stroke();
+          } else {
+            ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.quadraticCurveTo(cpx, cpy, to.x, to.y); ctx.stroke();
+          }
           ctx.restore();
         }
       }
 
+      // Draw nodes
       for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
-        const partMass = Number(node?.part?.mass) || 0.4;
+        const part = node?.part || {};
+        const partW = Math.max(4, (Number(part.w) || 0.5) * 16);
+        const partH = Math.max(4, (Number(part.h) || 0.5) * 16);
         const neurons = localNeuronCount(node);
         const p = layout.positions[i];
-        const radius = 4 + clamp(partMass / 1.4, 0, 1) * 6;
-        const neuronGlow = clamp(neurons / 12, 0, 1);
         const isRoot = i === summary.root;
+        const neuronGlow = clamp(neurons / 12, 0, 1);
+
+        let maxRecurse = 1;
+        let isRef = false;
+        for (const n of nodes) {
+          for (const e of graphEdges(n)) {
+            if ((e?.to | 0) === i) {
+              maxRecurse = Math.max(maxRecurse, (e?.recursiveLimit | 0) || 1);
+              if (e?.reflectX) isRef = true;
+            }
+          }
+        }
+
         ctx.save();
-        ctx.fillStyle = isRoot
-          ? `rgba(208, 233, 156, ${0.7 + pulse * 0.2})`
-          : `rgba(162, 206, 128, ${0.25 + neuronGlow * 0.45})`;
-        ctx.strokeStyle = isRoot ? "rgba(232, 248, 192, 0.95)" : "rgba(182, 214, 150, 0.55)";
+        ctx.translate(p.x, p.y);
+
+        if (maxRecurse > 1) {
+          ctx.strokeStyle = `rgba(162, 206, 128, 0.4)`;
+          ctx.fillStyle = `rgba(162, 206, 128, 0.1)`;
+          for (let r = 1; r < Math.min(maxRecurse, 5); r++) {
+            const off = r * (Math.min(partW, partH) * 0.4 + 4);
+            ctx.beginPath();
+            if (isRef) {
+              ctx.roundRect(-partW * 0.35, off - partH * 0.35, partW * 0.7, partH * 0.7, 2);
+              ctx.roundRect(-partW * 0.35, -off - partH * 0.35, partW * 0.7, partH * 0.7, 2);
+            } else {
+              ctx.roundRect(off - partW * 0.35, - partH * 0.35, partW * 0.7, partH * 0.7, 2);
+            }
+            ctx.stroke(); ctx.fill();
+            ctx.beginPath();
+            if (isRef) {
+              ctx.moveTo(0, off - (Math.min(partW, partH) * 0.4 + 4)); ctx.lineTo(0, off);
+              ctx.moveTo(0, -off + (Math.min(partW, partH) * 0.4 + 4)); ctx.lineTo(0, -off);
+            } else {
+              ctx.moveTo(off - (Math.min(partW, partH) * 0.4 + 4), 0); ctx.lineTo(off, 0);
+            }
+            ctx.stroke();
+          }
+        } else if (isRef) {
+          ctx.strokeStyle = `rgba(108, 204, 235, 0.5)`;
+          ctx.fillStyle = `rgba(108, 204, 235, 0.15)`;
+          ctx.setLineDash([2, 2]);
+          const off = (partH / 2 + 8);
+          ctx.beginPath();
+          ctx.roundRect(-partW / 2, off, partW, partH, 2);
+          ctx.roundRect(-partW / 2, -off - partH, partW, partH, 2);
+          ctx.stroke(); ctx.fill();
+          ctx.setLineDash([]);
+        }
+
+        ctx.fillStyle = isRoot ? `rgba(208, 233, 156, ${0.7 + pulse * 0.2})` : `rgba(162, 206, 128, ${0.25 + neuronGlow * 0.45})`;
+        ctx.strokeStyle = isRoot ? "rgba(232, 248, 192, 0.95)" : "rgba(182, 214, 150, 0.65)";
         ctx.lineWidth = isRoot ? 1.8 : 1.0;
+
         ctx.beginPath();
-        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.font = "8px Inter, sans-serif";
+        ctx.roundRect(-partW / 2, -partH / 2, partW, partH, 3);
+        ctx.fill(); ctx.stroke();
+
+        if (neurons > 0) {
+          ctx.fillStyle = `rgba(255, 255, 255, 0.9)`;
+          for (let n = 0; n < neurons; n++) {
+            const a = (n / neurons) * Math.PI * 2 + simClock * 2;
+            const r = Math.max(partW, partH) / 2 + 4;
+            ctx.beginPath(); ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 1.2, 0, 7); ctx.fill();
+          }
+        }
+
+        ctx.font = "8px 'Inter', sans-serif";
         ctx.fillStyle = "#09090b";
         ctx.textAlign = "center";
-        ctx.fillText(String(i), p.x, p.y + 2.5);
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(i), 0, 1);
+        ctx.restore();
+      }
+
+      if (summary.globalNeurons > 0) {
+        ctx.save();
+        const gx = ox + 36, gy = oy + H - 36;
+        const aura = 18 + Math.sin(simClock * 2) * 2;
+        const grd = ctx.createRadialGradient(gx, gy, 0, gx, gy, aura);
+        grd.addColorStop(0, "rgba(232, 184, 102, 0.45)");
+        grd.addColorStop(1, "rgba(232, 184, 102, 0)");
+        ctx.fillStyle = grd;
+        ctx.beginPath(); ctx.arc(gx, gy, aura, 0, 7); ctx.fill();
+        ctx.fillStyle = "rgba(232, 184, 102, 0.95)";
+        ctx.beginPath(); ctx.arc(gx, gy, 5, 0, 7); ctx.fill();
+        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+        for (let n = 0; n < summary.globalNeurons; n++) {
+          const a = (n / summary.globalNeurons) * Math.PI * 2 - simClock * 0.8;
+          const r = 10 + (n % 2) * 4;
+          ctx.beginPath(); ctx.arc(gx + Math.cos(a) * r, gy + Math.sin(a) * r, 1.5, 0, 7); ctx.fill();
+        }
+        ctx.font = "8px 'Inter', sans-serif";
+        ctx.fillStyle = "rgba(232, 184, 102, 0.85)";
+        ctx.textAlign = "center";
+        ctx.fillText("GLOBAL", gx, gy - aura - 4);
         ctx.restore();
       }
 
@@ -1836,74 +1934,95 @@
       ctx.fillText("Ball edges", ox + W - 120, oy + 28);
       ctx.fillStyle = "rgba(108, 204, 235, 0.85)";
       ctx.fillRect(ox + W - 138, oy + 22, 12, 2);
+      ctx.fillStyle = "rgba(186, 214, 151, 0.58)";
+      ctx.fillText("Terminals", ox + W - 120, oy + 42);
+      ctx.strokeStyle = "rgba(186, 214, 151, 0.85)";
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(ox + W - 138, oy + 39); ctx.lineTo(ox + W - 126, oy + 39); ctx.stroke();
       ctx.restore();
     }
 
-    function vizDrawStatBar(ctx, label, value, ox, oy, W, hue) {
-      const h = 8;
-      const barW = Math.max(12, W - 66);
-      const x = ox + 62;
-      const y = oy;
-      const v = clamp(value, 0, 1);
+    function vizDrawRadarChart(ctx, label, items, ox, oy, W, H) {
+      vizDrawSectionLabel(ctx, label, ox, oy + 10);
+      const cx = ox + W * 0.5;
+      const cy = oy + H * 0.5 + 4;
+      const r_max = Math.min(W, H) * 0.5 - 20;
+      const sides = items.length;
+      if (sides === 0) return;
+
+      const step = (Math.PI * 2) / sides;
+
       ctx.save();
-      ctx.font = "7.5px Inter, sans-serif";
-      ctx.fillStyle = "rgba(186, 214, 151, 0.62)";
-      ctx.textAlign = "right";
-      ctx.fillText(label, x - 4, y + h - 1);
-      ctx.fillStyle = "rgba(96, 122, 80, 0.2)";
-      vizRoundRect(ctx, x, y, barW, h, 2);
-      ctx.fill();
-      ctx.fillStyle = `hsla(${hue}, 54%, 58%, 0.82)`;
-      vizRoundRect(ctx, x, y, Math.max(1, barW * v), h, 2);
-      ctx.fill();
+      for (let L = 1; L <= 4; L++) {
+        const r = r_max * (L / 4);
+        ctx.beginPath();
+        for (let i = 0; i < sides; i++) {
+          const a = i * step - Math.PI / 2;
+          const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(170, 194, 117, ${0.1 + (L / 4) * 0.15})`;
+        ctx.lineWidth = 1; ctx.stroke();
+      }
+
+      ctx.beginPath();
+      for (let i = 0; i < sides; i++) {
+        const a = i * step - Math.PI / 2;
+        ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * r_max, cy + Math.sin(a) * r_max);
+      }
+      ctx.strokeStyle = `rgba(170, 194, 117, 0.15)`; ctx.stroke();
+
+      ctx.beginPath();
+      for (let i = 0; i < sides; i++) {
+        const a = i * step - Math.PI / 2;
+        const v = clamp(items[i].value, 0, 1);
+        const x = cx + Math.cos(a) * r_max * v, y = cy + Math.sin(a) * r_max * v;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = `rgba(162, 206, 128, 0.25)`; ctx.fill();
+      ctx.strokeStyle = `rgba(162, 206, 128, 0.9)`; ctx.lineWidth = 1.5; ctx.stroke();
+
+      ctx.font = "7.5px 'Inter', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i < sides; i++) {
+        const a = i * step - Math.PI / 2;
+        const v = clamp(items[i].value, 0, 1);
+        const px = cx + Math.cos(a) * r_max * v, py = cy + Math.sin(a) * r_max * v;
+
+        ctx.beginPath(); ctx.arc(px, py, 2.5, 0, 7);
+        ctx.fillStyle = `hsla(${items[i].hue}, 54%, 58%, 1)`; ctx.fill();
+
+        const lx = cx + Math.cos(a) * (r_max + 12), ly = cy + Math.sin(a) * (r_max + 18);
+        ctx.fillStyle = "rgba(186, 214, 151, 0.85)"; ctx.fillText(items[i].label, lx, ly);
+      }
       ctx.restore();
     }
 
     function vizDrawV2StructureStats(ctx, summary, ox, oy, W, H) {
-      vizDrawSectionLabel(ctx, "MORPH STRUCTURE", ox, oy + 10);
       const maxEdges = Math.max(1, summary.nodeCount * 4);
-      const bars = [
-        { label: "node usage", value: summary.maxParts > 0 ? summary.nodeCount / summary.maxParts : 0, hue: 138 },
-        { label: "edge density", value: summary.edgeCount / maxEdges, hue: 82 },
-        { label: "recursive", value: summary.edgeCount > 0 ? summary.recursiveEdges / summary.edgeCount : 0, hue: 34 },
-        { label: "symmetry", value: summary.edgeCount > 0 ? summary.reflectEdges / summary.edgeCount : 0, hue: 198 },
-        { label: "ball joints", value: summary.edgeCount > 0 ? summary.ballEdges / summary.edgeCount : 0, hue: 215 },
-        { label: "mass est", value: clamp(summary.partMassApprox / 80, 0, 1), hue: 262 },
-      ];
-      const rowGap = 3;
-      const rowH = 8;
-      const startY = oy + 16;
-      for (let i = 0; i < bars.length; i++) {
-        vizDrawStatBar(ctx, bars[i].label, bars[i].value, ox, startY + i * (rowH + rowGap), W, bars[i].hue);
-      }
+      vizDrawRadarChart(ctx, "MORPH STRUCTURE", [
+        { label: "Usage", value: summary.maxParts > 0 ? summary.nodeCount / summary.maxParts : 0, hue: 138 },
+        { label: "Density", value: summary.edgeCount / maxEdges, hue: 82 },
+        { label: "Recursion", value: summary.edgeCount > 0 ? summary.recursiveEdges / summary.edgeCount : 0, hue: 34 },
+        { label: "Symmetry", value: summary.edgeCount > 0 ? summary.reflectEdges / summary.edgeCount : 0, hue: 198 },
+        { label: "Flexibility", value: summary.edgeCount > 0 ? summary.ballEdges / summary.edgeCount : 0, hue: 215 },
+        { label: "Mass Est", value: clamp(summary.partMassApprox / 80, 0, 1), hue: 262 },
+      ], ox, oy, W, H);
     }
 
     function vizDrawV2NeuralStats(ctx, summary, ox, oy, W, H) {
-      vizDrawSectionLabel(ctx, "NEURAL CONTROLLER", ox, oy + 10);
       const nodeNeuronCapacity = Math.max(1, summary.nodeCount * 12);
-      const bars = [
-        { label: "local neurons", value: summary.localNeurons / nodeNeuronCapacity, hue: 144 },
-        { label: "global neurons", value: summary.globalNeurons / 14, hue: 90 },
-        { label: "total neurons", value: summary.totalNeurons / Math.max(14, nodeNeuronCapacity + 14), hue: 36 },
-        { label: "fanout", value: summary.nodeCount > 0 ? summary.edgeCount / (summary.nodeCount * 4) : 0, hue: 192 },
-        { label: "effector gain", value: summary.meanEffectorGain / 2.2, hue: 265 },
-        { label: "terminal edges", value: summary.edgeCount > 0 ? summary.terminalEdges / summary.edgeCount : 0, hue: 22 },
-      ];
-      const rowGap = 3;
-      const rowH = 8;
-      const startY = oy + 16;
-      for (let i = 0; i < bars.length; i++) {
-        vizDrawStatBar(ctx, bars[i].label, bars[i].value, ox, startY + i * (rowH + rowGap), W, bars[i].hue);
-      }
-
-      const infoY = startY + bars.length * (rowH + rowGap) + 2;
-      ctx.save();
-      ctx.font = "7px Inter, sans-serif";
-      ctx.fillStyle = "rgba(186, 214, 151, 0.58)";
-      ctx.textAlign = "left";
-      ctx.fillText(`nodes ${summary.nodeCount} | edges ${summary.edgeCount} | maxParts ${summary.maxParts}`, ox + 2, infoY);
-      ctx.fillText(`hinge ${summary.hingeEdges} | ball ${summary.ballEdges} | recursive ${summary.recursiveEdges}`, ox + 2, infoY + 10);
-      ctx.restore();
+      vizDrawRadarChart(ctx, "NEURAL CONTROLLER", [
+        { label: "Local", value: summary.localNeurons / nodeNeuronCapacity, hue: 144 },
+        { label: "Global", value: summary.globalNeurons / 14, hue: 90 },
+        { label: "Density", value: summary.totalNeurons / Math.max(14, nodeNeuronCapacity + 14), hue: 36 },
+        { label: "Fanout", value: summary.nodeCount > 0 ? summary.edgeCount / (summary.nodeCount * 4) : 0, hue: 192 },
+        { label: "Gain", value: summary.meanEffectorGain / 2.2, hue: 265 },
+        { label: "Terminals", value: summary.edgeCount > 0 ? summary.terminalEdges / summary.edgeCount : 0, hue: 22 },
+      ], ox, oy, W, H);
     }
 
     function vizRoundRect(ctx, x, y, w, h, r) {
