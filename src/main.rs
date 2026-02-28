@@ -1132,7 +1132,6 @@ impl TrialSimulator {
                 edge.anchor_y * parent_size[1] * 0.5,
                 edge.anchor_z * parent_size[2] * 0.5
             ];
-            let axis_local = normalized_axis(edge.axis_y, edge.axis_z);
             let local_growth = outward_biased_growth_dir(
                 vector![
                     edge.dir_x * reflect_sign,
@@ -1145,6 +1144,7 @@ impl TrialSimulator {
                     edge.anchor_z * reflect_sign
                 ],
             );
+            let axis_local = normalized_axis_for_growth(edge.axis_y, edge.axis_z, local_growth);
             let anchor_world = parent_translation + parent_rotation * pivot_from_parent;
             let part_w = (node.part.w * edge.scale).abs().clamp(0.14, 2.8);
             let part_h = (node.part.h * edge.scale).abs().clamp(0.22, 3.4);
@@ -10524,11 +10524,29 @@ fn insert_box_body(
     handle
 }
 
-fn normalized_axis(axis_y: f32, axis_z: f32) -> Vector3<f32> {
-    // Keep joints mostly in a leg-like sagittal plane while still allowing
-    // substantial variation per limb from the two axis genes.
-    let axis = vector![1.0, axis_y * AXIS_TILT_GAIN, axis_z * AXIS_TILT_GAIN];
-    axis.try_normalize(1e-6).unwrap_or(vector![1.0, 0.0, 0.0])
+fn normalized_axis_for_growth(
+    axis_y: f32,
+    axis_z: f32,
+    growth_dir: Vector3<f32>,
+) -> Vector3<f32> {
+    // Build the hinge axis in a basis tied to the edge growth direction.
+    // Defaulting to the "bend" axis keeps downward-growing limbs close to the
+    // old leg-like sagittal hinge while making horizontal chains default to a
+    // world-up hinge, which is necessary for authored snake-like bodies.
+    let forward = growth_dir
+        .try_normalize(1e-6)
+        .unwrap_or(vector![0.0, -1.0, 0.0]);
+    let up = vector![0.0, 1.0, 0.0];
+    let side = up
+        .cross(&forward)
+        .try_normalize(1e-6)
+        .unwrap_or(vector![0.0, 0.0, 1.0]);
+    let bend = forward
+        .cross(&side)
+        .try_normalize(1e-6)
+        .unwrap_or(vector![1.0, 0.0, 0.0]);
+    let axis = bend + side * (axis_y * AXIS_TILT_GAIN) + forward * (axis_z * AXIS_TILT_GAIN);
+    axis.try_normalize(1e-6).unwrap_or(bend)
 }
 
 fn max_box_cross_section(size: [f32; 3]) -> f32 {

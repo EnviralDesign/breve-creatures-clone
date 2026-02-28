@@ -8,21 +8,21 @@
       "nodes": [
         {
           "part": {
-            "w": 0.52,
-            "h": 0.92,
+            "w": 0.92,
+            "h": 0.24,
             "d": 0.52,
             "mass": 0.24
           },
           "edges": [
             {
               "to": 1,
-              "anchorX": 0.0,
-              "anchorY": -0.86,
+              "anchorX": 0.86,
+              "anchorY": 0.0,
               "anchorZ": 0.0,
               "axisY": 0.0,
               "axisZ": 0.0,
-              "dirX": 0.0,
-              "dirY": -1.0,
+              "dirX": 1.0,
+              "dirY": 0.0,
               "dirZ": 0.0,
               "scale": 1.0,
               "reflectX": false,
@@ -30,8 +30,8 @@
               "terminalOnly": false,
               "jointType": "hinge",
               "limitX": 1.0,
-              "limitY": 0.35,
-              "limitZ": 0.35,
+              "limitY": 0.25,
+              "limitZ": 0.25,
               "motorStrength": 1.0,
               "jointStiffness": 28.0
             }
@@ -216,9 +216,9 @@
         },
         {
           "part": {
-            "w": 0.52,
+            "w": 0.28,
             "h": 0.92,
-            "d": 0.52,
+            "d": 0.28,
             "mass": 0.24
           },
           "edges": [
@@ -237,9 +237,9 @@
               "recursiveLimit": 1,
               "terminalOnly": false,
               "jointType": "hinge",
-              "limitX": 1.0,
-              "limitY": 0.35,
-              "limitZ": 0.35,
+              "limitX": 0.9,
+              "limitY": 0.25,
+              "limitZ": 0.25,
               "motorStrength": 1.0,
               "jointStiffness": 28.0
             }
@@ -424,9 +424,9 @@
         },
         {
           "part": {
-            "w": 0.52,
+            "w": 0.28,
             "h": 0.92,
-            "d": 0.52,
+            "d": 0.28,
             "mass": 0.24
           },
           "edges": [
@@ -445,9 +445,9 @@
               "recursiveLimit": 1,
               "terminalOnly": false,
               "jointType": "hinge",
-              "limitX": 1.0,
-              "limitY": 0.35,
-              "limitZ": 0.35,
+              "limitX": 0.9,
+              "limitY": 0.25,
+              "limitZ": 0.25,
               "motorStrength": 1.0,
               "jointStiffness": 28.0
             }
@@ -632,9 +632,9 @@
         },
         {
           "part": {
-            "w": 0.52,
+            "w": 0.28,
             "h": 0.92,
-            "d": 0.52,
+            "d": 0.28,
             "mass": 0.24
           },
           "edges": [
@@ -653,9 +653,9 @@
               "recursiveLimit": 1,
               "terminalOnly": false,
               "jointType": "hinge",
-              "limitX": 1.0,
-              "limitY": 0.35,
-              "limitZ": 0.35,
+              "limitX": 0.9,
+              "limitY": 0.25,
+              "limitZ": 0.25,
               "motorStrength": 1.0,
               "jointStiffness": 28.0
             }
@@ -840,9 +840,9 @@
         },
         {
           "part": {
-            "w": 0.52,
+            "w": 0.28,
             "h": 0.92,
-            "d": 0.52,
+            "d": 0.28,
             "mass": 0.24
           },
           "edges": [],
@@ -1095,34 +1095,34 @@
       "maxParts": 5
     },
     "torso": {
-      "w": 1.54,
-      "h": 0.5,
-      "d": 1.55,
-      "mass": 1.2407031
+      "w": 0.92,
+      "h": 0.24,
+      "d": 0.52,
+      "mass": 0.24
     },
     "limbs": [
       {
         "enabled": true,
         "segmentCount": 1,
-        "anchorX": -0.6622,
-        "anchorY": -0.215,
-        "anchorZ": -0.6665,
+        "anchorX": 0.39560002,
+        "anchorY": 0.0,
+        "anchorZ": 0.0,
         "axisY": 0.0,
         "axisZ": 0.0,
-        "dirX": -0.5689863,
-        "dirY": -0.5937249,
-        "dirZ": -0.5689863,
+        "dirX": 1.0,
+        "dirY": 0.0,
+        "dirZ": 0.0,
         "segments": [
           {
-            "length": 0.75,
-            "thickness": 0.125,
-            "mass": 0.333,
-            "limitX": 1.4366052,
-            "limitY": 0.85682356,
-            "limitZ": 0.93798697,
-            "jointType": "ball",
-            "motorStrength": 0.9593092,
-            "jointStiffness": 12.0
+            "length": 0.92,
+            "thickness": 0.14,
+            "mass": 0.24,
+            "limitX": 0.35,
+            "limitY": 0.25,
+            "limitZ": 0.25,
+            "jointType": "hinge",
+            "motorStrength": 1.0,
+            "jointStiffness": 28.0
           },
           {
             "length": 0.9,
@@ -1255,25 +1255,25 @@
       {
         "enabled": true,
         "segmentCount": 1,
-        "anchorX": 0.6622,
-        "anchorY": -0.215,
-        "anchorZ": -0.6665,
+        "anchorX": 0.0,
+        "anchorY": 0.0,
+        "anchorZ": 0.0,
         "axisY": 0.0,
         "axisZ": 0.0,
-        "dirX": 0.60235023,
-        "dirY": -0.5237828,
-        "dirZ": -0.60235023,
+        "dirX": 0.0,
+        "dirY": -1.0,
+        "dirZ": 0.0,
         "segments": [
           {
-            "length": 0.75,
-            "thickness": 0.125,
-            "mass": 0.333,
-            "limitX": 0.5862607,
-            "limitY": 0.1,
-            "limitZ": 0.1,
-            "jointType": "ball",
-            "motorStrength": 0.732892,
-            "jointStiffness": 12.0
+            "length": 0.9,
+            "thickness": 0.2,
+            "mass": 0.45,
+            "limitX": 1.57,
+            "limitY": 1.08,
+            "limitZ": 1.08,
+            "jointType": "hinge",
+            "motorStrength": 1.0,
+            "jointStiffness": 45.0
           },
           {
             "length": 0.9,
@@ -1404,27 +1404,27 @@
         ]
       },
       {
-        "enabled": true,
+        "enabled": false,
         "segmentCount": 1,
-        "anchorX": 0.6622,
-        "anchorY": -0.215,
-        "anchorZ": 0.6665,
+        "anchorX": 0.0,
+        "anchorY": 0.0,
+        "anchorZ": 0.0,
         "axisY": 0.0,
         "axisZ": 0.0,
-        "dirX": 0.5689863,
-        "dirY": -0.5937249,
-        "dirZ": 0.5689863,
+        "dirX": 0.0,
+        "dirY": -1.0,
+        "dirZ": 0.0,
         "segments": [
           {
-            "length": 0.75,
-            "thickness": 0.125,
-            "mass": 0.333,
-            "limitX": 2.732092,
-            "limitY": 2.3561945,
-            "limitZ": 1.8269628,
-            "jointType": "ball",
-            "motorStrength": 4.5,
-            "jointStiffness": 79.226395
+            "length": 0.9,
+            "thickness": 0.2,
+            "mass": 0.45,
+            "limitX": 1.57,
+            "limitY": 1.08,
+            "limitZ": 1.08,
+            "jointType": "hinge",
+            "motorStrength": 1.0,
+            "jointStiffness": 45.0
           },
           {
             "length": 0.9,
@@ -1555,27 +1555,27 @@
         ]
       },
       {
-        "enabled": true,
+        "enabled": false,
         "segmentCount": 1,
-        "anchorX": -0.6622,
-        "anchorY": -0.215,
-        "anchorZ": 0.6665,
+        "anchorX": 0.0,
+        "anchorY": 0.0,
+        "anchorZ": 0.0,
         "axisY": 0.0,
         "axisZ": 0.0,
-        "dirX": -0.5689863,
-        "dirY": -0.5937249,
-        "dirZ": 0.5689863,
+        "dirX": 0.0,
+        "dirY": -1.0,
+        "dirZ": 0.0,
         "segments": [
           {
-            "length": 0.75,
-            "thickness": 0.125,
-            "mass": 0.333,
-            "limitX": 2.9541042,
-            "limitY": 1.7905486,
-            "limitZ": 1.6321694,
-            "jointType": "ball",
-            "motorStrength": 0.30503362,
-            "jointStiffness": 23.453167
+            "length": 0.9,
+            "thickness": 0.2,
+            "mass": 0.45,
+            "limitX": 1.57,
+            "limitY": 1.08,
+            "limitZ": 1.08,
+            "jointType": "hinge",
+            "motorStrength": 1.0,
+            "jointStiffness": 45.0
           },
           {
             "length": 0.9,
@@ -2020,5 +2020,5 @@
     "lockControls": false,
     "lockVisualHue": true
   },
-  "notes": "Uniform authored worm chain with reduced initial overlap and controller-only evolution defaults."
+  "notes": "Flat root pad plus horizontal hinge chain. Joint limits are fixed so the run tests control rather than re-sculpting the mechanics."
 }

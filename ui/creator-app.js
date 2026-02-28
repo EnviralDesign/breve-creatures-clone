@@ -2819,14 +2819,29 @@ async function setRandomMode() {
   }
 }
 
-function normalizedAxis(axisY, axisZ) {
-  const axis = new THREE.Vector3(
-    1.0,
-    toFinite(axisY) * AXIS_TILT_GAIN,
-    toFinite(axisZ) * AXIS_TILT_GAIN
-  );
+function normalizedAxisForGrowth(axisY, axisZ, growthDir) {
+  const forward = growthDir?.lengthSq?.() > 1e-8
+    ? growthDir.clone().normalize()
+    : new THREE.Vector3(0, -1, 0);
+  const up = new THREE.Vector3(0, 1, 0);
+  const side = up.clone().cross(forward);
+  if (side.lengthSq() <= 1e-8) {
+    side.set(0, 0, 1);
+  } else {
+    side.normalize();
+  }
+  const bend = forward.clone().cross(side);
+  if (bend.lengthSq() <= 1e-8) {
+    bend.set(1, 0, 0);
+  } else {
+    bend.normalize();
+  }
+  const axis = bend
+    .clone()
+    .addScaledVector(side, toFinite(axisY) * AXIS_TILT_GAIN)
+    .addScaledVector(forward, toFinite(axisZ) * AXIS_TILT_GAIN);
   if (axis.lengthSq() <= 1e-8) {
-    return new THREE.Vector3(1, 0, 0);
+    return bend;
   }
   return axis.normalize();
 }
@@ -3012,7 +3027,6 @@ function buildVisualModel(genome) {
       anchorY * parent.size[1] * 0.5,
       anchorZ * parent.size[2] * 0.5
     );
-    const axisLocal = normalizedAxis(edge.axisY, edge.axisZ);
     const localGrowth = outwardBiasedGrowthDir(
       new THREE.Vector3(
         toFinite(edge.dirX, 0) * reflectSign,
@@ -3021,6 +3035,7 @@ function buildVisualModel(genome) {
       ),
       new THREE.Vector3(anchorX * reflectSign, anchorY, anchorZ)
     );
+    const axisLocal = normalizedAxisForGrowth(edge.axisY, edge.axisZ, localGrowth);
 
     const anchorWorld = parent.center
       .clone()
