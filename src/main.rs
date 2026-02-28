@@ -5773,12 +5773,222 @@ fn aggregate_viability_stats(points: &[GenerationViabilityStats]) -> GenerationV
     out
 }
 
+#[derive(Clone, Copy)]
+struct OverlapHalfSpace {
+    normal: Vector3<f32>,
+    offset: f32,
+}
+
+#[derive(Clone, Copy)]
+struct PartObb {
+    center: Vector3<f32>,
+    axes: [Vector3<f32>; 3],
+    half: Vector3<f32>,
+    aabb_min: Vector3<f32>,
+    aabb_max: Vector3<f32>,
+    volume: f32,
+}
+
+fn obb_aabb_overlap(a: &PartObb, b: &PartObb) -> bool {
+    !(a.aabb_max.x < b.aabb_min.x
+        || b.aabb_max.x < a.aabb_min.x
+        || a.aabb_max.y < b.aabb_min.y
+        || b.aabb_max.y < a.aabb_min.y
+        || a.aabb_max.z < b.aabb_min.z
+        || b.aabb_max.z < a.aabb_min.z)
+}
+
+fn obb_halfspaces(obb: &PartObb) -> Vec<OverlapHalfSpace> {
+    let mut planes = Vec::with_capacity(6);
+    const PLANE_NORMAL_EPS: f32 = 1e-5;
+    const PLANE_OFFSET_EPS: f32 = 1e-4;
+
+    for axis_index in 0..3 {
+        let axis = obb.axes[axis_index];
+        let half_extent = obb.half[axis_index];
+        let positive = OverlapHalfSpace {
+            normal: axis,
+            offset: axis.dot(&(obb.center + axis * half_extent)),
+        };
+        let negative_axis = -axis;
+        let negative = OverlapHalfSpace {
+            normal: negative_axis,
+            offset: negative_axis.dot(&(obb.center - axis * half_extent)),
+        };
+        for plane in [positive, negative] {
+            let duplicate = planes.iter().any(|existing: &OverlapHalfSpace| {
+                existing.normal.dot(&plane.normal) >= 1.0 - PLANE_NORMAL_EPS
+                    && (existing.offset - plane.offset).abs() <= PLANE_OFFSET_EPS
+            });
+            if !duplicate {
+                planes.push(plane);
+            }
+        }
+    }
+
+    planes
+}
+
+fn intersect_halfspace_triplet(
+    a: OverlapHalfSpace,
+    b: OverlapHalfSpace,
+    c: OverlapHalfSpace,
+) -> Option<Vector3<f32>> {
+    let cross_bc = b.normal.cross(&c.normal);
+    let denom = a.normal.dot(&cross_bc);
+    if !denom.is_finite() || denom.abs() <= 1e-6 {
+        return None;
+    }
+
+    let cross_ca = c.normal.cross(&a.normal);
+    let cross_ab = a.normal.cross(&b.normal);
+    let point = (cross_bc * a.offset + cross_ca * b.offset + cross_ab * c.offset) / denom;
+    if point.iter().all(|value| value.is_finite()) {
+        Some(point)
+    } else {
+        None
+    }
+}
+
+fn point_inside_halfspaces(point: &Vector3<f32>, planes: &[OverlapHalfSpace]) -> bool {
+    const HALFSPACE_EPS: f32 = 1e-4;
+    planes
+        .iter()
+        .all(|plane| plane.normal.dot(point) <= plane.offset + HALFSPACE_EPS)
+}
+
+fn push_unique_overlap_vertex(vertices: &mut Vec<Vector3<f32>>, point: Vector3<f32>) {
+    const VERTEX_EPS_SQ: f32 = 1e-8;
+    if vertices
+        .iter()
+        .any(|existing| (existing - point).norm_squared() <= VERTEX_EPS_SQ)
+    {
+        return;
+    }
+    vertices.push(point);
+}
+
+fn face_vertices_for_halfspace(
+    plane: OverlapHalfSpace,
+    vertices: &[Vector3<f32>],
+) -> Vec<Vector3<f32>> {
+    const FACE_EPS: f32 = 1e-4;
+    let mut face_vertices = Vec::new();
+    for vertex in vertices {
+        if (plane.normal.dot(vertex) - plane.offset).abs() <= FACE_EPS {
+            push_unique_overlap_vertex(&mut face_vertices, *vertex);
+        }
+    }
+    face_vertices
+}
+
+fn sort_face_vertices_ccw(face_vertices: &mut [Vector3<f32>], normal: &Vector3<f32>) {
+    if face_vertices.len() < 3 {
+        return;
+    }
+    let center =
+        face_vertices.iter().fold(vector![0.0, 0.0, 0.0], |acc, p| acc + *p) / face_vertices.len() as f32;
+    let reference = if normal.x.abs() < 0.9 {
+        vector![1.0, 0.0, 0.0]
+    } else {
+        vector![0.0, 1.0, 0.0]
+    };
+    let mut tangent = reference - *normal * reference.dot(normal);
+    if tangent.norm_squared() <= 1e-8 {
+        tangent = vector![0.0, 0.0, 1.0] - *normal * normal.z;
+    }
+    let tangent = tangent
+        .try_normalize(1e-8)
+        .unwrap_or_else(|| vector![1.0, 0.0, 0.0]);
+    let bitangent = normal.cross(&tangent);
+
+    face_vertices.sort_by(|a, b| {
+        let rel_a = *a - center;
+        let rel_b = *b - center;
+        let angle_a = rel_a.dot(&bitangent).atan2(rel_a.dot(&tangent));
+        let angle_b = rel_b.dot(&bitangent).atan2(rel_b.dot(&tangent));
+        angle_a
+            .partial_cmp(&angle_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+fn convex_polyhedron_volume_from_halfspaces(
+    vertices: &[Vector3<f32>],
+    planes: &[OverlapHalfSpace],
+) -> f32 {
+    if vertices.len() < 4 {
+        return 0.0;
+    }
+
+    let mut volume = 0.0f32;
+    for plane in planes {
+        let mut face_vertices = face_vertices_for_halfspace(*plane, vertices);
+        if face_vertices.len() < 3 {
+            continue;
+        }
+        sort_face_vertices_ccw(&mut face_vertices, &plane.normal);
+        let origin = face_vertices[0];
+        for triangle_index in 1..face_vertices.len().saturating_sub(1) {
+            let b = face_vertices[triangle_index];
+            let c = face_vertices[triangle_index + 1];
+            let tri_normal = (b - origin).cross(&(c - origin));
+            let signed = if tri_normal.dot(&plane.normal) >= 0.0 {
+                origin.dot(&b.cross(&c)) / 6.0
+            } else {
+                origin.dot(&c.cross(&b)) / 6.0
+            };
+            if signed.is_finite() {
+                volume += signed;
+            }
+        }
+    }
+
+    volume.abs()
+}
+
+fn obb_intersection_volume(a: &PartObb, b: &PartObb) -> f32 {
+    if !obb_aabb_overlap(a, b) {
+        return 0.0;
+    }
+
+    let mut planes = obb_halfspaces(a);
+    planes.extend(obb_halfspaces(b));
+
+    let mut vertices = Vec::with_capacity(16);
+    for i in 0..planes.len().saturating_sub(2) {
+        for j in (i + 1)..planes.len().saturating_sub(1) {
+            for k in (j + 1)..planes.len() {
+                if let Some(point) = intersect_halfspace_triplet(planes[i], planes[j], planes[k]) {
+                    if point_inside_halfspaces(&point, &planes) {
+                        push_unique_overlap_vertex(&mut vertices, point);
+                    }
+                }
+            }
+        }
+    }
+
+    if vertices.len() < 4 {
+        return 0.0;
+    }
+
+    let volume = convex_polyhedron_volume_from_halfspaces(&vertices, &planes);
+    let max_volume = a.volume.min(b.volume);
+    if !volume.is_finite() || volume <= 1e-8 {
+        0.0
+    } else {
+        clamp(volume, 0.0, max_volume)
+    }
+}
+
 fn morphology_overlap_ratio(parts: &[SimPart], bodies: &RigidBodySet) -> f32 {
     if parts.len() < 2 {
         return 0.0;
     }
-    let mut bounds: Vec<(Vector3<f32>, Vector3<f32>)> = Vec::with_capacity(parts.len());
+
+    let mut obbs: Vec<PartObb> = Vec::with_capacity(parts.len());
     let mut total_volume = 0.0f32;
+
     for part in parts {
         let Some(body) = bodies.get(part.body) else {
             continue;
@@ -5798,30 +6008,41 @@ fn morphology_overlap_ratio(parts: &[SimPart], bodies: &RigidBodySet) -> f32 {
             m[(2, 0)].abs() * half.x + m[(2, 1)].abs() * half.y + m[(2, 2)].abs() * half.z;
         let center = *body.translation();
         let extent = vector![extent_x, extent_y, extent_z];
-        bounds.push((center - extent, center + extent));
-        total_volume += (part.size[0].abs() * part.size[1].abs() * part.size[2].abs()).max(1e-6);
+        let axis_x = vector![m[(0, 0)], m[(1, 0)], m[(2, 0)]];
+        let axis_y = vector![m[(0, 1)], m[(1, 1)], m[(2, 1)]];
+        let axis_z = vector![m[(0, 2)], m[(1, 2)], m[(2, 2)]];
+        let volume = (part.size[0].abs() * part.size[1].abs() * part.size[2].abs()).max(1e-6);
+        total_volume += volume;
+        obbs.push(PartObb {
+            center,
+            axes: [axis_x, axis_y, axis_z],
+            half,
+            aabb_min: center - extent,
+            aabb_max: center + extent,
+            volume,
+        });
     }
-    if bounds.len() < 2 || total_volume <= 1e-6 {
+
+    if obbs.len() < 2 || total_volume <= 1e-6 {
         return 0.0;
     }
+
     let mut overlap_volume_sum = 0.0f32;
-    for i in 0..bounds.len().saturating_sub(1) {
-        for j in (i + 1)..bounds.len() {
-            let (a_min, a_max) = bounds[i];
-            let (b_min, b_max) = bounds[j];
-            let overlap_x = (a_max.x.min(b_max.x) - a_min.x.max(b_min.x)).max(0.0);
-            let overlap_y = (a_max.y.min(b_max.y) - a_min.y.max(b_min.y)).max(0.0);
-            let overlap_z = (a_max.z.min(b_max.z) - a_min.z.max(b_min.z)).max(0.0);
-            let overlap_volume = overlap_x * overlap_y * overlap_z;
+    for i in 0..obbs.len().saturating_sub(1) {
+        for j in (i + 1)..obbs.len() {
+            let overlap_volume = obb_intersection_volume(&obbs[i], &obbs[j]);
             if overlap_volume.is_finite() && overlap_volume > 0.0 {
                 overlap_volume_sum += overlap_volume;
             }
         }
     }
+
     if overlap_volume_sum <= 0.0 {
         return 0.0;
     }
-    // Normalize as overlap/(solid+overlap) to keep the signal bounded in [0, 1).
+
+    // Preserve the existing bounded morphology ratio semantics while swapping in exact
+    // oriented-box overlap volumes instead of conservative AABB overlap estimates.
     clamp(
         overlap_volume_sum / (total_volume + overlap_volume_sum).max(1e-6),
         0.0,
