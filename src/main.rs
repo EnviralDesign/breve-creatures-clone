@@ -43,6 +43,7 @@ const BRAIN_STEPS_PER_UPDATE: usize = 4;
 const BRAIN_SUBSTEPS_PER_PHYSICS_STEP: usize = 2;
 const FIXED_SIM_DT: f32 = 1.0 / 120.0;
 const MASS_DENSITY_MULTIPLIER: f32 = 1.4;
+const MIN_BODY_PART_MASS: f32 = 0.03;
 const MAX_MOTOR_SPEED: f32 = 6.8;
 const MOTOR_TARGET_LOW_PASS_ALPHA: f32 = 0.34;
 const MOTOR_TARGET_MAX_SLEW_RATE_RAD_PER_SEC: f32 = 4.0;
@@ -1053,7 +1054,7 @@ impl TrialSimulator {
             * genome.mass_scale
             * trial_mass_scale
             * MASS_DENSITY_MULTIPLIER)
-            .max(0.7);
+            .max(MIN_BODY_PART_MASS);
 
         let drop_start = if use_constrained_startup {
             spawn
@@ -1162,7 +1163,7 @@ impl TrialSimulator {
                 * genome.mass_scale
                 * trial_mass_scale
                 * MASS_DENSITY_MULTIPLIER)
-                .max(0.08);
+                .max(MIN_BODY_PART_MASS);
             let child = insert_box_body(
                 &mut bodies,
                 &mut colliders,
